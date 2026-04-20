@@ -4,11 +4,11 @@
 
 - ID: `task13`
 - Title: Define SQLAlchemy model for `tasks`
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task12`
-- Next Tasks: `task15`
+- Next Tasks: `task14`, `task15`
 
 ## Goal
 
@@ -39,4 +39,4 @@ Create the `tasks` SQLAlchemy model with all MVP fields required for task relati
 
 ## Result
 
-Definition only. Track implementation progress and completion details in the matching progress file.
+Completed. The `tasks` ORM model, supporting enums, indexes, and tests are implemented and verified.
