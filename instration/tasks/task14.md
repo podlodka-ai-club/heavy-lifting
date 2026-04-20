@@ -4,7 +4,7 @@
 
 - ID: `task14`
 - Title: Define SQLAlchemy model for `token_usage`
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task12`
@@ -39,4 +39,4 @@ Create the `token_usage` SQLAlchemy model linked to `tasks`. Include fields requ
 
 ## Result
 
-Definition only. Track implementation progress and completion details in the matching progress file.
+Completed. See the progress, review, and summary files for implementation details and verification results.

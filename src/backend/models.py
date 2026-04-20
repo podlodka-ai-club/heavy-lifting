@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -116,6 +130,64 @@ class Task(Base):
         foreign_keys=[parent_id],
         back_populates="parent",
     )
+    token_usage_entries: Mapped[list[TokenUsage]] = relationship(
+        back_populates="task",
+    )
+
+
+class TokenUsage(Base):
+    __tablename__ = "token_usage"
+    __table_args__ = (
+        CheckConstraint("input_tokens >= 0", name="ck_token_usage_input_tokens_non_negative"),
+        CheckConstraint("output_tokens >= 0", name="ck_token_usage_output_tokens_non_negative"),
+        CheckConstraint("cached_tokens >= 0", name="ck_token_usage_cached_tokens_non_negative"),
+        CheckConstraint("cost_usd >= 0", name="ck_token_usage_cost_usd_non_negative"),
+        Index("ix_token_usage_task_id", "task_id"),
+        Index("ix_token_usage_provider_model_created_at", "provider", "model", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    cached_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    estimated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="0",
+    )
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        server_default=func.now(),
+    )
+
+    task: Mapped[Task] = relationship(back_populates="token_usage_entries")
 
 
 __all__ = [
@@ -125,6 +197,7 @@ __all__ = [
     "Task",
     "TaskStatus",
     "TaskType",
+    "TokenUsage",
     "task_status_enum",
     "task_type_enum",
 ]
