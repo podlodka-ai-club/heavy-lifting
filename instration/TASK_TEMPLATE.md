@@ -8,6 +8,7 @@
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `none`
+- Next Tasks: `none`
 
 ## Goal
 
@@ -31,6 +32,10 @@ Detailed implementation requirements, constraints, acceptance criteria, and note
 
 - `instration/TASK_REVIEW_TEMPLATE.md`
 
+## Progress References
+
+- `instration/tasks/taskN_progress.md`
+
 ## Result
 
-After task completion, add a short summary of what was done, changed files, tests run, and any follow-up notes.
+Keep the task definition stable. Put execution progress, completion notes, changed files, and test results into the matching progress file.

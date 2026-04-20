@@ -8,6 +8,7 @@
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `none`
+- Next Tasks: `task7`, `task8`, `task9`, `task10`
 
 ## Goal
 
@@ -16,6 +17,8 @@ Create the initial project skeleton and dependency setup for the backend MVP.
 ## Detailed Description
 
 Set up the root project files and package configuration using `uv`. Create the Python package under `src/backend`, define core dependencies, and prepare base commands for local development and containerized execution.
+
+This task is decomposed into atomic implementation tasks `task7` through `task10`. Use those tasks for execution order and review.
 
 ## Deliverables
 
@@ -31,8 +34,12 @@ Set up the root project files and package configuration using `uv`. Create the P
 
 ## Review References
 
-- `instration/tasks/task1_review.md`
+- `instration/tasks/task1_review1.md`
+
+## Progress References
+
+- `instration/tasks/task1_progress.md`
 
 ## Result
 
-Pending.
+Definition only. Track implementation progress and completion details in the matching progress file.

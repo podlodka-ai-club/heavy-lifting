@@ -21,7 +21,12 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - Keep the architecture modular under `src/backend`.
 - Build against the MVP scope defined in `instration/project.md`.
 - Use the task workflow described in `instration/instruction.md`.
-- Create or update task files in `instration/tasks` before and after significant work.
+- Create or update task definition files in `instration/tasks` before significant work.
+- Record implementation progress and completion notes in `instration/tasks/taskN_progress.md`.
+- Use the `DEV -> REVIEW -> DEV(commit)` loop for each atomic task.
+- Do not create a commit before review approval.
+- Each atomic task should end with exactly one git commit.
+- Use commit messages in the format `taskN <short Russian action summary>`.
 - Keep tasks atomic and independently reviewable.
 
 ## Quality Expectations
@@ -30,6 +35,11 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - Add or update tests together with implementation changes.
 - Prefer small, reviewable changes.
 - Keep history of follow-up work in child `pr_feedback` tasks.
+
+## Subagent Roles
+
+- `DEV` is the implementation subagent. It may modify repository files and update `instration/tasks/taskN_progress.md`.
+- `REVIEW` is the review subagent running on `gpt-5.4`. It must stay read-only for source files and may only write numbered review files in `instration/tasks/`.
 
 ## Implementation Notes
 
