@@ -1,7 +1,21 @@
-.PHONY: install api worker1 worker2 worker3 lint typecheck test bootstrap-db init-db
+.PHONY: install init clean api worker1 worker2 worker3 lint typecheck test bootstrap-db init-db
 
-install:
+
+install: init
+
+init:
 	uv sync
+
+clean:
+	@rm -rf .pytest_cache .mypy_cache .ruff_cache .hypothesis .nox .tox .eggs build dist htmlcov
+	@rm -f .coverage .coverage.* coverage.xml
+	@find . -maxdepth 1 -type d -name "*.egg-info" -exec rm -rf {} +
+	@for path in src tests; do \
+		if [ -d "$$path" ]; then \
+			find "$$path" -type d -name __pycache__ -exec rm -rf {} +; \
+			find "$$path" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete; \
+		fi; \
+	done
 
 api:
 	uv run flask --app backend.api.app:create_app run --debug --host 0.0.0.0 --port 8000
