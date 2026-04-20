@@ -11,6 +11,7 @@ This directory stores the project specification, task definitions, task progress
 - `instration/TASK_PROGRESS_TEMPLATE.md` - template for task execution progress.
 - `instration/TASK_SUMMARY_TEMPLATE.md` - template for post-task summary.
 - `instration/CONFIG_SETTINGS_SKILL.md` - skill for adding and using application settings.
+- `instration/PRE_COMMIT_CHECKS_SKILL.md` - skill for mandatory pre-commit checks.
 - `instration/TASK_CONTEXT_TEMPLATE.md` - template for extra task context.
 - `instration/TASK_REVIEW_TEMPLATE.md` - template for task review results.
 - `instration/tasks/taskN.md` - concrete tasks created from the task template.
@@ -47,6 +48,7 @@ This directory stores the project specification, task definitions, task progress
 - After review approval, do not ask the user whether to commit; `DEV` must create the commit as the final step of the atomic task.
 - Each atomic task must end with exactly one commit.
 - Commit messages must start with the task number and then a short Russian action summary, for example: `task7 добавить каркас пакета backend`.
+- Before committing code changes, follow `instration/PRE_COMMIT_CHECKS_SKILL.md`.
 - `Context` documents contain any supplemental information, assumptions, references, or constraints.
 - `Review` documents contain findings, risks, and the review decision.
 - Keep one task per file.

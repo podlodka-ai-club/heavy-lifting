@@ -35,6 +35,7 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - After `REVIEW` approval, `DEV` must create the commit automatically without asking the user for extra confirmation.
 - Each atomic task should end with exactly one git commit.
 - Use commit messages in the format `taskN <short Russian action summary>`.
+- Before committing code changes, `DEV` must run `make lint` and `make typecheck`, or explicitly document why they are not applicable.
 - Keep tasks atomic and independently reviewable.
 
 ## Quality Expectations
@@ -55,3 +56,4 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - Start with `MockTracker` and `MockScm`.
 - Keep the MVP database limited to `tasks` and `token_usage`.
 - Use `instration/CONFIG_SETTINGS_SKILL.md` when adding or changing application settings.
+- Use `instration/PRE_COMMIT_CHECKS_SKILL.md` before creating commits for code tasks.
