@@ -1,10 +1,15 @@
-.PHONY: install init clean api worker1 worker2 worker3 lint typecheck test bootstrap-db init-db
+.PHONY: install init install-git-hooks clean api worker1 worker2 worker3 lint typecheck test bootstrap-db init-db
 
 
 install: init
 
 init:
 	uv sync
+	$(MAKE) install-git-hooks
+
+install-git-hooks:
+	@mkdir -p .git/hooks
+	@install -m 0755 githooks/pre-commit .git/hooks/pre-commit
 
 clean:
 	@rm -rf .pytest_cache .mypy_cache .ruff_cache .hypothesis .nox .tox .eggs build dist htmlcov

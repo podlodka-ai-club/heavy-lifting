@@ -1,0 +1,37 @@
+#!/bin/sh
+
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+staged_files=$(git diff --cached --name-only)
+
+if [ -z "$staged_files" ]; then
+	printf '%s\n' 'pre-commit: staged files not found, skipping checks.'
+	exit 0
+fi
+
+skip_checks=true
+
+for path in $staged_files; do
+	case "$path" in
+		instration/*|AGENTS.md)
+			;;
+		*)
+			skip_checks=false
+			break
+			;;
+	esac
+done
+
+if [ "$skip_checks" = true ]; then
+	printf '%s\n' 'pre-commit: documentation-only changes detected, skipping lint and typecheck.'
+	exit 0
+fi
+
+printf '%s\n' 'pre-commit: running make lint'
+make lint
+
+printf '%s\n' 'pre-commit: running make typecheck'
+make typecheck
