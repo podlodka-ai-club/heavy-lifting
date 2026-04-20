@@ -54,3 +54,4 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - Use `TrackerProtocol` and `ScmProtocol` boundaries.
 - Start with `MockTracker` and `MockScm`.
 - Keep the MVP database limited to `tasks` and `token_usage`.
+- Use `instration/CONFIG_SETTINGS_SKILL.md` when adding or changing application settings.

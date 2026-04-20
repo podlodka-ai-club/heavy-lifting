@@ -10,6 +10,7 @@ This directory stores the project specification, task definitions, task progress
 - `instration/TASK_TEMPLATE.md` - template for implementation tasks.
 - `instration/TASK_PROGRESS_TEMPLATE.md` - template for task execution progress.
 - `instration/TASK_SUMMARY_TEMPLATE.md` - template for post-task summary.
+- `instration/CONFIG_SETTINGS_SKILL.md` - skill for adding and using application settings.
 - `instration/TASK_CONTEXT_TEMPLATE.md` - template for extra task context.
 - `instration/TASK_REVIEW_TEMPLATE.md` - template for task review results.
 - `instration/tasks/taskN.md` - concrete tasks created from the task template.
@@ -50,6 +51,7 @@ This directory stores the project specification, task definitions, task progress
 - `Review` documents contain findings, risks, and the review decision.
 - Keep one task per file.
 - Prefer atomic tasks that can be completed and reviewed independently.
+- When adding or changing config parameters, follow `instration/CONFIG_SETTINGS_SKILL.md`.
 
 ## Suggested Naming
 
