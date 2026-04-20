@@ -4,7 +4,7 @@
 
 - ID: `task22`
 - Title: Implement task repository and query helpers
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task15`, `task16`
@@ -32,6 +32,7 @@ Implement repository helpers for creating tasks, loading chains by `root_id`, po
 ## Review References
 
 - `instration/tasks/task22_review1.md`
+- `instration/tasks/task22_review2.md`
 
 ## Progress References
 
