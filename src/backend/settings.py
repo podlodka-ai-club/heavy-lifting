@@ -42,6 +42,8 @@ class Settings:
     postgres_user: str
     postgres_password: str
     workspace_root: str
+    tracker_adapter: str
+    scm_adapter: str
     tracker_poll_interval: int
     pr_poll_interval: int
 
@@ -71,6 +73,8 @@ def get_settings() -> Settings:
         postgres_user=postgres_user,
         postgres_password=postgres_password,
         workspace_root=os.getenv("WORKSPACE_ROOT", "/workspace/repos"),
+        tracker_adapter=os.getenv("TRACKER_ADAPTER", "mock"),
+        scm_adapter=os.getenv("SCM_ADAPTER", "mock"),
         tracker_poll_interval=_get_int("TRACKER_POLL_INTERVAL", 30),
         pr_poll_interval=_get_int("PR_POLL_INTERVAL", 60),
     )

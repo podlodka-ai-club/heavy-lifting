@@ -4,7 +4,7 @@
 
 - ID: `task21`
 - Title: Wire adapter factories and service initialization
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task19`, `task20`

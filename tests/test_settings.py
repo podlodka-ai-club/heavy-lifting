@@ -13,6 +13,8 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "POSTGRES_USER",
         "POSTGRES_PASSWORD",
         "WORKSPACE_ROOT",
+        "TRACKER_ADAPTER",
+        "SCM_ADAPTER",
         "TRACKER_POLL_INTERVAL",
         "PR_POLL_INTERVAL",
     ):
@@ -33,6 +35,8 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "postgresql+psycopg://postgres:postgres@localhost:5432/heavy_lifting"
     )
     assert settings.workspace_root == "/workspace/repos"
+    assert settings.tracker_adapter == "mock"
+    assert settings.scm_adapter == "mock"
     assert settings.tracker_poll_interval == 30
     assert settings.pr_poll_interval == 60
 
@@ -47,6 +51,8 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("POSTGRES_USER", "service")
     monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
     monkeypatch.setenv("WORKSPACE_ROOT", "/tmp/workspaces")
+    monkeypatch.setenv("TRACKER_ADAPTER", "custom-tracker")
+    monkeypatch.setenv("SCM_ADAPTER", "custom-scm")
     monkeypatch.setenv("TRACKER_POLL_INTERVAL", "15")
     monkeypatch.setenv("PR_POLL_INTERVAL", "45")
 
@@ -63,6 +69,8 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.postgres_password == "secret"
     assert settings.database_url == "postgresql+psycopg://service:secret@db:6543/orchestrator"
     assert settings.workspace_root == "/tmp/workspaces"
+    assert settings.tracker_adapter == "custom-tracker"
+    assert settings.scm_adapter == "custom-scm"
     assert settings.tracker_poll_interval == 15
     assert settings.pr_poll_interval == 45
 
