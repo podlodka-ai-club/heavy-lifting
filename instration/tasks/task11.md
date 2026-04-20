@@ -4,7 +4,7 @@
 
 - ID: `task11`
 - Title: Implement application settings and environment loading
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task8`

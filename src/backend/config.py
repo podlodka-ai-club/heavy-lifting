@@ -1,10 +1,7 @@
-from dataclasses import dataclass
+import backend.settings as settings_module
+
+Settings = settings_module.Settings
+get_settings = settings_module.get_settings
 
 
-@dataclass(slots=True)
-class Settings:
-    app_name: str = "backend"
-
-
-def get_settings() -> Settings:
-    return Settings()
+__all__ = ["Settings", "get_settings"]
