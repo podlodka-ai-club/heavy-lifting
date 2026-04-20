@@ -4,7 +4,7 @@
 
 - ID: `task9`
 - Title: Add root developer automation files
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task8`
