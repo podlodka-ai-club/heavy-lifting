@@ -26,7 +26,7 @@ This directory stores the project specification, task definitions, task progress
 6. Assign the task to `DEV`, implement it, and record progress only in `taskN_progress.md`.
 7. After implementation, run `REVIEW` and store the output in `taskN_review1.md` or the next numbered review file.
 8. If review requests changes, send the task back to `DEV`, apply fixes, update `taskN_progress.md`, and run the next review round.
-9. If review is approved, ask `DEV` to create the git commit for this atomic task using the required message format.
+9. If review is approved, `DEV` must create the git commit for this atomic task automatically using the required message format.
 10. Use one atomic task per commit.
 11. Create `taskN_summary.md` with a short summary of what was done, who did it, and what comes next.
 12. Update task status to reflect the current state, for example: `todo`, `in_progress`, `done`, `blocked`, `reviewed`.
@@ -43,6 +43,7 @@ This directory stores the project specification, task definitions, task progress
 - The main orchestrating agent must not directly edit repository files outside `instration/` except `AGENTS.md`.
 - Any source code, configuration, or other non-`instration/` repository changes must be made through `DEV`.
 - Do not create a commit before review approval.
+- After review approval, do not ask the user whether to commit; `DEV` must create the commit as the final step of the atomic task.
 - Each atomic task must end with exactly one commit.
 - Commit messages must start with the task number and then a short Russian action summary, for example: `task7 добавить каркас пакета backend`.
 - `Context` documents contain any supplemental information, assumptions, references, or constraints.

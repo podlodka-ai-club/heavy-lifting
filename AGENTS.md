@@ -32,6 +32,7 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - Save a short post-task summary in `instration/tasks/taskN_summary.md`.
 - Use the `DEV -> REVIEW -> DEV(commit)` loop for each atomic task.
 - Do not create a commit before review approval.
+- After `REVIEW` approval, `DEV` must create the commit automatically without asking the user for extra confirmation.
 - Each atomic task should end with exactly one git commit.
 - Use commit messages in the format `taskN <short Russian action summary>`.
 - Keep tasks atomic and independently reviewable.
