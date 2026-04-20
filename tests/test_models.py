@@ -3,14 +3,20 @@ from sqlalchemy.orm import configure_mappers
 
 from backend.db import build_engine
 from backend.models import (
-    TASK_STATUS_VALUES,
-    TASK_TYPE_VALUES,
     Base,
     Task,
-    TaskStatus,
-    TaskType,
     TokenUsage,
 )
+from backend.task_constants import TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskStatus, TaskType
+
+
+def test_models_reuse_shared_task_constants() -> None:
+    from backend import models
+
+    assert models.TaskType is TaskType
+    assert models.TaskStatus is TaskStatus
+    assert models.TASK_TYPE_VALUES is TASK_TYPE_VALUES
+    assert models.TASK_STATUS_VALUES is TASK_STATUS_VALUES
 
 
 def test_task_enum_values_match_mvp_spec() -> None:

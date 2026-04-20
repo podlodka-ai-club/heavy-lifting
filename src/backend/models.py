@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
@@ -21,6 +20,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from backend.task_constants import TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskStatus, TaskType
+
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -29,23 +30,6 @@ def _utc_now() -> datetime:
 class Base(DeclarativeBase):
     pass
 
-
-class TaskType(StrEnum):
-    FETCH = "fetch"
-    EXECUTE = "execute"
-    DELIVER = "deliver"
-    PR_FEEDBACK = "pr_feedback"
-
-
-class TaskStatus(StrEnum):
-    NEW = "new"
-    PROCESSING = "processing"
-    DONE = "done"
-    FAILED = "failed"
-
-
-TASK_TYPE_VALUES = tuple(task_type.value for task_type in TaskType)
-TASK_STATUS_VALUES = tuple(status.value for status in TaskStatus)
 
 task_type_enum = Enum(
     TaskType,

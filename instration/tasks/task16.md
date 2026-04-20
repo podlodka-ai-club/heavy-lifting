@@ -4,7 +4,7 @@
 
 - ID: `task16`
 - Title: Define task constants and shared payload schemas
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task15`
@@ -39,4 +39,4 @@ Implement task type constants, task status constants, and MVP schema definitions
 
 ## Result
 
-Definition only. Track implementation progress and completion details in the matching progress file.
+Completed. See the progress, review, and summary files for implementation details and verification results.
