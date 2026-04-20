@@ -5,6 +5,8 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from backend.task_constants import TaskStatus, TaskType
+
 
 def _validate_json_value(value: object) -> object:
     if value is None or isinstance(value, str | int | float | bool):
@@ -91,11 +93,79 @@ class TaskResultPayload(SchemaModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+class TrackerTaskReference(SchemaModel):
+    external_id: str
+    url: str | None = None
+
+
+class TrackerCommentReference(SchemaModel):
+    comment_id: str
+
+
+class TrackerTask(SchemaModel):
+    external_id: str
+    parent_external_id: str | None = None
+    status: TaskStatus = TaskStatus.NEW
+    task_type: TaskType | None = None
+    context: TaskContext
+    input_payload: TaskInputPayload | None = None
+    repo_url: str | None = None
+    repo_ref: str | None = None
+    workspace_key: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class TrackerFetchTasksQuery(SchemaModel):
+    statuses: list[TaskStatus] = Field(default_factory=lambda: [TaskStatus.NEW])
+    task_type: TaskType | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
+class TrackerTaskCreatePayload(SchemaModel):
+    context: TaskContext
+    task_type: TaskType | None = None
+    status: TaskStatus = TaskStatus.NEW
+    input_payload: TaskInputPayload | None = None
+    repo_url: str | None = None
+    repo_ref: str | None = None
+    workspace_key: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class TrackerSubtaskCreatePayload(TrackerTaskCreatePayload):
+    parent_external_id: str
+
+
+class TrackerCommentCreatePayload(SchemaModel):
+    external_task_id: str
+    body: str
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class TrackerStatusUpdatePayload(SchemaModel):
+    external_task_id: str
+    status: TaskStatus
+
+
+class TrackerLinksAttachPayload(SchemaModel):
+    external_task_id: str
+    links: list[TaskLink] = Field(min_length=1)
+
+
 __all__ = [
     "JsonObject",
     "JsonValue",
     "PrFeedbackPayload",
     "SchemaModel",
+    "TrackerCommentCreatePayload",
+    "TrackerCommentReference",
+    "TrackerFetchTasksQuery",
+    "TrackerLinksAttachPayload",
+    "TrackerStatusUpdatePayload",
+    "TrackerSubtaskCreatePayload",
+    "TrackerTask",
+    "TrackerTaskCreatePayload",
+    "TrackerTaskReference",
     "TaskContext",
     "TaskInputPayload",
     "TaskLink",

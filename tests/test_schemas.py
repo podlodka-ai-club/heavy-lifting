@@ -8,7 +8,12 @@ from backend.schemas import (
     TaskContext,
     TaskInputPayload,
     TaskResultPayload,
+    TrackerFetchTasksQuery,
+    TrackerLinksAttachPayload,
+    TrackerTask,
+    TrackerTaskCreatePayload,
 )
+from backend.task_constants import TaskStatus, TaskType
 
 
 def test_task_context_serializes_mvp_fields() -> None:
@@ -116,6 +121,68 @@ def test_schemas_reject_non_json_metadata_values() -> None:
         )
 
 
+def test_tracker_task_reuses_shared_task_context_and_enums() -> None:
+    tracker_task = TrackerTask(
+        external_id="TASK-17",
+        status=TaskStatus.PROCESSING,
+        task_type=TaskType.EXECUTE,
+        context=TaskContext(
+            title="Implement tracker boundary",
+            references=[{"label": "spec", "url": "https://example.test/spec"}],
+        ),
+        metadata={"tracker": "mock"},
+    )
+
+    assert tracker_task.model_dump(mode="json") == {
+        "external_id": "TASK-17",
+        "parent_external_id": None,
+        "status": "processing",
+        "task_type": "execute",
+        "context": {
+            "title": "Implement tracker boundary",
+            "description": None,
+            "acceptance_criteria": [],
+            "references": [{"label": "spec", "url": "https://example.test/spec"}],
+            "metadata": {},
+        },
+        "input_payload": None,
+        "repo_url": None,
+        "repo_ref": None,
+        "workspace_key": None,
+        "metadata": {"tracker": "mock"},
+    }
+
+
+def test_tracker_create_payload_and_fetch_query_apply_mvp_defaults() -> None:
+    payload = TrackerTaskCreatePayload(
+        context=TaskContext(title="Create deliver task"),
+        repo_url="https://example.test/repo.git",
+    )
+    query = TrackerFetchTasksQuery()
+
+    assert payload.model_dump(mode="json") == {
+        "context": {
+            "title": "Create deliver task",
+            "description": None,
+            "acceptance_criteria": [],
+            "references": [],
+            "metadata": {},
+        },
+        "task_type": None,
+        "status": "new",
+        "input_payload": None,
+        "repo_url": "https://example.test/repo.git",
+        "repo_ref": None,
+        "workspace_key": None,
+        "metadata": {},
+    }
+    assert query.model_dump(mode="json") == {
+        "statuses": ["new"],
+        "task_type": None,
+        "limit": 100,
+    }
+
+
 @pytest.mark.parametrize(
     ("schema", "payload"),
     [
@@ -130,6 +197,14 @@ def test_schemas_reject_non_json_metadata_values() -> None:
                 "summary": "Done",
                 "token_usage": [{"model": "gpt-5.4", "provider": "openai", "input_tokens": -1}],
             },
+        ),
+        (
+            TrackerLinksAttachPayload,
+            {"external_task_id": "TASK-17", "links": []},
+        ),
+        (
+            TrackerFetchTasksQuery,
+            {"limit": 0},
         ),
     ],
 )
