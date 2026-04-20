@@ -4,7 +4,7 @@
 
 - ID: `task10`
 - Title: Add container runtime files for API, workers, and Postgres
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task8`

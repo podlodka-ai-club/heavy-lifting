@@ -1,0 +1,125 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: heavy_lifting
+      POSTGRES_USER: heavy_lifting
+      POSTGRES_PASSWORD: heavy_lifting
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: heavy_lifting
+      POSTGRES_USER: heavy_lifting
+      POSTGRES_PASSWORD: heavy_lifting
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://heavy_lifting:heavy_lifting@postgres:5432/heavy_lifting
+      WORKSPACE_ROOT: /workspace/repos
+    ports:
+      - "8000:8000"
+    volumes:
+      - workspace_repos:/workspace/repos
+    command:
+      [
+        "uv",
+        "run",
+        "flask",
+        "--app",
+        "backend.api.app:create_app",
+        "run",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+
+  worker1:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: heavy_lifting
+      POSTGRES_USER: heavy_lifting
+      POSTGRES_PASSWORD: heavy_lifting
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://heavy_lifting:heavy_lifting@postgres:5432/heavy_lifting
+      WORKSPACE_ROOT: /workspace/repos
+    volumes:
+      - workspace_repos:/workspace/repos
+    command:
+      [
+        "uv",
+        "run",
+        "python",
+        "-c",
+        "from backend.workers.fetch_worker import run; run()",
+      ]
+
+  worker2:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: heavy_lifting
+      POSTGRES_USER: heavy_lifting
+      POSTGRES_PASSWORD: heavy_lifting
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://heavy_lifting:heavy_lifting@postgres:5432/heavy_lifting
+      WORKSPACE_ROOT: /workspace/repos
+    volumes:
+      - workspace_repos:/workspace/repos
+    command:
+      [
+        "uv",
+        "run",
+        "python",
+        "-c",
+        "from backend.workers.execute_worker import run; run()",
+      ]
+
+  worker3:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: heavy_lifting
+      POSTGRES_USER: heavy_lifting
+      POSTGRES_PASSWORD: heavy_lifting
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://heavy_lifting:heavy_lifting@postgres:5432/heavy_lifting
+      WORKSPACE_ROOT: /workspace/repos
+    volumes:
+      - workspace_repos:/workspace/repos
+    command:
+      [
+        "uv",
+        "run",
+        "python",
+        "-c",
+        "from backend.workers.deliver_worker import run; run()",
+      ]
+
+volumes:
+  postgres_data:
+  workspace_repos:
