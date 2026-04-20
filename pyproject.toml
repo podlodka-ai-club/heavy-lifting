@@ -15,6 +15,9 @@ dependencies = [
     "pydantic>=2.7,<3.0",
 ]
 
+[project.scripts]
+heavy-lifting-bootstrap-db = "backend.bootstrap_db:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3,<9.0",

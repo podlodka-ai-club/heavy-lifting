@@ -44,6 +44,6 @@ test:
 	uv run pytest
 
 bootstrap-db:
-	uv run python -c "print('Database bootstrap is not implemented yet; target reserved for a future task.')"
+	uv run heavy-lifting-bootstrap-db
 
 init-db: bootstrap-db

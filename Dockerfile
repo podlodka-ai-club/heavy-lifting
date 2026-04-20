@@ -13,4 +13,4 @@ COPY . /app
 
 RUN mkdir -p "$WORKSPACE_ROOT" && uv sync --frozen --no-dev
 
-CMD ["uv", "run", "flask", "--app", "backend.api.app:create_app", "run", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uv run heavy-lifting-bootstrap-db && exec uv run flask --app backend.api.app:create_app run --host 0.0.0.0 --port 8000"]

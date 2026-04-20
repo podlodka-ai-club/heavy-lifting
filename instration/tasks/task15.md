@@ -4,7 +4,7 @@
 
 - ID: `task15`
 - Title: Add MVP schema bootstrap command
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task13`, `task14`
@@ -39,4 +39,4 @@ Implement a simple schema bootstrap command or module that creates the `tasks` a
 
 ## Result
 
-Definition only. Track implementation progress and completion details in the matching progress file.
+Completed. See the progress, review, and summary files for implementation details and verification results.
