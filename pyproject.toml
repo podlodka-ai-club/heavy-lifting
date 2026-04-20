@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "heavy-lifting"
+version = "0.1.0"
+description = "MVP backend-оркестратор для работы с задачами, кодом и PR."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "flask>=3.0,<4.0",
+    "sqlalchemy>=2.0,<3.0",
+    "psycopg[binary]>=3.2,<4.0",
+    "pydantic>=2.7,<3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9.0",
+    "ruff>=0.11,<0.12",
+    "mypy>=1.11,<2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/backend"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/backend"]
+mypy_path = "src"
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true

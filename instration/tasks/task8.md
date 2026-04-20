@@ -4,7 +4,7 @@
 
 - ID: `task8`
 - Title: Configure `pyproject.toml` and `uv` dependencies
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task7`
