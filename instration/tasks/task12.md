@@ -4,7 +4,7 @@
 
 - ID: `task12`
 - Title: Implement database engine and session factory
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task11`
