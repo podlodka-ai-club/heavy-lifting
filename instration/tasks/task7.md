@@ -4,7 +4,7 @@
 
 - ID: `task7`
 - Title: Create Python package skeleton under `src/backend`
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `none`
