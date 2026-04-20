@@ -16,13 +16,20 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - Manage dependencies with `uv`.
 - Prefer running commands through `uv run`.
 
+## Communication
+
+- The main orchestrating agent must communicate with the user only in Russian.
+
 ## Development Rules
 
 - Keep the architecture modular under `src/backend`.
 - Build against the MVP scope defined in `instration/project.md`.
 - Use the task workflow described in `instration/instruction.md`.
+- The main orchestrating agent may directly edit only files inside `instration/` and `AGENTS.md`.
+- All source code, configuration, and other repository changes outside `instration/` must be performed through `DEV`.
 - Create or update task definition files in `instration/tasks` before significant work.
 - Record implementation progress and completion notes in `instration/tasks/taskN_progress.md`.
+- Save a short post-task summary in `instration/tasks/taskN_summary.md`.
 - Use the `DEV -> REVIEW -> DEV(commit)` loop for each atomic task.
 - Do not create a commit before review approval.
 - Each atomic task should end with exactly one git commit.

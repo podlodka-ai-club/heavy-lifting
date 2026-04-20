@@ -9,10 +9,12 @@ This directory stores the project specification, task definitions, task progress
 - `instration/project.md` - current project technical specification and scope.
 - `instration/TASK_TEMPLATE.md` - template for implementation tasks.
 - `instration/TASK_PROGRESS_TEMPLATE.md` - template for task execution progress.
+- `instration/TASK_SUMMARY_TEMPLATE.md` - template for post-task summary.
 - `instration/TASK_CONTEXT_TEMPLATE.md` - template for extra task context.
 - `instration/TASK_REVIEW_TEMPLATE.md` - template for task review results.
 - `instration/tasks/taskN.md` - concrete tasks created from the task template.
 - `instration/tasks/taskN_progress.md` - execution progress and completion notes for a task.
+- `instration/tasks/taskN_summary.md` - short human-readable summary after task completion.
 
 ## Task Lifecycle
 
@@ -26,7 +28,8 @@ This directory stores the project specification, task definitions, task progress
 8. If review requests changes, send the task back to `DEV`, apply fixes, update `taskN_progress.md`, and run the next review round.
 9. If review is approved, ask `DEV` to create the git commit for this atomic task using the required message format.
 10. Use one atomic task per commit.
-11. Update task status to reflect the current state, for example: `todo`, `in_progress`, `done`, `blocked`, `reviewed`.
+11. Create `taskN_summary.md` with a short summary of what was done, who did it, and what comes next.
+12. Update task status to reflect the current state, for example: `todo`, `in_progress`, `done`, `blocked`, `reviewed`.
 
 ## Rules
 
@@ -37,6 +40,8 @@ This directory stores the project specification, task definitions, task progress
 - Review notes belong in numbered files such as `taskN_review1.md`, `taskN_review2.md`, and so on.
 - `DEV` may change project files and update task progress files.
 - `REVIEW` may not change project source files and may only write review results to `taskN_reviewK.md`.
+- The main orchestrating agent must not directly edit repository files outside `instration/` except `AGENTS.md`.
+- Any source code, configuration, or other non-`instration/` repository changes must be made through `DEV`.
 - Do not create a commit before review approval.
 - Each atomic task must end with exactly one commit.
 - Commit messages must start with the task number and then a short Russian action summary, for example: `task7 добавить каркас пакета backend`.
@@ -49,6 +54,7 @@ This directory stores the project specification, task definitions, task progress
 
 - Tasks: `instration/tasks/task1.md`, `instration/tasks/task2.md`, ...
 - Progress files: `instration/tasks/task1_progress.md`
+- Summary files: `instration/tasks/task1_summary.md`
 - Context files: `instration/tasks/task1_context.md`
 - Review files: `instration/tasks/task1_review1.md`, `instration/tasks/task1_review2.md`, ...
 
