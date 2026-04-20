@@ -152,11 +152,127 @@ class TrackerLinksAttachPayload(SchemaModel):
     links: list[TaskLink] = Field(min_length=1)
 
 
+class ScmWorkspaceEnsurePayload(SchemaModel):
+    repo_url: str
+    workspace_key: str
+    repo_ref: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmWorkspace(SchemaModel):
+    repo_url: str
+    workspace_key: str
+    repo_ref: str | None = None
+    local_path: str
+    branch_name: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmBranchCreatePayload(SchemaModel):
+    workspace_key: str
+    branch_name: str
+    from_ref: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmBranchReference(SchemaModel):
+    workspace_key: str
+    branch_name: str
+    from_ref: str | None = None
+    head_commit_sha: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmCommitChangesPayload(SchemaModel):
+    workspace_key: str
+    branch_name: str
+    message: str = Field(min_length=1)
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmCommitReference(SchemaModel):
+    workspace_key: str
+    branch_name: str
+    commit_sha: str
+    message: str
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmPushBranchPayload(SchemaModel):
+    workspace_key: str
+    branch_name: str
+    remote_name: str = "origin"
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmPushReference(SchemaModel):
+    workspace_key: str
+    branch_name: str
+    remote_name: str
+    remote_branch_name: str
+    branch_url: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmPullRequestMetadata(SchemaModel):
+    execute_task_external_id: str
+    tracker_name: str | None = None
+    workspace_key: str | None = None
+    repo_url: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmPullRequestCreatePayload(SchemaModel):
+    workspace_key: str
+    branch_name: str
+    base_branch: str
+    title: str = Field(min_length=1)
+    body: str | None = None
+    pr_metadata: ScmPullRequestMetadata
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmPullRequestReference(SchemaModel):
+    external_id: str
+    url: str
+    workspace_key: str
+    branch_name: str
+    base_branch: str
+    pr_metadata: ScmPullRequestMetadata
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmPullRequestFeedback(PrFeedbackPayload):
+    pr_metadata: ScmPullRequestMetadata
+
+
+class ScmReadPrFeedbackQuery(SchemaModel):
+    workspace_key: str | None = None
+    repo_url: str | None = None
+    pr_external_id: str | None = None
+    branch_name: str | None = None
+    since_cursor: str | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
 __all__ = [
     "JsonObject",
     "JsonValue",
     "PrFeedbackPayload",
+    "ScmBranchCreatePayload",
+    "ScmBranchReference",
+    "ScmCommitChangesPayload",
+    "ScmCommitReference",
+    "ScmPullRequestCreatePayload",
+    "ScmPullRequestFeedback",
+    "ScmPullRequestMetadata",
+    "ScmPullRequestReference",
+    "ScmPushBranchPayload",
+    "ScmPushReference",
+    "ScmReadPrFeedbackQuery",
     "SchemaModel",
+    "ScmWorkspace",
+    "ScmWorkspaceEnsurePayload",
     "TrackerCommentCreatePayload",
     "TrackerCommentReference",
     "TrackerFetchTasksQuery",

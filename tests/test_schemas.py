@@ -5,6 +5,12 @@ from pydantic import ValidationError
 
 from backend.schemas import (
     PrFeedbackPayload,
+    ScmCommitChangesPayload,
+    ScmPullRequestCreatePayload,
+    ScmPullRequestFeedback,
+    ScmPullRequestMetadata,
+    ScmReadPrFeedbackQuery,
+    ScmWorkspaceEnsurePayload,
     TaskContext,
     TaskInputPayload,
     TaskResultPayload,
@@ -183,6 +189,101 @@ def test_tracker_create_payload_and_fetch_query_apply_mvp_defaults() -> None:
     }
 
 
+def test_scm_pull_request_feedback_reuses_shared_feedback_fields() -> None:
+    feedback = ScmPullRequestFeedback(
+        pr_external_id="42",
+        comment_id="comment-7",
+        body="Please cover this path with tests.",
+        author="reviewer",
+        path="src/backend/protocols/scm.py",
+        line=18,
+        pr_url="https://example.test/repo/pull/42",
+        pr_metadata=ScmPullRequestMetadata(
+            execute_task_external_id="TASK-18",
+            tracker_name="mock-tracker",
+            workspace_key="repo-1",
+            repo_url="https://example.test/repo.git",
+        ),
+        metadata={"severity": "medium"},
+    )
+
+    assert feedback.model_dump(mode="json") == {
+        "pr_external_id": "42",
+        "comment_id": "comment-7",
+        "body": "Please cover this path with tests.",
+        "author": "reviewer",
+        "path": "src/backend/protocols/scm.py",
+        "line": 18,
+        "side": None,
+        "commit_sha": None,
+        "pr_url": "https://example.test/repo/pull/42",
+        "metadata": {"severity": "medium"},
+        "pr_metadata": {
+            "execute_task_external_id": "TASK-18",
+            "tracker_name": "mock-tracker",
+            "workspace_key": "repo-1",
+            "repo_url": "https://example.test/repo.git",
+            "metadata": {},
+        },
+    }
+
+
+def test_scm_payloads_apply_mvp_defaults() -> None:
+    ensure_workspace = ScmWorkspaceEnsurePayload(
+        repo_url="https://example.test/repo.git",
+        workspace_key="repo-1",
+    )
+    commit = ScmCommitChangesPayload(
+        workspace_key="repo-1",
+        branch_name="task18/scm-boundary",
+        message="task18 define scm boundary",
+    )
+    create_pr = ScmPullRequestCreatePayload(
+        workspace_key="repo-1",
+        branch_name="task18/scm-boundary",
+        base_branch="main",
+        title="Define SCM boundary",
+        pr_metadata=ScmPullRequestMetadata(execute_task_external_id="TASK-18"),
+    )
+    feedback_query = ScmReadPrFeedbackQuery()
+
+    assert ensure_workspace.model_dump(mode="json") == {
+        "repo_url": "https://example.test/repo.git",
+        "workspace_key": "repo-1",
+        "repo_ref": None,
+        "metadata": {},
+    }
+    assert commit.model_dump(mode="json") == {
+        "workspace_key": "repo-1",
+        "branch_name": "task18/scm-boundary",
+        "message": "task18 define scm boundary",
+        "metadata": {},
+    }
+    assert create_pr.model_dump(mode="json") == {
+        "workspace_key": "repo-1",
+        "branch_name": "task18/scm-boundary",
+        "base_branch": "main",
+        "title": "Define SCM boundary",
+        "body": None,
+        "pr_metadata": {
+            "execute_task_external_id": "TASK-18",
+            "tracker_name": None,
+            "workspace_key": None,
+            "repo_url": None,
+            "metadata": {},
+        },
+        "metadata": {},
+    }
+    assert feedback_query.model_dump(mode="json") == {
+        "workspace_key": None,
+        "repo_url": None,
+        "pr_external_id": None,
+        "branch_name": None,
+        "since_cursor": None,
+        "limit": 100,
+    }
+
+
 @pytest.mark.parametrize(
     ("schema", "payload"),
     [
@@ -205,6 +306,28 @@ def test_tracker_create_payload_and_fetch_query_apply_mvp_defaults() -> None:
         (
             TrackerFetchTasksQuery,
             {"limit": 0},
+        ),
+        (
+            ScmCommitChangesPayload,
+            {"workspace_key": "repo-1", "branch_name": "task18/scm", "message": ""},
+        ),
+        (
+            ScmPullRequestMetadata,
+            {"execute_task_external_id": "TASK-18", "metadata": {"bad": object()}},
+        ),
+        (
+            ScmPullRequestCreatePayload,
+            {
+                "workspace_key": "repo-1",
+                "branch_name": "task18/scm",
+                "base_branch": "main",
+                "title": "",
+                "pr_metadata": {"execute_task_external_id": "TASK-18"},
+            },
+        ),
+        (
+            ScmReadPrFeedbackQuery,
+            {"limit": 1001},
         ),
     ],
 )

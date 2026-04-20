@@ -4,7 +4,7 @@
 
 - ID: `task18`
 - Title: Define `ScmProtocol` contract
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task16`
@@ -39,4 +39,4 @@ Add the protocol interface and typed structures required for workspace sync, bra
 
 ## Result
 
-Definition only. Track implementation progress and completion details in the matching progress file.
+Completed. See the progress, review, and summary files for implementation details and verification results.
