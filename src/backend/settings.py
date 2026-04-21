@@ -44,6 +44,7 @@ class Settings:
     workspace_root: str
     tracker_adapter: str
     scm_adapter: str
+    agent_runner_adapter: str
     tracker_poll_interval: int
     pr_poll_interval: int
 
@@ -75,6 +76,7 @@ def get_settings() -> Settings:
         workspace_root=os.getenv("WORKSPACE_ROOT", "/workspace/repos"),
         tracker_adapter=os.getenv("TRACKER_ADAPTER", "mock"),
         scm_adapter=os.getenv("SCM_ADAPTER", "mock"),
+        agent_runner_adapter=os.getenv("AGENT_RUNNER_ADAPTER", "local"),
         tracker_poll_interval=_get_int("TRACKER_POLL_INTERVAL", 30),
         pr_poll_interval=_get_int("PR_POLL_INTERVAL", 60),
     )

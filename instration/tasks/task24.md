@@ -4,7 +4,7 @@
 
 - ID: `task24`
 - Title: Implement agent runner abstraction
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task23`
@@ -32,6 +32,7 @@ Add a small agent runner abstraction that `Worker 2` can call for `execute` and 
 ## Review References
 
 - `instration/tasks/task24_review1.md`
+- `instration/tasks/task24_review2.md`
 
 ## Progress References
 

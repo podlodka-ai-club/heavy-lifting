@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TypeVar
 
 from backend.models import Task
 from backend.schemas import (
-    PrFeedbackPayload,
     SchemaModel,
     TaskContext,
     TaskInputPayload,
     TaskResultPayload,
 )
 from backend.task_constants import TaskType
+from backend.task_context import EffectiveTaskContext, FeedbackHistoryEntry, TaskChainEntry
 
 SchemaModelT = TypeVar("SchemaModelT", bound=SchemaModel)
 
@@ -27,71 +27,6 @@ def parse_task_input_payload(task: Task) -> TaskInputPayload | None:
 
 def parse_task_result_payload(task: Task) -> TaskResultPayload | None:
     return _parse_task_field(task=task, field_name="result_payload", model=TaskResultPayload)
-
-
-@dataclass(frozen=True, slots=True)
-class TaskChainEntry:
-    task: Task
-    context: TaskContext | None = field(init=False)
-    input_payload: TaskInputPayload | None = field(init=False)
-    result_payload: TaskResultPayload | None = field(init=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "context", parse_task_context(self.task))
-        object.__setattr__(self, "input_payload", parse_task_input_payload(self.task))
-        object.__setattr__(self, "result_payload", parse_task_result_payload(self.task))
-
-
-@dataclass(frozen=True, slots=True)
-class FeedbackHistoryEntry:
-    task_id: int
-    external_task_id: str | None
-    feedback: PrFeedbackPayload
-    result_payload: TaskResultPayload | None
-
-
-@dataclass(frozen=True, slots=True)
-class EffectiveTaskContext:
-    flow_type: TaskType
-    root_task: TaskChainEntry
-    current_task: TaskChainEntry
-    lineage: tuple[TaskChainEntry, ...]
-    fetch_task: TaskChainEntry | None
-    execute_task: TaskChainEntry | None
-    deliver_task: TaskChainEntry | None
-    feedback_task: TaskChainEntry | None
-    feedback_history: tuple[FeedbackHistoryEntry, ...]
-    repo_url: str | None
-    repo_ref: str | None
-    workspace_key: str | None
-    branch_name: str | None
-    base_branch: str | None
-    pr_external_id: str | None
-    pr_url: str | None
-    instructions: str | None
-    commit_message_hint: str | None
-
-    @property
-    def tracker_context(self) -> TaskContext | None:
-        return self.fetch_task.context if self.fetch_task is not None else self.root_task.context
-
-    @property
-    def execution_context(self) -> TaskContext | None:
-        if self.execute_task is not None and self.execute_task.context is not None:
-            return self.execute_task.context
-        return self.current_task.context
-
-    @property
-    def current_feedback(self) -> PrFeedbackPayload | None:
-        if self.feedback_task is None or self.feedback_task.input_payload is None:
-            return None
-        return self.feedback_task.input_payload.pr_feedback
-
-    @property
-    def execute_result(self) -> TaskResultPayload | None:
-        if self.execute_task is None:
-            return None
-        return self.execute_task.result_payload
 
 
 @dataclass(slots=True)
@@ -189,7 +124,7 @@ class ContextBuilder:
         root_task = task_by_id.get(root_id)
         if root_task is None:
             raise ValueError(f"Task chain is missing root task {root_id}")
-        return TaskChainEntry(task=root_task)
+        return _task_chain_entry(root_task)
 
     def _build_lineage(
         self,
@@ -201,7 +136,7 @@ class ContextBuilder:
         cursor: Task | None = current_task
 
         while cursor is not None:
-            lineage.append(TaskChainEntry(task=cursor))
+            lineage.append(_task_chain_entry(cursor))
             parent_id = cursor.parent_id
             if parent_id is None:
                 cursor = None
@@ -235,7 +170,7 @@ class ContextBuilder:
                 continue
             if task.id == current_task.id:
                 continue
-            entry = TaskChainEntry(task=task)
+            entry = _task_chain_entry(task)
             if entry.input_payload is None or entry.input_payload.pr_feedback is None:
                 continue
             history.append(
@@ -283,6 +218,14 @@ def _normalize_tasks(tasks: Iterable[Task]) -> list[Task]:
             raise ValueError("Task chain cannot contain transient tasks without an id")
         normalized_tasks.append(task)
     return sorted(normalized_tasks, key=lambda chain_task: chain_task.id)
+
+
+def _task_chain_entry(task: Task) -> TaskChainEntry:
+    entry = TaskChainEntry(task=task)
+    object.__setattr__(entry, "context", parse_task_context(task))
+    object.__setattr__(entry, "input_payload", parse_task_input_payload(task))
+    object.__setattr__(entry, "result_payload", parse_task_result_payload(task))
+    return entry
 
 
 def _parse_task_field(

@@ -15,6 +15,7 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "WORKSPACE_ROOT",
         "TRACKER_ADAPTER",
         "SCM_ADAPTER",
+        "AGENT_RUNNER_ADAPTER",
         "TRACKER_POLL_INTERVAL",
         "PR_POLL_INTERVAL",
     ):
@@ -37,6 +38,7 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.workspace_root == "/workspace/repos"
     assert settings.tracker_adapter == "mock"
     assert settings.scm_adapter == "mock"
+    assert settings.agent_runner_adapter == "local"
     assert settings.tracker_poll_interval == 30
     assert settings.pr_poll_interval == 60
 
@@ -53,6 +55,7 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("WORKSPACE_ROOT", "/tmp/workspaces")
     monkeypatch.setenv("TRACKER_ADAPTER", "custom-tracker")
     monkeypatch.setenv("SCM_ADAPTER", "custom-scm")
+    monkeypatch.setenv("AGENT_RUNNER_ADAPTER", "custom-runner")
     monkeypatch.setenv("TRACKER_POLL_INTERVAL", "15")
     monkeypatch.setenv("PR_POLL_INTERVAL", "45")
 
@@ -71,6 +74,7 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.workspace_root == "/tmp/workspaces"
     assert settings.tracker_adapter == "custom-tracker"
     assert settings.scm_adapter == "custom-scm"
+    assert settings.agent_runner_adapter == "custom-runner"
     assert settings.tracker_poll_interval == 15
     assert settings.pr_poll_interval == 45
 

@@ -8,6 +8,8 @@ from backend.composition import (
     RuntimeContainer,
     create_runtime_container,
 )
+from backend.protocols.agent_runner import AgentRunnerProtocol
+from backend.services.agent_runner import LocalAgentRunner
 from backend.settings import get_settings
 from backend.workers import deliver_worker, execute_worker, fetch_worker
 
@@ -20,42 +22,54 @@ class CustomScm(MockScm):
     pass
 
 
+class CustomRunner(LocalAgentRunner):
+    pass
+
+
 def test_create_runtime_container_uses_mock_adapters_by_default(monkeypatch) -> None:
     monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
     monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
     get_settings.cache_clear()
 
     runtime = create_runtime_container()
 
     assert isinstance(runtime.tracker, MockTracker)
     assert isinstance(runtime.scm, MockScm)
+    assert isinstance(runtime.agent_runner, LocalAgentRunner)
     assert runtime.settings.tracker_adapter == "mock"
     assert runtime.settings.scm_adapter == "mock"
+    assert runtime.settings.agent_runner_adapter == "local"
 
 
 def test_create_runtime_container_supports_custom_registry(monkeypatch) -> None:
     monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
     monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
     get_settings.cache_clear()
     settings = replace(
         get_settings(),
         tracker_adapter="custom-tracker",
         scm_adapter="custom-scm",
+        agent_runner_adapter="custom-runner",
     )
     registry = AdapterRegistry(
         tracker_factories={"custom-tracker": lambda _: CustomTracker()},
         scm_factories={"custom-scm": lambda _: CustomScm()},
+        agent_runner_factories={"custom-runner": lambda _: CustomRunner()},
     )
 
     runtime = create_runtime_container(settings=settings, registry=registry)
 
     assert isinstance(runtime.tracker, CustomTracker)
     assert isinstance(runtime.scm, CustomScm)
+    assert isinstance(runtime.agent_runner, CustomRunner)
 
 
 def test_create_runtime_container_rejects_unknown_adapter(monkeypatch) -> None:
     monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
     monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
     get_settings.cache_clear()
     settings = replace(get_settings(), tracker_adapter="unknown")
 
@@ -67,9 +81,25 @@ def test_create_runtime_container_rejects_unknown_adapter(monkeypatch) -> None:
         raise AssertionError("Expected ValueError for unknown tracker adapter")
 
 
+def test_create_runtime_container_rejects_unknown_agent_runner(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(get_settings(), agent_runner_adapter="unknown-runner")
+
+    try:
+        create_runtime_container(settings=settings)
+    except ValueError as exc:
+        assert str(exc) == "Unsupported agent runner adapter: unknown-runner"
+    else:
+        raise AssertionError("Expected ValueError for unknown agent runner adapter")
+
+
 def test_create_app_stores_runtime_container_extension(monkeypatch) -> None:
     monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
     monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
     get_settings.cache_clear()
     runtime = create_runtime_container()
 
@@ -83,6 +113,7 @@ def test_workers_use_shared_runtime_initialization(monkeypatch) -> None:
         settings=replace(get_settings()),
         tracker=MockTracker(),
         scm=MockScm(),
+        agent_runner=LocalAgentRunner(),
     )
 
     monkeypatch.setattr(fetch_worker, "create_runtime_container", lambda: expected_runtime)
@@ -92,3 +123,14 @@ def test_workers_use_shared_runtime_initialization(monkeypatch) -> None:
     assert fetch_worker.run() is expected_runtime
     assert execute_worker.run() is expected_runtime
     assert deliver_worker.run() is expected_runtime
+
+
+def test_runtime_container_exposes_agent_runner_protocol(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+
+    runtime = create_runtime_container()
+
+    assert isinstance(runtime.agent_runner, AgentRunnerProtocol)
