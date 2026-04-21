@@ -38,6 +38,15 @@ This repository contains an MVP backend orchestrator written in Python with Flas
 - Before committing code changes, `DEV` must run `make lint` and `make typecheck`, or explicitly document why they are not applicable.
 - Keep tasks atomic and independently reviewable.
 
+## Baseline Principles For Subagents
+
+These cross-cutting rules apply to every subagent unless a role prompt explicitly overrides them. They are enforced through role artifacts, not through conversation with the user.
+
+- Surface assumptions and ambiguities. Never pick silently between incompatible interpretations. An autonomous role must either emit `{status:"blocked", reason}` or record the assumption explicitly in its artifact (ADR Context/Assumptions, requirements Open questions, change summary, review notes, etc.).
+- Prefer the simplest solution that satisfies the ACs. No speculative flexibility, configurability, extension points, or abstractions that are not required by an AC or ADR.
+- Change only what the task requires. Inside touched files, do not reformat, rename, or refactor adjacent code. Unrelated dead code is mentioned, not removed.
+- Defensive branches and error handling are added only for inputs or states required by an AC, an explicit contract, or a documented invariant. Validation at system boundaries (user input, external APIs, untrusted data) is not restricted by this rule.
+
 ## Quality Expectations
 
 - Write tests for new functionality.
