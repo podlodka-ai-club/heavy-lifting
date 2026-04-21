@@ -44,6 +44,63 @@
 - `instration/tasks/` — атомарные задачи, progress, review и summary;
 - `AGENTS.md` — правила работы агентов в этом репозитории.
 
+## Быстрый старт локально
+
+Самый короткий сценарий для локального MVP:
+
+```bash
+uv sync
+docker compose up -d postgres
+
+export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
+
+make bootstrap-db
+make api
+```
+
+В отдельных терминалах с тем же `DATABASE_URL`:
+
+```bash
+export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
+make worker1
+```
+
+```bash
+export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
+make worker2
+```
+
+```bash
+export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
+make worker3
+```
+
+Поставить задачу в intake:
+
+```bash
+curl -X POST http://127.0.0.1:8000/tasks/intake \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "context": {
+      "title": "Проверка локального intake",
+      "description": "Убедиться, что API принимает задачу и воркеры могут забрать ее в pipeline.",
+      "acceptance_criteria": [
+        "API возвращает external_id",
+        "Задача видна в локальном pipeline"
+      ]
+    },
+    "repo_url": "https://example.com/org/repo.git",
+    "repo_ref": "main",
+    "workspace_key": "demo-intake-task",
+    "input_payload": {
+      "instructions": "Обнови README и верни краткий итог.",
+      "base_branch": "main"
+    }
+  }'
+```
+
+Ожидаемый результат: `201 Created` и JSON с `external_id`.
+
 ## Локальная установка через `uv`
 
 Требования:
@@ -100,9 +157,7 @@ docker compose up -d postgres
 - `POSTGRES_HOST=localhost`
 - `POSTGRES_PORT=5432`
 
-Важно: после `docker compose up -d postgres` нужен явный шаг настройки env для приложения. По умолчанию `src/backend/settings.py` использует `POSTGRES_USER=postgres` и `POSTGRES_PASSWORD=postgres`, а контейнер Postgres из `docker-compose.yml` поднимается с `heavy_lifting/heavy_lifting`.
-
-Самый простой вариант — экспортировать `DATABASE_URL`:
+Важно: после `docker compose up -d postgres` нужен явный шаг настройки env для приложения. По умолчанию `src/backend/settings.py` использует `POSTGRES_USER=postgres` и `POSTGRES_PASSWORD=postgres`, а контейнер Postgres из `docker-compose.yml` поднимается с `heavy_lifting/heavy_lifting`. Поэтому для локального запуска проще всего экспортировать `DATABASE_URL`:
 
 ```bash
 export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
@@ -122,10 +177,14 @@ export POSTGRES_PASSWORD=heavy_lifting
 
 ### Обязательные переменные
 
-Минимум для локального запуска приложения:
+Минимум для локального запуска API и воркеров:
 
-- `DATABASE_URL` или полный набор `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`;
-- при запуске реального CLI runner: `AGENT_RUNNER_ADAPTER=cli`.
+- `DATABASE_URL` или полный набор `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
+
+Для запуска реального CLI runner вместо локального stub дополнительно нужны:
+
+- `AGENT_RUNNER_ADAPTER=cli`;
+- ключ в переменной, имя которой задается `CLI_AGENT_API_KEY_ENV_VAR`.
 
 Минимум для доступа `CliAgentRunner` к модели:
 
@@ -173,7 +232,7 @@ export OPENAI_API_KEY=replace-me
 
 ## Подготовка базы данных
 
-Перед первым запуском API и воркеров сначала настройте env как описано выше, затем подготовьте схему MVP:
+Перед первым запуском API и воркеров настройте env и подготовьте схему MVP:
 
 ```bash
 make bootstrap-db
@@ -221,51 +280,7 @@ make worker3
 
 ## Локальный happy path для `POST /tasks/intake`
 
-### 1. Подготовить env и БД
-
-```bash
-export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
-export AGENT_RUNNER_ADAPTER=cli
-export OPENAI_API_KEY=replace-me
-make bootstrap-db
-```
-
-### 2. Поднять API
-
-```bash
-make api
-```
-
-### 3. Отправить задачу в intake
-
-```bash
-curl -X POST http://127.0.0.1:8000/tasks/intake \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "context": {
-      "title": "Обновить README под новый flow",
-      "description": "Проверка локального intake happy path",
-      "acceptance_criteria": ["README отражает новый pipeline"]
-    },
-    "repo_url": "https://example.com/org/repo.git",
-    "repo_ref": "main",
-    "workspace_key": "demo-readme-task",
-    "input_payload": {
-      "instructions": "Обнови документацию и верни краткий итог.",
-      "base_branch": "main"
-    }
-  }'
-```
-
-Ожидаемый результат первого этапа: API вернет `201` и JSON вида `{"external_id":"..."}`.
-
-### 4. Запустить pipeline воркеров
-
-```bash
-make worker1
-make worker2
-make worker3
-```
+Для ручной проверки используйте блок `Быстрый старт локально` выше: он уже содержит минимальный env, bootstrap БД, запуск API и отдельных воркеров, а также копируемый `curl`.
 
 Важно: текущие `MockTracker` и `MockScm` хранят состояние в памяти процесса. Поэтому отдельные процессы `make api` и `make worker1` не разделяют tracker state между собой. Из-за этого для локальной проверки полного pipeline на mock-адаптерах надежнее использовать интеграционный тест ниже.
 
