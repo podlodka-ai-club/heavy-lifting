@@ -4,7 +4,7 @@
 
 - ID: `task3`
 - Title: Protocols, schemas, and mock adapters
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task2`

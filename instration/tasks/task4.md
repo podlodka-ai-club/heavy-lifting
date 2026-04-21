@@ -4,7 +4,7 @@
 
 - ID: `task4`
 - Title: Core services and worker orchestration
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task3`

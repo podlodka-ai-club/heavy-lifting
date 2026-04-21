@@ -4,7 +4,7 @@
 
 - ID: `task20`
 - Title: Implement `MockScm`
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task18`

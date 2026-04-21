@@ -4,7 +4,7 @@
 
 - ID: `task6`
 - Title: Tests, documentation, and final polish
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task5`

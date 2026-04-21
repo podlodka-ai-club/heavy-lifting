@@ -4,7 +4,7 @@
 
 - ID: `task2`
 - Title: Database models and persistence layer
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task1`

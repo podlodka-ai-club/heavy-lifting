@@ -4,7 +4,7 @@
 
 - ID: `task19`
 - Title: Implement `MockTracker`
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task17`

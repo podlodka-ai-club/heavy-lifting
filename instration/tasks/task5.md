@@ -4,7 +4,7 @@
 
 - ID: `task5`
 - Title: Flask API and observability
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task4`
