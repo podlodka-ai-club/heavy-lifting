@@ -4,7 +4,7 @@
 
 - ID: `task23`
 - Title: Implement effective context builder and token cost service
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task16`, `task22`
@@ -32,6 +32,7 @@ Implement the service that reconstructs the effective context from the task chai
 ## Review References
 
 - `instration/tasks/task23_review1.md`
+- `instration/tasks/task23_review2.md`
 
 ## Progress References
 
