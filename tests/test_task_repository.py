@@ -90,6 +90,29 @@ def test_load_task_chain_returns_all_tasks_in_creation_order(session_factory) ->
         assert [task.id for task in chain] == [root_task.id, execute_task.id, deliver_task.id]
 
 
+def test_list_tasks_returns_all_tasks_in_creation_order(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+
+        first_task = repository.create_task(TaskCreateParams(task_type=TaskType.FETCH))
+        second_task = repository.create_task(TaskCreateParams(task_type=TaskType.EXECUTE))
+
+        tasks = repository.list_tasks()
+
+        assert [task.id for task in tasks] == [first_task.id, second_task.id]
+
+
+def test_get_task_returns_matching_task_by_id(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        created_task = repository.create_task(TaskCreateParams(task_type=TaskType.FETCH))
+
+        found_task = repository.get_task(created_task.id)
+
+        assert found_task is not None
+        assert found_task.id == created_task.id
+
+
 def test_poll_task_claims_oldest_matching_task(session_factory) -> None:
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)

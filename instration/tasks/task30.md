@@ -4,7 +4,7 @@
 
 - ID: `task30`
 - Title: Implement task inspection API endpoints
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task29`, `task22`

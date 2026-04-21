@@ -51,6 +51,13 @@ class TaskRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def list_tasks(self) -> list[Task]:
+        statement = select(Task).order_by(Task.created_at.asc(), Task.id.asc())
+        return list(self._session.execute(statement).scalars())
+
+    def get_task(self, task_id: int) -> Task | None:
+        return self._session.get(Task, task_id)
+
     def create_task(self, params: TaskCreateParams) -> Task:
         if params.parent_id is None and params.root_id is not None:
             raise ValueError("root_id cannot be set without parent_id")

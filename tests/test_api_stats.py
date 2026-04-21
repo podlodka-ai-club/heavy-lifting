@@ -251,6 +251,150 @@ def test_get_stats_returns_zeroed_breakdowns_for_empty_database(session_factory)
     }
 
 
+def test_get_tasks_returns_serialized_tasks_with_chain_linkage(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_task_id="TASK-30",
+                repo_url="https://example.com/repo.git",
+                repo_ref="main",
+                workspace_key="ws-30",
+                context={"scope": "root"},
+                input_payload={"source": "tracker"},
+                result_payload={"accepted": True},
+                attempt=1,
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.PROCESSING,
+                external_parent_id="TASK-30",
+                branch_name="feature/task-30",
+                pr_external_id="123",
+                pr_url="https://example.com/pr/123",
+                role="DEV",
+            )
+        )
+
+    app = create_app(runtime=_runtime(), session_factory=session_factory)
+
+    response = app.test_client().get("/tasks")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["tasks"] == [
+        {
+            "id": fetch_task.id,
+            "root_id": fetch_task.id,
+            "parent_id": None,
+            "task_type": "fetch",
+            "status": "done",
+            "tracker_name": "mock",
+            "external_task_id": "TASK-30",
+            "external_parent_id": None,
+            "repo_url": "https://example.com/repo.git",
+            "repo_ref": "main",
+            "workspace_key": "ws-30",
+            "branch_name": None,
+            "pr_external_id": None,
+            "pr_url": None,
+            "role": None,
+            "context": {"scope": "root"},
+            "input_payload": {"source": "tracker"},
+            "result_payload": {"accepted": True},
+            "error": None,
+            "attempt": 1,
+            "created_at": fetch_task.created_at.isoformat(),
+            "updated_at": fetch_task.updated_at.isoformat(),
+        },
+        {
+            "id": execute_task.id,
+            "root_id": fetch_task.id,
+            "parent_id": fetch_task.id,
+            "task_type": "execute",
+            "status": "processing",
+            "tracker_name": None,
+            "external_task_id": None,
+            "external_parent_id": "TASK-30",
+            "repo_url": None,
+            "repo_ref": None,
+            "workspace_key": None,
+            "branch_name": "feature/task-30",
+            "pr_external_id": "123",
+            "pr_url": "https://example.com/pr/123",
+            "role": "DEV",
+            "context": None,
+            "input_payload": None,
+            "result_payload": None,
+            "error": None,
+            "attempt": 0,
+            "created_at": execute_task.created_at.isoformat(),
+            "updated_at": execute_task.updated_at.isoformat(),
+        },
+    ]
+
+
+def test_get_task_returns_serialized_task_by_id(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                status=TaskStatus.FAILED,
+                error="Review required",
+                attempt=2,
+            )
+        )
+
+    app = create_app(runtime=_runtime(), session_factory=session_factory)
+
+    response = app.test_client().get(f"/tasks/{task.id}")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["task"] == {
+        "id": task.id,
+        "root_id": task.id,
+        "parent_id": None,
+        "task_type": "pr_feedback",
+        "status": "failed",
+        "tracker_name": None,
+        "external_task_id": None,
+        "external_parent_id": None,
+        "repo_url": None,
+        "repo_ref": None,
+        "workspace_key": None,
+        "branch_name": None,
+        "pr_external_id": None,
+        "pr_url": None,
+        "role": None,
+        "context": None,
+        "input_payload": None,
+        "result_payload": None,
+        "error": "Review required",
+        "attempt": 2,
+        "created_at": task.created_at.isoformat(),
+        "updated_at": task.updated_at.isoformat(),
+    }
+
+
+def test_get_task_returns_json_404_for_missing_task(session_factory) -> None:
+    app = create_app(runtime=_runtime(), session_factory=session_factory)
+
+    response = app.test_client().get("/tasks/999")
+
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Task 999 not found"}
+
+
 def _runtime() -> RuntimeContainer:
     return RuntimeContainer(
         settings=replace(get_settings(), app_name="heavy-lifting-backend"),
