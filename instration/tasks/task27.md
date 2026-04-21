@@ -4,7 +4,7 @@
 
 - ID: `task27`
 - Title: Implement `Worker 2` execution and PR update flow
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task20`, `task22`, `task23`, `task24`, `task25`, `task26`
@@ -34,6 +34,7 @@ Build the `Worker 2` flow for both `execute` and `pr_feedback` tasks. It must sy
 ## Review References
 
 - `instration/tasks/task27_review1.md`
+- `instration/tasks/task27_review2.md`
 
 ## Progress References
 
