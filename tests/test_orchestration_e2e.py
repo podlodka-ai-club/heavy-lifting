@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
+from backend.api.app import create_app
+from backend.composition import RuntimeContainer
 from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import Base, Task, TokenUsage
+from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.repositories.task_repository import TaskRepository
-from backend.schemas import TaskContext, TaskInputPayload, TrackerTaskCreatePayload
+from backend.schemas import (
+    TaskContext,
+    TaskInputPayload,
+    TaskLink,
+    TaskResultPayload,
+    TokenUsagePayload,
+    TrackerTaskCreatePayload,
+)
 from backend.services.agent_runner import LocalAgentRunner
+from backend.settings import get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.workers.deliver_worker import DeliverWorker
 from backend.workers.execute_worker import ExecuteWorker
@@ -20,6 +33,183 @@ def session_factory(tmp_path):
     engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
     Base.metadata.create_all(engine)
     return build_session_factory(engine)
+
+
+class RecordingAgentRunner:
+    def __init__(self) -> None:
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary="Fake CLI runner completed execution.",
+                details="Runner executed through the e2e HTTP intake path.",
+                tracker_comment="CLI runner delivered a deterministic happy-path result.",
+                links=[
+                    TaskLink(
+                        label="artifact",
+                        url="https://example.test/artifacts/task48-report",
+                    )
+                ],
+                token_usage=[
+                    TokenUsagePayload(
+                        model="fake-cli-model",
+                        provider="test",
+                        input_tokens=64,
+                        output_tokens=21,
+                        cached_tokens=5,
+                    )
+                ],
+                metadata={
+                    "runner_adapter": "fake-cli",
+                    "mode": "test-double",
+                    "request_metadata": dict(request.metadata),
+                    "workspace_path": request.workspace_path,
+                },
+            )
+        )
+
+
+def test_http_intake_flow_runs_workers_end_to_end(session_factory) -> None:
+    runner = RecordingAgentRunner()
+    runtime = RuntimeContainer(
+        settings=replace(get_settings(), app_name="heavy-lifting-backend"),
+        tracker=MockTracker(),
+        scm=MockScm(),
+        agent_runner=runner,
+    )
+    app = create_app(runtime=runtime, session_factory=session_factory)
+
+    response = app.test_client().post(
+        "/tasks/intake",
+        json={
+            "context": {
+                "title": "HTTP intake e2e",
+                "description": "Create task through API and process full chain",
+                "acceptance_criteria": ["Deliver final result to tracker"],
+            },
+            "input_payload": {
+                "instructions": "Run the full HTTP intake happy path.",
+                "base_branch": "main",
+                "branch_name": "task48/http-intake-e2e",
+                "commit_message_hint": "task48 e2e fake cli execution",
+            },
+            "repo_url": "https://example.test/repo.git",
+            "repo_ref": "main",
+            "workspace_key": "repo-48",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == {"external_id": "task-1"}
+
+    intake_worker = TrackerIntakeWorker(
+        tracker=runtime.tracker,
+        scm=runtime.scm,
+        tracker_name=runtime.settings.tracker_adapter,
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=runtime.scm,
+        agent_runner=runtime.agent_runner,
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=runtime.tracker, session_factory=session_factory)
+
+    intake_report = intake_worker.poll_once()
+    execute_report = execute_worker.poll_once()
+    deliver_report = deliver_worker.poll_once()
+
+    assert intake_report == intake_report.__class__(
+        fetched_count=1,
+        created_fetch_tasks=1,
+        created_execute_tasks=1,
+        fetched_feedback_items=0,
+        created_pr_feedback_tasks=0,
+        skipped_feedback_items=0,
+        unmapped_feedback_items=0,
+    )
+    assert execute_report.processed_execute_tasks == 1
+    assert execute_report.failed_execute_tasks == 0
+    assert deliver_report.processed_deliver_tasks == 1
+    assert deliver_report.failed_deliver_tasks == 0
+    assert len(runner.requests) == 1
+    assert runner.requests[0].workspace_path == "/tmp/mock-scm/repo-48"
+    assert runner.requests[0].task_context.flow_type == TaskType.EXECUTE
+    assert runner.requests[0].task_context.instructions == "Run the full HTTP intake happy path."
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id="task-1",
+        )
+
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        deliver_task = repository.find_child_task(
+            parent_id=execute_task.id, task_type=TaskType.DELIVER
+        )
+        assert deliver_task is not None
+
+        assert fetch_task.status == TaskStatus.DONE
+        assert execute_task.status == TaskStatus.DONE
+        assert deliver_task.status == TaskStatus.DONE
+        assert execute_task.branch_name == "task48/http-intake-e2e"
+        assert execute_task.pr_external_id == "1"
+        assert execute_task.pr_url == "https://example.test/repo/pull/1"
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["summary"] == "Fake CLI runner completed execution."
+        assert execute_task.result_payload["commit_sha"] == "mock-commit-0001"
+        assert execute_task.result_payload["metadata"] == {
+            "runner_adapter": "fake-cli",
+            "mode": "test-double",
+            "request_metadata": {
+                "task_id": execute_task.id,
+                "task_type": "execute",
+                "workspace_key": "repo-48",
+                "workspace_path": "/tmp/mock-scm/repo-48",
+                "branch_name": "task48/http-intake-e2e",
+                "repo_url": "https://example.test/repo.git",
+                "repo_ref": "main",
+            },
+            "workspace_path": "/tmp/mock-scm/repo-48",
+            "workspace_key": "repo-48",
+            "repo_url": "https://example.test/repo.git",
+            "repo_ref": "main",
+            "flow_type": "execute",
+            "pr_action": "created",
+        }
+        assert deliver_task.result_payload is not None
+        assert deliver_task.result_payload["metadata"] == {
+            "tracker_external_id": "task-1",
+            "tracker_status": "done",
+            "comment_posted": True,
+            "links_attached": 3,
+        }
+
+        token_usage_entries = session.query(TokenUsage).order_by(TokenUsage.id.asc()).all()
+        assert len(token_usage_entries) == 1
+        assert token_usage_entries[0].task_id == execute_task.id
+        assert token_usage_entries[0].model == "fake-cli-model"
+        assert token_usage_entries[0].provider == "test"
+
+    assert runtime.tracker._tasks["task-1"].status == TaskStatus.DONE
+    assert len(runtime.tracker._comments["task-1"]) == 1
+    assert runtime.tracker._comments["task-1"][0].body == (
+        "CLI runner delivered a deterministic happy-path result."
+    )
+    assert [reference.url for reference in runtime.tracker._tasks["task-1"].context.references] == [
+        "https://example.test/artifacts/task48-report",
+        "https://example.test/repo/tree/task48/http-intake-e2e",
+        "https://example.test/repo/pull/1",
+    ]
 
 
 def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
