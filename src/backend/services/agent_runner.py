@@ -9,6 +9,18 @@ from backend.task_constants import TaskType
 from backend.task_context import EffectiveTaskContext
 
 
+@dataclass(frozen=True, slots=True)
+class CliAgentRunnerConfig:
+    command: str
+    subcommand: str
+    timeout_seconds: int
+    provider_hint: str | None = None
+    model_hint: str | None = None
+    profile: str | None = None
+    api_key_env_var: str | None = None
+    base_url_env_var: str | None = None
+
+
 @dataclass(slots=True)
 class LocalAgentRunner:
     token_cost_service: TokenCostService = field(default_factory=TokenCostService)
@@ -89,8 +101,11 @@ class LocalAgentRunner:
     ) -> dict[str, object]:
         total_cost = self.token_cost_service.total_estimated_cost([usage])
         return {
+            "runner_adapter": "local",
             "runner": self.name,
             "mode": "placeholder",
+            "provider": self.provider,
+            "model": self.model,
             "flow_type": request.task_context.flow_type.value,
             "workspace_path": request.workspace_path,
             "has_feedback": request.task_context.current_feedback is not None,
@@ -99,4 +114,14 @@ class LocalAgentRunner:
         }
 
 
-__all__ = ["LocalAgentRunner"]
+@dataclass(slots=True)
+class CliAgentRunner:
+    config: CliAgentRunnerConfig
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        raise NotImplementedError(
+            "CliAgentRunner is not implemented yet; task46 will add the CLI execution flow"
+        )
+
+
+__all__ = ["CliAgentRunner", "CliAgentRunnerConfig", "LocalAgentRunner"]

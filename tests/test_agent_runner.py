@@ -4,7 +4,7 @@ from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import Base
 from backend.protocols.agent_runner import AgentRunRequest
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
-from backend.services.agent_runner import LocalAgentRunner
+from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.services.context_builder import ContextBuilder
 from backend.task_constants import TaskType
 
@@ -56,8 +56,11 @@ def test_local_agent_runner_returns_normalized_execute_result(tmp_path) -> None:
     assert len(result.token_usage) == 1
     assert result.token_usage[0].estimated is True
     assert result.summary_metadata == {
+        "runner_adapter": "local",
         "runner": "local-placeholder-runner",
         "mode": "placeholder",
+        "provider": "openai",
+        "model": "gpt-5.4",
         "flow_type": "execute",
         "workspace_path": "/workspace/repos/repo-24",
         "has_feedback": False,
@@ -130,4 +133,29 @@ def test_local_agent_runner_includes_feedback_metadata_for_pr_feedback(tmp_path)
     assert result.payload.pr_url == "https://example.test/pr/24"
     assert result.summary_metadata["has_feedback"] is True
     assert result.summary_metadata["feedback_history_count"] == 1
+    assert result.summary_metadata["runner_adapter"] == "local"
     assert result.token_usage[0].cached_tokens > 0
+
+
+def test_cli_agent_runner_exposes_stable_config_contract() -> None:
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="codex",
+            subcommand="exec",
+            timeout_seconds=900,
+            provider_hint="openai",
+            model_hint="gpt-5.4",
+            profile="backend",
+            api_key_env_var="OPENAI_API_KEY",
+            base_url_env_var="OPENAI_BASE_URL",
+        )
+    )
+
+    assert runner.config.command == "codex"
+    assert runner.config.subcommand == "exec"
+    assert runner.config.timeout_seconds == 900
+    assert runner.config.provider_hint == "openai"
+    assert runner.config.model_hint == "gpt-5.4"
+    assert runner.config.profile == "backend"
+    assert runner.config.api_key_env_var == "OPENAI_API_KEY"
+    assert runner.config.base_url_env_var == "OPENAI_BASE_URL"

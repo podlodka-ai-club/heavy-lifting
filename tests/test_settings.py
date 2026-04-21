@@ -16,6 +16,14 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "TRACKER_ADAPTER",
         "SCM_ADAPTER",
         "AGENT_RUNNER_ADAPTER",
+        "CLI_AGENT_COMMAND",
+        "CLI_AGENT_SUBCOMMAND",
+        "CLI_AGENT_TIMEOUT_SECONDS",
+        "CLI_AGENT_PROVIDER",
+        "CLI_AGENT_MODEL",
+        "CLI_AGENT_PROFILE",
+        "CLI_AGENT_API_KEY_ENV_VAR",
+        "CLI_AGENT_BASE_URL_ENV_VAR",
         "TRACKER_POLL_INTERVAL",
         "PR_POLL_INTERVAL",
     ):
@@ -39,6 +47,14 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.tracker_adapter == "mock"
     assert settings.scm_adapter == "mock"
     assert settings.agent_runner_adapter == "local"
+    assert settings.cli_agent_command == "opencode"
+    assert settings.cli_agent_subcommand == "run"
+    assert settings.cli_agent_timeout_seconds == 1800
+    assert settings.cli_agent_provider_hint is None
+    assert settings.cli_agent_model_hint is None
+    assert settings.cli_agent_profile is None
+    assert settings.cli_agent_api_key_env_var == "OPENAI_API_KEY"
+    assert settings.cli_agent_base_url_env_var == "OPENAI_BASE_URL"
     assert settings.tracker_poll_interval == 30
     assert settings.pr_poll_interval == 60
 
@@ -55,7 +71,15 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("WORKSPACE_ROOT", "/tmp/workspaces")
     monkeypatch.setenv("TRACKER_ADAPTER", "custom-tracker")
     monkeypatch.setenv("SCM_ADAPTER", "custom-scm")
-    monkeypatch.setenv("AGENT_RUNNER_ADAPTER", "custom-runner")
+    monkeypatch.setenv("AGENT_RUNNER_ADAPTER", "cli")
+    monkeypatch.setenv("CLI_AGENT_COMMAND", "codex")
+    monkeypatch.setenv("CLI_AGENT_SUBCOMMAND", "exec")
+    monkeypatch.setenv("CLI_AGENT_TIMEOUT_SECONDS", "1200")
+    monkeypatch.setenv("CLI_AGENT_PROVIDER", "openai")
+    monkeypatch.setenv("CLI_AGENT_MODEL", "gpt-5.4")
+    monkeypatch.setenv("CLI_AGENT_PROFILE", "backend")
+    monkeypatch.setenv("CLI_AGENT_API_KEY_ENV_VAR", "CUSTOM_API_KEY")
+    monkeypatch.setenv("CLI_AGENT_BASE_URL_ENV_VAR", "CUSTOM_BASE_URL")
     monkeypatch.setenv("TRACKER_POLL_INTERVAL", "15")
     monkeypatch.setenv("PR_POLL_INTERVAL", "45")
 
@@ -74,7 +98,15 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.workspace_root == "/tmp/workspaces"
     assert settings.tracker_adapter == "custom-tracker"
     assert settings.scm_adapter == "custom-scm"
-    assert settings.agent_runner_adapter == "custom-runner"
+    assert settings.agent_runner_adapter == "cli"
+    assert settings.cli_agent_command == "codex"
+    assert settings.cli_agent_subcommand == "exec"
+    assert settings.cli_agent_timeout_seconds == 1200
+    assert settings.cli_agent_provider_hint == "openai"
+    assert settings.cli_agent_model_hint == "gpt-5.4"
+    assert settings.cli_agent_profile == "backend"
+    assert settings.cli_agent_api_key_env_var == "CUSTOM_API_KEY"
+    assert settings.cli_agent_base_url_env_var == "CUSTOM_BASE_URL"
     assert settings.tracker_poll_interval == 15
     assert settings.pr_poll_interval == 45
 

@@ -8,7 +8,7 @@ from backend.composition import (
     create_runtime_container,
 )
 from backend.protocols.agent_runner import AgentRunnerProtocol
-from backend.services.agent_runner import LocalAgentRunner
+from backend.services.agent_runner import CliAgentRunner, LocalAgentRunner
 from backend.settings import get_settings
 from backend.workers import deliver_worker, execute_worker, fetch_worker
 
@@ -93,6 +93,56 @@ def test_create_runtime_container_rejects_unknown_agent_runner(monkeypatch) -> N
         assert str(exc) == "Unsupported agent runner adapter: unknown-runner"
     else:
         raise AssertionError("Expected ValueError for unknown agent runner adapter")
+
+
+def test_create_runtime_container_builds_cli_agent_runner_from_settings(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(
+        get_settings(),
+        agent_runner_adapter="cli",
+        cli_agent_command="codex",
+        cli_agent_subcommand="exec",
+        cli_agent_timeout_seconds=900,
+        cli_agent_provider_hint="openai",
+        cli_agent_model_hint="gpt-5.4",
+        cli_agent_profile="backend",
+        cli_agent_api_key_env_var="CUSTOM_API_KEY",
+        cli_agent_base_url_env_var="CUSTOM_BASE_URL",
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.agent_runner, CliAgentRunner)
+    assert runtime.agent_runner.config.command == "codex"
+    assert runtime.agent_runner.config.subcommand == "exec"
+    assert runtime.agent_runner.config.timeout_seconds == 900
+    assert runtime.agent_runner.config.provider_hint == "openai"
+    assert runtime.agent_runner.config.model_hint == "gpt-5.4"
+    assert runtime.agent_runner.config.profile == "backend"
+    assert runtime.agent_runner.config.api_key_env_var == "CUSTOM_API_KEY"
+    assert runtime.agent_runner.config.base_url_env_var == "CUSTOM_BASE_URL"
+
+
+def test_create_runtime_container_rejects_invalid_cli_runner_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(
+        get_settings(),
+        agent_runner_adapter="cli",
+        cli_agent_timeout_seconds=0,
+    )
+
+    try:
+        create_runtime_container(settings=settings)
+    except ValueError as exc:
+        assert str(exc) == "CLI agent runner timeout must be greater than 0"
+    else:
+        raise AssertionError("Expected ValueError for invalid cli runner timeout")
 
 
 def test_create_app_stores_runtime_container_extension(monkeypatch) -> None:
@@ -183,5 +233,15 @@ def test_runtime_container_exposes_agent_runner_protocol(monkeypatch) -> None:
     get_settings.cache_clear()
 
     runtime = create_runtime_container()
+
+    assert isinstance(runtime.agent_runner, AgentRunnerProtocol)
+
+
+def test_cli_runtime_container_exposes_agent_runner_protocol(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    runtime = create_runtime_container(settings=replace(get_settings(), agent_runner_adapter="cli"))
 
     assert isinstance(runtime.agent_runner, AgentRunnerProtocol)

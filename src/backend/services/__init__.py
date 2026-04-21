@@ -1,7 +1,7 @@
 """Application services package."""
 
 from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
-from backend.services.agent_runner import LocalAgentRunner
+from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.services.context_builder import (
     ContextBuilder,
     parse_task_context,
@@ -20,6 +20,8 @@ __all__ = [
     "AgentRunRequest",
     "AgentRunResult",
     "ContextBuilder",
+    "CliAgentRunner",
+    "CliAgentRunnerConfig",
     "DEFAULT_TOKEN_PRICES",
     "EffectiveTaskContext",
     "FeedbackHistoryEntry",

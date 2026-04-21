@@ -10,7 +10,7 @@ from backend.adapters.mock_tracker import MockTracker
 from backend.protocols.agent_runner import AgentRunnerProtocol
 from backend.protocols.scm import ScmProtocol
 from backend.protocols.tracker import TrackerProtocol
-from backend.services.agent_runner import LocalAgentRunner
+from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.settings import Settings, get_settings
 
 TrackerFactory = Callable[[Settings], TrackerProtocol]
@@ -45,10 +45,35 @@ def _build_local_agent_runner(_: Settings) -> AgentRunnerProtocol:
     return LocalAgentRunner()
 
 
+def _build_cli_agent_runner(settings: Settings) -> AgentRunnerProtocol:
+    if not settings.cli_agent_command:
+        raise ValueError("CLI agent runner command must not be empty")
+    if not settings.cli_agent_subcommand:
+        raise ValueError("CLI agent runner subcommand must not be empty")
+    if settings.cli_agent_timeout_seconds <= 0:
+        raise ValueError("CLI agent runner timeout must be greater than 0")
+
+    return CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command=settings.cli_agent_command,
+            subcommand=settings.cli_agent_subcommand,
+            timeout_seconds=settings.cli_agent_timeout_seconds,
+            provider_hint=settings.cli_agent_provider_hint,
+            model_hint=settings.cli_agent_model_hint,
+            profile=settings.cli_agent_profile,
+            api_key_env_var=settings.cli_agent_api_key_env_var,
+            base_url_env_var=settings.cli_agent_base_url_env_var,
+        )
+    )
+
+
 DEFAULT_ADAPTER_REGISTRY = AdapterRegistry(
     tracker_factories={"mock": _build_mock_tracker},
     scm_factories={"mock": _build_mock_scm},
-    agent_runner_factories={"local": _build_local_agent_runner},
+    agent_runner_factories={
+        "local": _build_local_agent_runner,
+        "cli": _build_cli_agent_runner,
+    },
 )
 
 
