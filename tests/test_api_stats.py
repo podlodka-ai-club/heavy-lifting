@@ -16,6 +16,7 @@ from backend.repositories.task_repository import (
     TaskRepository,
     TokenUsageCreateParams,
 )
+from backend.schemas import TrackerFetchTasksQuery
 from backend.services.agent_runner import LocalAgentRunner
 from backend.settings import get_settings
 from backend.task_constants import TaskStatus, TaskType
@@ -393,6 +394,62 @@ def test_get_task_returns_json_404_for_missing_task(session_factory) -> None:
 
     assert response.status_code == 404
     assert response.get_json() == {"error": "Task 999 not found"}
+
+
+def test_post_tasks_intake_creates_task_via_runtime_tracker(session_factory) -> None:
+    runtime = _runtime()
+    app = create_app(runtime=runtime, session_factory=session_factory)
+
+    response = app.test_client().post(
+        "/tasks/intake",
+        json={
+            "context": {
+                "title": "Manual intake task",
+                "description": "Run execution from API",
+            },
+            "input_payload": {
+                "instructions": "Implement API intake endpoint.",
+                "base_branch": "main",
+            },
+            "repo_url": "https://example.test/repo.git",
+            "repo_ref": "main",
+            "workspace_key": "repo-44",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == {"external_id": "task-1"}
+
+    tasks = runtime.tracker.fetch_tasks(TrackerFetchTasksQuery(limit=10))
+
+    assert len(tasks) == 1
+    assert tasks[0].external_id == "task-1"
+    assert tasks[0].context.title == "Manual intake task"
+    assert tasks[0].input_payload is not None
+    assert tasks[0].input_payload.instructions == "Implement API intake endpoint."
+    assert tasks[0].repo_url == "https://example.test/repo.git"
+    assert tasks[0].workspace_key == "repo-44"
+
+
+def test_post_tasks_intake_returns_json_400_for_invalid_payload(session_factory) -> None:
+    runtime = _runtime()
+    app = create_app(runtime=runtime, session_factory=session_factory)
+
+    response = app.test_client().post(
+        "/tasks/intake",
+        json={
+            "context": {
+                "description": "Missing required title",
+            }
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["error"] == "Invalid task intake payload"
+    assert payload["details"]
+    assert runtime.tracker.fetch_tasks(TrackerFetchTasksQuery(limit=10)) == []
 
 
 def _runtime() -> RuntimeContainer:
