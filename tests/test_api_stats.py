@@ -195,6 +195,15 @@ def test_get_stats_returns_task_and_token_usage_aggregates(session_factory) -> N
     }
 
 
+def test_get_health_returns_ok_status(session_factory) -> None:
+    app = create_app(runtime=_runtime(), session_factory=session_factory)
+
+    response = app.test_client().get("/health")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ok"}
+
+
 def test_get_stats_returns_zeroed_breakdowns_for_empty_database(session_factory) -> None:
     app = create_app(runtime=_runtime(), session_factory=session_factory)
 

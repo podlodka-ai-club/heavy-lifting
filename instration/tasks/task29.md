@@ -4,7 +4,7 @@
 
 - ID: `task29`
 - Title: Implement Flask app factory and health endpoint
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task21`, `task22`
