@@ -5,7 +5,6 @@ from backend.adapters.mock_tracker import MockTracker
 from backend.api.app import create_app
 from backend.composition import (
     AdapterRegistry,
-    RuntimeContainer,
     create_runtime_container,
 )
 from backend.protocols.agent_runner import AgentRunnerProtocol
@@ -109,16 +108,26 @@ def test_create_app_stores_runtime_container_extension(monkeypatch) -> None:
 
 
 def test_deliver_worker_uses_shared_runtime_initialization(monkeypatch) -> None:
-    expected_runtime = RuntimeContainer(
-        settings=replace(get_settings()),
-        tracker=MockTracker(),
-        scm=MockScm(),
-        agent_runner=LocalAgentRunner(),
-    )
+    class StubWorker:
+        def __init__(self) -> None:
+            self.poll_count = 0
+            self.max_iterations = None
 
-    monkeypatch.setattr(deliver_worker, "create_runtime_container", lambda: expected_runtime)
+        def poll_once(self) -> None:
+            self.poll_count += 1
 
-    assert deliver_worker.run() is expected_runtime
+        def run_forever(self, *, max_iterations=None, sleep_fn=None) -> None:
+            self.max_iterations = max_iterations
+
+    expected_worker = StubWorker()
+
+    monkeypatch.setattr(deliver_worker, "build_deliver_worker", lambda: expected_worker)
+
+    assert deliver_worker.run(once=True) is expected_worker
+    assert expected_worker.poll_count == 1
+
+    assert deliver_worker.run(max_iterations=4) is expected_worker
+    assert expected_worker.max_iterations == 4
 
 
 def test_execute_worker_uses_execute_worker_entrypoint(monkeypatch) -> None:
