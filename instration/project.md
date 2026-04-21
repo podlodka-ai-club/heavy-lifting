@@ -6,6 +6,7 @@ Build an MVP orchestrator on Python and Flask with PostgreSQL, three workers, an
 
 The system should:
 
+- accept manual task intake through the API;
 - fetch tasks from a tracker;
 - prepare and execute coding tasks through an agent workflow;
 - sync repositories from git when code work is required;
@@ -148,9 +149,11 @@ The `token_usage` table must contain at least:
 - `GET /tasks`
 - `GET /tasks/<id>`
 - `GET /stats`
+- `POST /tasks/intake`
 
 ## Success Criteria
 
+- a manually submitted task can pass through `POST /tasks/intake -> worker1 -> worker2 -> worker3`;
 - a tracker task passes through `fetch -> execute -> deliver`;
 - code tasks can produce a PR;
 - PR comments become child `pr_feedback` tasks;
