@@ -6,11 +6,11 @@ from backend.schemas import (
     ScmCommitChangesPayload,
     ScmCommitReference,
     ScmPullRequestCreatePayload,
-    ScmPullRequestFeedback,
     ScmPullRequestReference,
     ScmPushBranchPayload,
     ScmPushReference,
     ScmReadPrFeedbackQuery,
+    ScmReadPrFeedbackResult,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
 )
@@ -30,4 +30,4 @@ class ScmProtocol(Protocol):
         self, payload: ScmPullRequestCreatePayload
     ) -> ScmPullRequestReference: ...
 
-    def read_pr_feedback(self, query: ScmReadPrFeedbackQuery) -> list[ScmPullRequestFeedback]: ...
+    def read_pr_feedback(self, query: ScmReadPrFeedbackQuery) -> ScmReadPrFeedbackResult: ...

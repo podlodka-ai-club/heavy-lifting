@@ -131,6 +131,66 @@ def test_find_execute_task_by_pr_external_id_ignores_other_task_types(session_fa
         assert found_task.id == execute_task.id
 
 
+def test_list_execute_tasks_with_prs_returns_only_execute_tasks_with_pr_ids(
+    session_factory,
+) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+
+        expected_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                pr_external_id="pr-123",
+            )
+        )
+        repository.create_task(TaskCreateParams(task_type=TaskType.EXECUTE))
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                pr_external_id="pr-456",
+            )
+        )
+
+        tasks = repository.list_execute_tasks_with_prs()
+
+        assert [task.id for task in tasks] == [expected_task.id]
+
+
+def test_find_child_task_helpers_support_dedupe_and_cursor_lookups(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        parent_task = repository.create_task(TaskCreateParams(task_type=TaskType.EXECUTE))
+        first_feedback = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                parent_id=parent_task.id,
+                external_task_id="comment-1",
+            )
+        )
+        latest_feedback = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                parent_id=parent_task.id,
+                external_task_id="comment-2",
+            )
+        )
+
+        matched_task = repository.find_child_task_by_external_id(
+            parent_id=parent_task.id,
+            task_type=TaskType.PR_FEEDBACK,
+            external_task_id="comment-1",
+        )
+        last_task = repository.find_latest_child_task(
+            parent_id=parent_task.id,
+            task_type=TaskType.PR_FEEDBACK,
+        )
+
+        assert matched_task is not None
+        assert matched_task.id == first_feedback.id
+        assert last_task is not None
+        assert last_task.id == latest_feedback.id
+
+
 def test_record_token_usage_persists_entry_for_task(session_factory) -> None:
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)

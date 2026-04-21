@@ -140,6 +140,17 @@ class TaskRepository:
         )
         return self._session.execute(statement).scalars().first()
 
+    def list_execute_tasks_with_prs(self) -> list[Task]:
+        statement = (
+            select(Task)
+            .where(
+                Task.task_type == TaskType.EXECUTE,
+                Task.pr_external_id.is_not(None),
+            )
+            .order_by(Task.id.asc())
+        )
+        return list(self._session.execute(statement).scalars())
+
     def find_fetch_task_by_tracker_task(
         self,
         *,
@@ -165,6 +176,35 @@ class TaskRepository:
                 Task.task_type == task_type,
             )
             .order_by(Task.id.asc())
+        )
+        return self._session.execute(statement).scalars().first()
+
+    def find_child_task_by_external_id(
+        self,
+        *,
+        parent_id: int,
+        task_type: TaskType,
+        external_task_id: str,
+    ) -> Task | None:
+        statement = (
+            select(Task)
+            .where(
+                Task.parent_id == parent_id,
+                Task.task_type == task_type,
+                Task.external_task_id == external_task_id,
+            )
+            .order_by(Task.id.asc())
+        )
+        return self._session.execute(statement).scalars().first()
+
+    def find_latest_child_task(self, *, parent_id: int, task_type: TaskType) -> Task | None:
+        statement = (
+            select(Task)
+            .where(
+                Task.parent_id == parent_id,
+                Task.task_type == task_type,
+            )
+            .order_by(Task.id.desc())
         )
         return self._session.execute(statement).scalars().first()
 

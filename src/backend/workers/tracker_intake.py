@@ -8,9 +8,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
+from backend.protocols.scm import ScmProtocol
 from backend.protocols.tracker import TrackerProtocol
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
-from backend.schemas import SchemaModel, TrackerFetchTasksQuery, TrackerTask
+from backend.schemas import (
+    SchemaModel,
+    ScmPullRequestFeedback,
+    ScmReadPrFeedbackQuery,
+    TaskInputPayload,
+    TrackerFetchTasksQuery,
+    TrackerTask,
+)
 from backend.task_constants import TaskStatus, TaskType
 
 
@@ -20,6 +28,10 @@ class TrackerIntakeReport:
     created_fetch_tasks: int = 0
     created_execute_tasks: int = 0
     skipped_tasks: int = 0
+    fetched_feedback_items: int = 0
+    created_pr_feedback_tasks: int = 0
+    skipped_feedback_items: int = 0
+    unmapped_feedback_items: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,16 +40,42 @@ class IntakeOutcome:
     created_execute_task: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class PrFeedbackIntakeOutcome:
+    created_pr_feedback_task: bool = False
+    skipped_feedback_item: bool = False
+    unmapped_feedback_item: bool = False
+
+
 @dataclass(slots=True)
 class TrackerIntakeWorker:
     tracker: TrackerProtocol
+    scm: ScmProtocol
     tracker_name: str
     session_factory: sessionmaker[Session]
     poll_interval: int = 30
+    pr_poll_interval: int = 60
     fetch_limit: int = 100
+    feedback_limit: int = 100
     fetch_statuses: Sequence[TaskStatus] = (TaskStatus.NEW,)
 
+    _PR_FEEDBACK_CURSOR_METADATA_KEY = "scm_pr_feedback_cursor"
+
     def poll_once(self) -> TrackerIntakeReport:
+        report = self.poll_tracker_once()
+        feedback_report = self.poll_pr_feedback_once()
+        return TrackerIntakeReport(
+            fetched_count=report.fetched_count,
+            created_fetch_tasks=report.created_fetch_tasks,
+            created_execute_tasks=report.created_execute_tasks,
+            skipped_tasks=report.skipped_tasks,
+            fetched_feedback_items=feedback_report.fetched_feedback_items,
+            created_pr_feedback_tasks=feedback_report.created_pr_feedback_tasks,
+            skipped_feedback_items=feedback_report.skipped_feedback_items,
+            unmapped_feedback_items=feedback_report.unmapped_feedback_items,
+        )
+
+    def poll_tracker_once(self) -> TrackerIntakeReport:
         tracker_tasks = self.tracker.fetch_tasks(
             TrackerFetchTasksQuery(statuses=list(self.fetch_statuses), limit=self.fetch_limit)
         )
@@ -62,6 +100,22 @@ class TrackerIntakeWorker:
 
         return report
 
+    def poll_pr_feedback_once(self) -> TrackerIntakeReport:
+        report = TrackerIntakeReport()
+
+        with session_scope(session_factory=self.session_factory) as session:
+            repository = TaskRepository(session)
+            execute_tasks = repository.list_execute_tasks_with_prs()
+
+            for execute_task in execute_tasks:
+                report = self._poll_execute_pr_feedback(
+                    repository=repository,
+                    execute_task=execute_task,
+                    report=report,
+                )
+
+        return report
+
     def run_forever(
         self,
         *,
@@ -69,12 +123,29 @@ class TrackerIntakeWorker:
         sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
         iteration = 0
+        tracker_elapsed = self.poll_interval
+        feedback_elapsed = self.pr_poll_interval
+
         while max_iterations is None or iteration < max_iterations:
-            self.poll_once()
+            if tracker_elapsed >= self.poll_interval:
+                self.poll_tracker_once()
+                tracker_elapsed = 0
+
+            if feedback_elapsed >= self.pr_poll_interval:
+                self.poll_pr_feedback_once()
+                feedback_elapsed = 0
+
             iteration += 1
             if max_iterations is not None and iteration >= max_iterations:
                 break
-            sleep_fn(self.poll_interval)
+
+            sleep_seconds = min(
+                self.poll_interval - tracker_elapsed,
+                self.pr_poll_interval - feedback_elapsed,
+            )
+            sleep_fn(sleep_seconds)
+            tracker_elapsed += sleep_seconds
+            feedback_elapsed += sleep_seconds
 
     def _ingest_tracker_task(
         self,
@@ -132,6 +203,113 @@ class TrackerIntakeWorker:
             created_execute_task=created_execute_task,
         )
 
+    def _ingest_pr_feedback(
+        self,
+        *,
+        repository: TaskRepository,
+        feedback_item: ScmPullRequestFeedback,
+    ) -> PrFeedbackIntakeOutcome:
+        execute_task = repository.find_execute_task_by_pr_external_id(feedback_item.pr_external_id)
+        if execute_task is None:
+            return PrFeedbackIntakeOutcome(unmapped_feedback_item=True)
+
+        existing_feedback_task = repository.find_child_task_by_external_id(
+            parent_id=execute_task.id,
+            task_type=TaskType.PR_FEEDBACK,
+            external_task_id=feedback_item.comment_id,
+        )
+        if existing_feedback_task is not None:
+            return PrFeedbackIntakeOutcome(skipped_feedback_item=True)
+
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                parent_id=execute_task.id,
+                status=TaskStatus.NEW,
+                tracker_name=execute_task.tracker_name,
+                external_task_id=feedback_item.comment_id,
+                external_parent_id=feedback_item.pr_external_id,
+                repo_url=execute_task.repo_url,
+                repo_ref=execute_task.repo_ref,
+                workspace_key=execute_task.workspace_key,
+                branch_name=execute_task.branch_name,
+                pr_external_id=feedback_item.pr_external_id,
+                pr_url=feedback_item.pr_url or execute_task.pr_url,
+                input_payload=TaskInputPayload(pr_feedback=feedback_item).model_dump(mode="python"),
+            )
+        )
+        return PrFeedbackIntakeOutcome(created_pr_feedback_task=True)
+
+    def _poll_execute_pr_feedback(
+        self,
+        *,
+        repository: TaskRepository,
+        execute_task,
+        report: TrackerIntakeReport,
+    ) -> TrackerIntakeReport:
+        since_cursor = self._get_pr_feedback_cursor(execute_task)
+        latest_cursor = since_cursor
+        page_cursor: str | None = None
+
+        while True:
+            feedback_page = self.scm.read_pr_feedback(
+                ScmReadPrFeedbackQuery(
+                    pr_external_id=execute_task.pr_external_id,
+                    since_cursor=since_cursor,
+                    page_cursor=page_cursor,
+                    limit=self.feedback_limit,
+                )
+            )
+            report = TrackerIntakeReport(
+                fetched_feedback_items=report.fetched_feedback_items + len(feedback_page.items),
+                created_pr_feedback_tasks=report.created_pr_feedback_tasks,
+                skipped_feedback_items=report.skipped_feedback_items,
+                unmapped_feedback_items=report.unmapped_feedback_items,
+            )
+
+            for feedback_item in feedback_page.items:
+                outcome = self._ingest_pr_feedback(
+                    repository=repository,
+                    feedback_item=feedback_item,
+                )
+                report = TrackerIntakeReport(
+                    fetched_feedback_items=report.fetched_feedback_items,
+                    created_pr_feedback_tasks=report.created_pr_feedback_tasks
+                    + int(outcome.created_pr_feedback_task),
+                    skipped_feedback_items=report.skipped_feedback_items
+                    + int(outcome.skipped_feedback_item),
+                    unmapped_feedback_items=report.unmapped_feedback_items
+                    + int(outcome.unmapped_feedback_item),
+                )
+
+            if feedback_page.latest_cursor is not None:
+                latest_cursor = feedback_page.latest_cursor
+
+            if feedback_page.next_page_cursor is None:
+                break
+            page_cursor = feedback_page.next_page_cursor
+
+        self._set_pr_feedback_cursor(execute_task, latest_cursor)
+        return report
+
+    def _get_pr_feedback_cursor(self, execute_task) -> str | None:
+        if execute_task.context is None:
+            return None
+        metadata = execute_task.context.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        cursor = metadata.get(self._PR_FEEDBACK_CURSOR_METADATA_KEY)
+        return cursor if isinstance(cursor, str) else None
+
+    def _set_pr_feedback_cursor(self, execute_task, cursor: str | None) -> None:
+        if cursor is None:
+            return
+        context = dict(execute_task.context or {})
+        metadata = dict(context.get("metadata") or {})
+        metadata[self._PR_FEEDBACK_CURSOR_METADATA_KEY] = cursor
+        context["metadata"] = metadata
+        execute_task.context = context
+
 
 def build_tracker_intake_worker(
     *,
@@ -141,9 +319,11 @@ def build_tracker_intake_worker(
     active_runtime = runtime or create_runtime_container()
     return TrackerIntakeWorker(
         tracker=active_runtime.tracker,
+        scm=active_runtime.scm,
         tracker_name=active_runtime.settings.tracker_adapter,
         session_factory=session_factory or get_session_factory(),
         poll_interval=active_runtime.settings.tracker_poll_interval,
+        pr_poll_interval=active_runtime.settings.pr_poll_interval,
     )
 
 
@@ -155,6 +335,7 @@ def _dump_model_or_none(value: SchemaModel | None) -> dict[str, object] | None:
 
 __all__ = [
     "IntakeOutcome",
+    "PrFeedbackIntakeOutcome",
     "TrackerIntakeReport",
     "TrackerIntakeWorker",
     "build_tracker_intake_worker",

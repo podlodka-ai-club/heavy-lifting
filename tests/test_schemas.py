@@ -280,6 +280,7 @@ def test_scm_payloads_apply_mvp_defaults() -> None:
         "pr_external_id": None,
         "branch_name": None,
         "since_cursor": None,
+        "page_cursor": None,
         "limit": 100,
     }
 

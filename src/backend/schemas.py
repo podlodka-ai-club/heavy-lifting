@@ -246,12 +246,19 @@ class ScmPullRequestFeedback(PrFeedbackPayload):
     pr_metadata: ScmPullRequestMetadata
 
 
+class ScmReadPrFeedbackResult(SchemaModel):
+    items: list[ScmPullRequestFeedback] = Field(default_factory=list)
+    next_page_cursor: str | None = None
+    latest_cursor: str | None = None
+
+
 class ScmReadPrFeedbackQuery(SchemaModel):
     workspace_key: str | None = None
     repo_url: str | None = None
     pr_external_id: str | None = None
     branch_name: str | None = None
     since_cursor: str | None = None
+    page_cursor: str | None = None
     limit: int = Field(default=100, ge=1, le=1000)
 
 
@@ -267,6 +274,7 @@ __all__ = [
     "ScmPullRequestFeedback",
     "ScmPullRequestMetadata",
     "ScmPullRequestReference",
+    "ScmReadPrFeedbackResult",
     "ScmPushBranchPayload",
     "ScmPushReference",
     "ScmReadPrFeedbackQuery",

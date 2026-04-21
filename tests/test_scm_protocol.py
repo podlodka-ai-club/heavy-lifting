@@ -84,7 +84,9 @@ def test_mock_scm_supports_mvp_scm_operations() -> None:
     assert pull_request.external_id == "1"
     assert pull_request.pr_metadata.execute_task_external_id == "TASK-18"
     assert feedback.comment_id == "comment-1"
-    assert feedback_items == [feedback]
+    assert feedback_items.items == [feedback]
+    assert feedback_items.next_page_cursor is None
+    assert feedback_items.latest_cursor == feedback.comment_id
 
 
 def test_mock_scm_isolates_state_from_mutation_after_writes_and_reads() -> None:
@@ -129,7 +131,7 @@ def test_mock_scm_isolates_state_from_mutation_after_writes_and_reads() -> None:
     feedback.metadata["severity"] = "low"
     feedback.pr_metadata.metadata["root_task"] = "TASK-2"
 
-    stored_feedback = scm.read_pr_feedback(ScmReadPrFeedbackQuery())[0]
+    stored_feedback = scm.read_pr_feedback(ScmReadPrFeedbackQuery()).items[0]
     stored_workspace = scm.ensure_workspace(
         ScmWorkspaceEnsurePayload(
             repo_url="https://example.test/repo.git",
@@ -192,4 +194,6 @@ def test_mock_scm_filters_feedback_by_cursor_and_branch() -> None:
         )
     )
 
-    assert [item.body for item in filtered_feedback] == ["Second comment"]
+    assert [item.body for item in filtered_feedback.items] == ["Second comment"]
+    assert filtered_feedback.next_page_cursor is None
+    assert filtered_feedback.latest_cursor == "comment-2"

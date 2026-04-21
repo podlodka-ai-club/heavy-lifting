@@ -4,7 +4,7 @@
 
 - ID: `task26`
 - Title: Implement `Worker 1` PR feedback intake flow
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task21`, `task22`, `task23`, `task25`
@@ -33,10 +33,13 @@ Extend `Worker 1` so it polls SCM feedback, finds the corresponding `execute` ta
 ## Review References
 
 - `instration/tasks/task26_review1.md`
+- `instration/tasks/task26_review2.md`
+- `instration/tasks/task26_review3.md`
 
 ## Progress References
 
 - `instration/tasks/task26_progress.md`
+- `instration/tasks/task26_summary.md`
 
 ## Result
 

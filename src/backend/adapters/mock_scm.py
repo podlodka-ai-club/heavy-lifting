@@ -11,6 +11,7 @@ from backend.schemas import (
     ScmPushBranchPayload,
     ScmPushReference,
     ScmReadPrFeedbackQuery,
+    ScmReadPrFeedbackResult,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
 )
@@ -107,14 +108,24 @@ class MockScm:
         self._pull_requests[external_id] = pull_request
         return pull_request.model_copy(deep=True)
 
-    def read_pr_feedback(self, query: ScmReadPrFeedbackQuery) -> list[ScmPullRequestFeedback]:
+    def read_pr_feedback(self, query: ScmReadPrFeedbackQuery) -> ScmReadPrFeedbackResult:
         feedback_items = [
             feedback
             for feedback in self._pr_feedback
             if self._matches_feedback_query(feedback, query)
         ]
         feedback_items.sort(key=lambda item: int(item.comment_id.split("-")[-1]))
-        return [item.model_copy(deep=True) for item in feedback_items[: query.limit]]
+        page_start = int(query.page_cursor) if query.page_cursor is not None else 0
+        page_items = feedback_items[page_start : page_start + query.limit]
+        next_page_cursor = None
+        if page_start + len(page_items) < len(feedback_items):
+            next_page_cursor = str(page_start + len(page_items))
+        latest_cursor = feedback_items[-1].comment_id if feedback_items else query.since_cursor
+        return ScmReadPrFeedbackResult(
+            items=[item.model_copy(deep=True) for item in page_items],
+            next_page_cursor=next_page_cursor,
+            latest_cursor=latest_cursor,
+        )
 
     def add_pr_feedback(
         self,
