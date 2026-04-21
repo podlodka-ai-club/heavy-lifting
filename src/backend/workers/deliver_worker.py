@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
+from backend.logging_setup import configure_logging
 from backend.protocols.tracker import TrackerProtocol
 from backend.repositories.task_repository import TaskRepository
 from backend.schemas import (
@@ -18,6 +19,7 @@ from backend.schemas import (
     TrackerStatusUpdatePayload,
 )
 from backend.services.context_builder import ContextBuilder
+from backend.settings import get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
 
@@ -172,6 +174,9 @@ def run(
     once: bool = False,
     max_iterations: int | None = None,
 ) -> DeliverWorker:
+    settings = get_settings()
+    logger = configure_logging(app_name=settings.app_name, component="worker3")
+    logger.info("Starting deliver worker once=%s max_iterations=%s", once, max_iterations)
     worker = build_deliver_worker()
     if once:
         worker.poll_once()

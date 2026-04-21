@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
+from backend.logging_setup import configure_logging
 from backend.models import Task
 from backend.protocols.agent_runner import AgentRunnerProtocol, AgentRunRequest
 from backend.protocols.scm import ScmProtocol
@@ -30,6 +31,7 @@ from backend.schemas import (
     TokenUsagePayload,
 )
 from backend.services.context_builder import ContextBuilder, parse_task_result_payload
+from backend.settings import get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
 
@@ -536,6 +538,9 @@ def run(
     once: bool = False,
     max_iterations: int | None = None,
 ) -> ExecuteWorker:
+    settings = get_settings()
+    logger = configure_logging(app_name=settings.app_name, component="worker2")
+    logger.info("Starting execute worker once=%s max_iterations=%s", once, max_iterations)
     worker = build_execute_worker()
     if once:
         worker.poll_once()
