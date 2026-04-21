@@ -3,6 +3,7 @@ from __future__ import annotations
 from backend.adapters.mock_scm import MockScm
 from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import Base, Task, TokenUsage
+from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
 from backend.services.agent_runner import LocalAgentRunner
 from backend.task_constants import TaskStatus, TaskType
@@ -22,11 +23,32 @@ class DuplicateBranchGuardMockScm(MockScm):
         return super().create_branch(payload)
 
 
+class RecordingAgentRunner(LocalAgentRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        return super().run(request)
+
+
+class FailingAgentRunner:
+    def __init__(self, message: str) -> None:
+        self.message = message
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        raise RuntimeError(self.message)
+
+
 def test_execute_worker_processes_execute_task_and_creates_deliver(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
+    agent_runner = RecordingAgentRunner()
     worker = ExecuteWorker(
         scm=MockScm(),
-        agent_runner=LocalAgentRunner(),
+        agent_runner=agent_runner,
         session_factory=session_factory,
     )
 
@@ -66,6 +88,19 @@ def test_execute_worker_processes_execute_task_and_creates_deliver(tmp_path) -> 
     assert report.processed_execute_tasks == 1
     assert report.processed_pr_feedback_tasks == 0
     assert report.failed_execute_tasks == 0
+
+    assert len(agent_runner.requests) == 1
+    request = agent_runner.requests[0]
+    assert request.workspace_path == "/tmp/mock-scm/repo-27"
+    assert request.metadata == {
+        "task_id": 2,
+        "task_type": "execute",
+        "workspace_key": "repo-27",
+        "workspace_path": "/tmp/mock-scm/repo-27",
+        "branch_name": "task27/worker-2",
+        "repo_url": "https://example.test/repo.git",
+        "repo_ref": "main",
+    }
 
     with session_scope(session_factory=session_factory) as session:
         execute_task = session.get(Task, 2)
@@ -196,9 +231,10 @@ def test_execute_worker_reuses_existing_pr_for_feedback_without_new_deliver(tmp_
 
 def test_execute_worker_marks_task_failed_when_workspace_context_is_missing(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
+    agent_runner = RecordingAgentRunner()
     worker = ExecuteWorker(
         scm=MockScm(),
-        agent_runner=LocalAgentRunner(),
+        agent_runner=agent_runner,
         session_factory=session_factory,
     )
 
@@ -225,12 +261,70 @@ def test_execute_worker_marks_task_failed_when_workspace_context_is_missing(tmp_
     report = worker.poll_once()
 
     assert report.failed_execute_tasks == 1
+    assert agent_runner.requests == []
 
     with session_scope(session_factory=session_factory) as session:
         execute_task = session.get(Task, 2)
         assert execute_task is not None
         assert execute_task.status == TaskStatus.FAILED
         assert execute_task.error == "Worker 2 requires repo_url for SCM workspace sync"
+
+
+def test_execute_worker_marks_task_failed_when_runner_execution_step_fails(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    agent_runner = FailingAgentRunner("runner crashed")
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=agent_runner,
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-47",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-47",
+                context={"title": "Tracker task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-47",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-47",
+                context={"title": "Runner failure"},
+                input_payload={
+                    "instructions": "Break during the explicit execute stage.",
+                    "base_branch": "main",
+                    "branch_name": "task47/runner-failure",
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 0
+    assert report.failed_execute_tasks == 1
+    assert len(agent_runner.requests) == 1
+    assert agent_runner.requests[0].metadata["branch_name"] == "task47/runner-failure"
+
+    with session_scope(session_factory=session_factory) as session:
+        execute_task = session.get(Task, 2)
+        assert execute_task is not None
+        assert execute_task.status == TaskStatus.FAILED
+        assert execute_task.error == "runner crashed"
+
+        token_usage_entries = session.query(TokenUsage).all()
+        assert token_usage_entries == []
 
 
 def _build_session_factory(tmp_path):

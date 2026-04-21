@@ -11,7 +11,7 @@ from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
 from backend.logging_setup import configure_logging
 from backend.models import Task
-from backend.protocols.agent_runner import AgentRunnerProtocol, AgentRunRequest
+from backend.protocols.agent_runner import AgentRunnerProtocol, AgentRunRequest, AgentRunResult
 from backend.protocols.scm import ScmProtocol
 from backend.repositories.task_repository import (
     TaskCreateParams,
@@ -42,6 +42,14 @@ class ExecuteWorkerReport:
     processed_pr_feedback_tasks: int = 0
     failed_execute_tasks: int = 0
     failed_pr_feedback_tasks: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedExecution:
+    task_context: EffectiveTaskContext
+    workspace: ScmWorkspace
+    branch_name: str
+    runtime_metadata: dict[str, object]
 
 
 @dataclass(slots=True)
@@ -83,28 +91,15 @@ class ExecuteWorker:
 
             try:
                 task_chain = repository.load_task_chain(task.root_id or task.id)
-                task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
-                workspace = self._ensure_workspace(task_context=task_context)
-                branch_name = self._sync_branch(
-                    task=task, task_context=task_context, workspace=workspace
-                )
-                run_result = self.agent_runner.run(
-                    AgentRunRequest(
-                        task_context=task_context,
-                        workspace_path=workspace.local_path,
-                        metadata={
-                            "task_id": task.id,
-                            "task_type": task.task_type.value,
-                            "workspace_key": workspace.workspace_key,
-                            "branch_name": branch_name,
-                        },
-                    )
-                )
+                prepared_execution = self._prepare_execution(task=task, task_chain=task_chain)
+                run_result = self._execute_prepared_execution(prepared_execution)
                 commit_reference = self.scm.commit_changes(
                     ScmCommitChangesPayload(
-                        workspace_key=workspace.workspace_key,
-                        branch_name=branch_name,
-                        message=self._resolve_commit_message(task_context=task_context),
+                        workspace_key=prepared_execution.workspace.workspace_key,
+                        branch_name=prepared_execution.branch_name,
+                        message=self._resolve_commit_message(
+                            task_context=prepared_execution.task_context
+                        ),
                         metadata={
                             "task_id": task.id,
                             "flow_type": task.task_type.value,
@@ -113,8 +108,8 @@ class ExecuteWorker:
                 )
                 push_reference = self.scm.push_branch(
                     ScmPushBranchPayload(
-                        workspace_key=workspace.workspace_key,
-                        branch_name=branch_name,
+                        workspace_key=prepared_execution.workspace.workspace_key,
+                        branch_name=prepared_execution.branch_name,
                         metadata={
                             "task_id": task.id,
                             "flow_type": task.task_type.value,
@@ -126,9 +121,9 @@ class ExecuteWorker:
                     self._complete_execute_task(
                         repository=repository,
                         task=task,
-                        task_context=task_context,
-                        branch_name=branch_name,
-                        workspace=workspace,
+                        task_context=prepared_execution.task_context,
+                        branch_name=prepared_execution.branch_name,
+                        workspace=prepared_execution.workspace,
                         commit_sha=commit_reference.commit_sha,
                         branch_url=push_reference.branch_url,
                         agent_payload=run_result.payload,
@@ -138,9 +133,9 @@ class ExecuteWorker:
                 self._complete_pr_feedback_task(
                     repository=repository,
                     task=task,
-                    task_context=task_context,
-                    branch_name=branch_name,
-                    workspace=workspace,
+                    task_context=prepared_execution.task_context,
+                    branch_name=prepared_execution.branch_name,
+                    workspace=prepared_execution.workspace,
                     commit_sha=commit_reference.commit_sha,
                     branch_url=push_reference.branch_url,
                     agent_payload=run_result.payload,
@@ -152,6 +147,35 @@ class ExecuteWorker:
                 if task_type == TaskType.EXECUTE:
                     return ExecuteWorkerReport(failed_execute_tasks=1)
                 return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+
+    def _prepare_execution(self, *, task: Task, task_chain: list[Task]) -> PreparedExecution:
+        task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
+        workspace = self._ensure_workspace(task_context=task_context)
+        branch_name = self._sync_branch(task=task, task_context=task_context, workspace=workspace)
+        runtime_metadata: dict[str, object] = {
+            "task_id": task.id,
+            "task_type": task.task_type.value,
+            "workspace_key": workspace.workspace_key,
+            "workspace_path": workspace.local_path,
+            "branch_name": branch_name,
+            "repo_url": workspace.repo_url,
+            "repo_ref": workspace.repo_ref,
+        }
+        return PreparedExecution(
+            task_context=task_context,
+            workspace=workspace,
+            branch_name=branch_name,
+            runtime_metadata=runtime_metadata,
+        )
+
+    def _execute_prepared_execution(self, prepared_execution: PreparedExecution) -> AgentRunResult:
+        return self.agent_runner.run(
+            AgentRunRequest(
+                task_context=prepared_execution.task_context,
+                workspace_path=prepared_execution.workspace.local_path,
+                metadata=prepared_execution.runtime_metadata,
+            )
+        )
 
     def _ensure_workspace(self, *, task_context: EffectiveTaskContext) -> ScmWorkspace:
         repo_url = task_context.repo_url
