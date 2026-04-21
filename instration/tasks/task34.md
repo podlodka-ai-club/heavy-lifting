@@ -4,7 +4,7 @@
 
 - ID: `task34`
 - Title: Finalize developer documentation and local run guide
-- Status: `todo`
+- Status: `done`
 - Priority: `low`
 - Owner: `agent-programmer`
 - Depends on: `task32`, `task33`
@@ -32,6 +32,7 @@ Update the repository documentation with local setup, `uv` usage, Docker Compose
 ## Review References
 
 - `instration/tasks/task34_review1.md`
+- `instration/tasks/task34_review2.md`
 
 ## Progress References
 
