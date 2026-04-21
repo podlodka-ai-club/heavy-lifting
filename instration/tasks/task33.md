@@ -4,7 +4,7 @@
 
 - ID: `task33`
 - Title: Add end-to-end tests for orchestration flows
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task31`
@@ -12,11 +12,11 @@
 
 ## Goal
 
-Verify the end-to-end MVP behavior with mock integrations.
+Verify the end-to-end MVP behavior with mock integrations across the full orchestration chain.
 
 ## Detailed Description
 
-Add end-to-end tests for the primary `fetch -> execute -> deliver` flow and the `execute -> PR -> pr_feedback -> update` flow using the mock tracker and SCM implementations.
+Add end-to-end tests for the primary `fetch -> execute -> deliver` flow and the `execute -> PR -> pr_feedback -> update` flow using the mock tracker and SCM implementations. Reuse the real worker classes and shared runtime pieces where practical so the scenarios exercise the actual orchestration handoff between workers.
 
 ## Deliverables
 
