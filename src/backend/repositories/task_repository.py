@@ -140,6 +140,34 @@ class TaskRepository:
         )
         return self._session.execute(statement).scalars().first()
 
+    def find_fetch_task_by_tracker_task(
+        self,
+        *,
+        tracker_name: str,
+        external_task_id: str,
+    ) -> Task | None:
+        statement = (
+            select(Task)
+            .where(
+                Task.task_type == TaskType.FETCH,
+                Task.tracker_name == tracker_name,
+                Task.external_task_id == external_task_id,
+            )
+            .order_by(Task.id.asc())
+        )
+        return self._session.execute(statement).scalars().first()
+
+    def find_child_task(self, *, parent_id: int, task_type: TaskType) -> Task | None:
+        statement = (
+            select(Task)
+            .where(
+                Task.parent_id == parent_id,
+                Task.task_type == task_type,
+            )
+            .order_by(Task.id.asc())
+        )
+        return self._session.execute(statement).scalars().first()
+
     def record_token_usage(self, *, task_id: int, usage: TokenUsageCreateParams) -> TokenUsage:
         entry = TokenUsage(
             task_id=task_id,

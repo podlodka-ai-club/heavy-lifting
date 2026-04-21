@@ -108,7 +108,7 @@ def test_create_app_stores_runtime_container_extension(monkeypatch) -> None:
     assert app.extensions["runtime_container"] is runtime
 
 
-def test_workers_use_shared_runtime_initialization(monkeypatch) -> None:
+def test_execute_and_deliver_workers_use_shared_runtime_initialization(monkeypatch) -> None:
     expected_runtime = RuntimeContainer(
         settings=replace(get_settings()),
         tracker=MockTracker(),
@@ -116,13 +116,34 @@ def test_workers_use_shared_runtime_initialization(monkeypatch) -> None:
         agent_runner=LocalAgentRunner(),
     )
 
-    monkeypatch.setattr(fetch_worker, "create_runtime_container", lambda: expected_runtime)
     monkeypatch.setattr(execute_worker, "create_runtime_container", lambda: expected_runtime)
     monkeypatch.setattr(deliver_worker, "create_runtime_container", lambda: expected_runtime)
 
-    assert fetch_worker.run() is expected_runtime
     assert execute_worker.run() is expected_runtime
     assert deliver_worker.run() is expected_runtime
+
+
+def test_fetch_worker_uses_tracker_intake_worker_entrypoint(monkeypatch) -> None:
+    class StubWorker:
+        def __init__(self) -> None:
+            self.poll_count = 0
+            self.max_iterations = None
+
+        def poll_once(self) -> None:
+            self.poll_count += 1
+
+        def run_forever(self, *, max_iterations=None, sleep_fn=None) -> None:
+            self.max_iterations = max_iterations
+
+    expected_worker = StubWorker()
+
+    monkeypatch.setattr(fetch_worker, "build_tracker_intake_worker", lambda: expected_worker)
+
+    assert fetch_worker.run(once=True) is expected_worker
+    assert expected_worker.poll_count == 1
+
+    assert fetch_worker.run(max_iterations=3) is expected_worker
+    assert expected_worker.max_iterations == 3
 
 
 def test_runtime_container_exposes_agent_runner_protocol(monkeypatch) -> None:

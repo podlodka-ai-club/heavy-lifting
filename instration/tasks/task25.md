@@ -4,7 +4,7 @@
 
 - ID: `task25`
 - Title: Implement `Worker 1` tracker intake flow
-- Status: `todo`
+- Status: `done`
 - Priority: `high`
 - Owner: `agent-programmer`
 - Depends on: `task21`, `task22`, `task23`
