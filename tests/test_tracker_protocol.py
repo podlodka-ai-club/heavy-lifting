@@ -111,3 +111,56 @@ def test_mock_tracker_isolates_state_from_fetched_task_mutation() -> None:
     assert created_task.external_id == fetched_again.external_id
     assert fetched_again.context.title == "Stored title"
     assert fetched_again.metadata == {}
+
+
+def test_mock_tracker_filters_fetch_results_by_status_type_and_limit() -> None:
+    tracker = MockTracker()
+    tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Fetch task"),
+            task_type=TaskType.FETCH,
+        )
+    )
+    tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Done execute"),
+            task_type=TaskType.EXECUTE,
+            status=TaskStatus.DONE,
+        )
+    )
+    tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="New execute"),
+            task_type=TaskType.EXECUTE,
+        )
+    )
+
+    tasks = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(
+            statuses=[TaskStatus.NEW, TaskStatus.DONE],
+            task_type=TaskType.EXECUTE,
+            limit=1,
+        )
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0].task_type is TaskType.EXECUTE
+    assert tasks[0].status is TaskStatus.DONE
+
+
+def test_mock_tracker_attach_links_copies_payload_before_storing() -> None:
+    tracker = MockTracker()
+    created_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="Task with links"))
+    )
+    payload = TrackerLinksAttachPayload(
+        external_task_id=created_task.external_id,
+        links=[{"label": "PR", "url": "https://example.test/pr/32"}],
+    )
+
+    tracker.attach_links(payload)
+    payload.links[0].label = "mutated"
+
+    stored_task = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
+
+    assert stored_task.context.references[0].label == "PR"

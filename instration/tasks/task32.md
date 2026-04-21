@@ -4,7 +4,7 @@
 
 - ID: `task32`
 - Title: Add unit tests for schemas, adapters, and services
-- Status: `todo`
+- Status: `done`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `task31`
@@ -12,11 +12,11 @@
 
 ## Goal
 
-Add focused unit coverage for the MVP building blocks.
+Add focused unit coverage for MVP schemas, mock adapters, and shared services.
 
 ## Detailed Description
 
-Write unit tests for shared schemas, protocol-backed mock adapters, the context builder, and token cost calculations. Keep tests small and deterministic.
+Write additional focused unit tests for shared schemas, protocol-backed mock adapters, and shared services such as context parsing and token cost calculations. Keep tests small, deterministic, and complementary to the existing worker/API coverage.
 
 ## Deliverables
 

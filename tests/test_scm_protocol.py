@@ -197,3 +197,62 @@ def test_mock_scm_filters_feedback_by_cursor_and_branch() -> None:
     assert [item.body for item in filtered_feedback.items] == ["Second comment"]
     assert filtered_feedback.next_page_cursor is None
     assert filtered_feedback.latest_cursor == "comment-2"
+
+
+def test_mock_scm_uses_mock_pr_url_for_non_http_repositories() -> None:
+    scm = MockScm()
+    workspace = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="git@example.test:team/repo.git",
+            repo_ref="main",
+            workspace_key="repo-ssh",
+        )
+    )
+    scm.create_branch(
+        ScmBranchCreatePayload(
+            workspace_key=workspace.workspace_key,
+            branch_name="task32/mock-url",
+        )
+    )
+
+    pushed = scm.push_branch(
+        ScmPushBranchPayload(
+            workspace_key=workspace.workspace_key,
+            branch_name="task32/mock-url",
+        )
+    )
+    pull_request = scm.create_pull_request(
+        ScmPullRequestCreatePayload(
+            workspace_key=workspace.workspace_key,
+            branch_name="task32/mock-url",
+            base_branch="main",
+            title="Use mock URLs",
+            pr_metadata=ScmPullRequestMetadata(execute_task_external_id="TASK-32"),
+        )
+    )
+
+    assert pushed.branch_url is None
+    assert pull_request.url == "mock-scm://pull/1"
+
+
+def test_mock_scm_preserves_workspace_metadata_when_update_metadata_empty() -> None:
+    scm = MockScm()
+    scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-1",
+            metadata={"owner": "platform"},
+        )
+    )
+
+    updated = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://example.test/repo.git",
+            repo_ref="develop",
+            workspace_key="repo-1",
+        )
+    )
+
+    assert updated.repo_ref == "develop"
+    assert updated.metadata == {"owner": "platform"}

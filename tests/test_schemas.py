@@ -127,6 +127,16 @@ def test_schemas_reject_non_json_metadata_values() -> None:
         )
 
 
+def test_schemas_reject_nested_non_string_json_keys() -> None:
+    with pytest.raises(ValidationError):
+        TaskContext.model_validate(
+            {
+                "title": "Task",
+                "metadata": {"nested": {1: "bad key"}},
+            }
+        )
+
+
 def test_tracker_task_reuses_shared_task_context_and_enums() -> None:
     tracker_task = TrackerTask(
         external_id="TASK-17",

@@ -60,3 +60,53 @@ def test_token_cost_service_totals_multiple_entries() -> None:
     total = service.total_estimated_cost(usages)
 
     assert total == Decimal("0.005000")
+
+
+def test_token_cost_service_prefers_exact_price_over_provider_wildcard() -> None:
+    service = TokenCostService(
+        price_book={
+            ("openai", "*"): TokenPrice(
+                input_cost_per_million=Decimal("1.00"),
+                output_cost_per_million=Decimal("2.00"),
+            ),
+            ("openai", "gpt-5.4"): TokenPrice(
+                input_cost_per_million=Decimal("3.00"),
+                output_cost_per_million=Decimal("4.00"),
+            ),
+        }
+    )
+
+    estimated = service.with_estimated_cost(
+        TokenUsagePayload(
+            model="gpt-5.4",
+            provider="openai",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+        )
+    )
+
+    assert estimated.estimated is True
+    assert estimated.cost_usd == Decimal("7.000000")
+
+
+def test_token_cost_service_estimate_many_preserves_order_and_flags_unknown_models() -> None:
+    service = TokenCostService(
+        price_book={
+            ("openai", "*"): TokenPrice(
+                input_cost_per_million=Decimal("1.00"),
+                output_cost_per_million=Decimal("2.00"),
+            )
+        }
+    )
+
+    estimated = service.estimate_many(
+        [
+            TokenUsagePayload(model="gpt-known", provider="openai", input_tokens=1000),
+            TokenUsagePayload(model="other", provider="anthropic", output_tokens=1000),
+        ]
+    )
+
+    assert [item.model for item in estimated] == ["gpt-known", "other"]
+    assert estimated[0].estimated is True
+    assert estimated[1].estimated is False
+    assert estimated[1].cost_usd == zero_cost()

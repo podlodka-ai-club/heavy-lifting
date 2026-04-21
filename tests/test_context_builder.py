@@ -294,3 +294,47 @@ def test_context_builder_ignores_invalid_sibling_payload_outside_lineage_and_his
         assert context.execute_task.task.id == primary_execute_task.id
         assert context.instructions == "Build the main change."
         assert context.feedback_history == ()
+
+
+def test_context_builder_falls_back_to_execute_result_branch_and_feedback_pr_url(
+    session_factory,
+) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(task_type=TaskType.FETCH, context={"title": "Tracker task"})
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                context={"title": "Execute task"},
+                result_payload={
+                    "summary": "Opened PR",
+                    "branch_name": "task32/result-branch",
+                },
+            )
+        )
+        feedback_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                parent_id=execute_task.id,
+                input_payload={
+                    "pr_feedback": {
+                        "pr_external_id": "pr-32",
+                        "comment_id": "c-32",
+                        "body": "Please keep the regression test.",
+                        "pr_url": "https://example.test/pr/32",
+                    }
+                },
+            )
+        )
+
+        context = ContextBuilder().build_for_task(
+            task=feedback_task,
+            task_chain=repository.load_task_chain(fetch_task.root_id),
+        )
+
+        assert context.branch_name == "task32/result-branch"
+        assert context.pr_external_id == "pr-32"
+        assert context.pr_url == "https://example.test/pr/32"
