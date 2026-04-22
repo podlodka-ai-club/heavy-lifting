@@ -46,7 +46,9 @@
 
 ## Быстрый старт локально
 
-Самый короткий сценарий для локального MVP:
+Рекомендуемый ручной сценарий для полного локального mock pipeline теперь такой: `make demo` поднимает HTTP API и все три воркера в одном процессе, поэтому `MockTracker` и `MockScm` действительно разделяют общее in-memory состояние.
+
+### Вариант 1. Demo c `local` runner
 
 ```bash
 uv sync
@@ -55,25 +57,27 @@ docker compose up -d postgres
 export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
 
 make bootstrap-db
-make api
+make demo
 ```
 
-В отдельных терминалах с тем же `DATABASE_URL`:
+Это основной сценарий для ручной проверки полного mock flow без реального вызова модели.
 
-```bash
-export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
-make worker1
-```
+### Вариант 2. Demo c реальным `CliAgentRunner`
 
-```bash
-export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
-make worker2
-```
+Этот вариант использует те же подготовительные шаги, что и вариант 1: зависимости уже должны быть установлены через `uv sync`, а Postgres должен быть поднят командой `docker compose up -d postgres`.
 
 ```bash
 export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
-make worker3
+export AGENT_RUNNER_ADAPTER=cli
+export OPENAI_API_KEY=replace-me
+
+make bootstrap-db
+make demo
 ```
+
+Этот режим нужен только если вы хотите, чтобы `worker2` вызывал внешний CLI-агент. Для обычной локальной demo-проверки достаточно `local` runner по умолчанию.
+
+`make api` и отдельные `make worker1` / `make worker2` / `make worker3` теперь не рекомендуются для ручного полного mock flow: это разные процессы, а `MockTracker` и `MockScm` хранят состояние в памяти процесса. Эти команды оставлены для точечной отладки отдельных компонентов.
 
 Поставить задачу в intake:
 
@@ -99,7 +103,7 @@ curl -X POST http://127.0.0.1:8000/tasks/intake \
   }'
 ```
 
-Ожидаемый результат: `201 Created` и JSON с `external_id`.
+Ожидаемый результат: `201 Created` и JSON с `external_id`. После этого `make demo` должен сам протащить задачу через `worker1 -> worker2 -> worker3`.
 
 ## Локальная установка через `uv`
 
@@ -157,6 +161,8 @@ docker compose up -d postgres
 - `POSTGRES_HOST=localhost`
 - `POSTGRES_PORT=5432`
 
+После `docker compose up -d postgres` база доступна с хоста на `localhost:5432`.
+
 Важно: после `docker compose up -d postgres` нужен явный шаг настройки env для приложения. По умолчанию `src/backend/settings.py` использует `POSTGRES_USER=postgres` и `POSTGRES_PASSWORD=postgres`, а контейнер Postgres из `docker-compose.yml` поднимается с `heavy_lifting/heavy_lifting`. Поэтому для локального запуска проще всего экспортировать `DATABASE_URL`:
 
 ```bash
@@ -177,11 +183,11 @@ export POSTGRES_PASSWORD=heavy_lifting
 
 ### Обязательные переменные
 
-Минимум для локального запуска API и воркеров:
+Минимум для `make demo`, `make api` и воркеров:
 
 - `DATABASE_URL` или полный набор `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
 
-Для запуска реального CLI runner вместо локального stub дополнительно нужны:
+Для запуска реального `CliAgentRunner` вместо локального runner дополнительно нужны:
 
 - `AGENT_RUNNER_ADAPTER=cli`;
 - ключ в переменной, имя которой задается `CLI_AGENT_API_KEY_ENV_VAR`.
@@ -232,7 +238,7 @@ export OPENAI_API_KEY=replace-me
 
 ## Подготовка базы данных
 
-Перед первым запуском API и воркеров настройте env и подготовьте схему MVP:
+Перед первым запуском `make demo`, API или воркеров настройте env и подготовьте схему MVP:
 
 ```bash
 make bootstrap-db
@@ -262,13 +268,21 @@ uv run heavy-lifting-bootstrap-db --database-url sqlite+pysqlite:///./dev.db
 
 Перед запуском убедитесь, что база поднята, env настроен и схема создана.
 
+Для ручного полного локального pipeline используйте `make demo`:
+
+```bash
+make demo
+```
+
+Команда запускает Flask API и фоновые worker threads в одном процессе.
+
 API:
 
 ```bash
 make api
 ```
 
-Воркеры запускаются в отдельных терминалах:
+Отдельные воркеры запускаются в разных терминалах:
 
 ```bash
 make worker1
@@ -278,11 +292,11 @@ make worker3
 
 Эти команды используют `uv run` и текущие настройки окружения.
 
+Для полного mock flow этот режим не рекомендуется, потому что in-memory состояние mock-адаптеров не разделяется между процессами. Он подходит для локальной отладки конкретного сервиса или воркера.
+
 ## Локальный happy path для `POST /tasks/intake`
 
-Для ручной проверки используйте блок `Быстрый старт локально` выше: он уже содержит минимальный env, bootstrap БД, запуск API и отдельных воркеров, а также копируемый `curl`.
-
-Важно: текущие `MockTracker` и `MockScm` хранят состояние в памяти процесса. Поэтому отдельные процессы `make api` и `make worker1` не разделяют tracker state между собой. Из-за этого для локальной проверки полного pipeline на mock-адаптерах надежнее использовать интеграционный тест ниже.
+Для ручной проверки используйте блок `Быстрый старт локально` выше: он уже содержит минимальный env, bootstrap БД, запуск `make demo` и копируемый `curl`.
 
 ## Проверки качества
 

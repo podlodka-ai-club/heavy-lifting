@@ -5,6 +5,8 @@ services:
       POSTGRES_DB: heavy_lifting
       POSTGRES_USER: heavy_lifting
       POSTGRES_PASSWORD: heavy_lifting
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
