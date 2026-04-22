@@ -256,3 +256,35 @@ def test_mock_scm_preserves_workspace_metadata_when_update_metadata_empty() -> N
 
     assert updated.repo_ref == "develop"
     assert updated.metadata == {"owner": "platform"}
+
+
+def test_mock_scm_uses_existing_local_directory_as_workspace_path(tmp_path) -> None:
+    scm = MockScm()
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    workspace = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url=str(repo_dir),
+            repo_ref="main",
+            workspace_key="repo-local",
+        )
+    )
+
+    assert workspace.local_path == str(repo_dir.resolve())
+
+
+def test_mock_scm_uses_existing_file_uri_as_workspace_path(tmp_path) -> None:
+    scm = MockScm()
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    workspace = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url=repo_dir.resolve().as_uri(),
+            repo_ref="main",
+            workspace_key="repo-file-uri",
+        )
+    )
+
+    assert workspace.local_path == str(repo_dir.resolve())

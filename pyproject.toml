@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 heavy-lifting-bootstrap-db = "backend.bootstrap_db:main"
+heavy-lifting-demo = "backend.demo:main"
 
 [dependency-groups]
 dev = [

@@ -1,4 +1,4 @@
-.PHONY: install init install-git-hooks clean api worker1 worker2 worker3 lint typecheck test bootstrap-db init-db
+.PHONY: install init install-git-hooks clean api worker1 worker2 worker3 demo lint typecheck test bootstrap-db init-db
 
 
 install: init
@@ -33,6 +33,9 @@ worker2:
 
 worker3:
 	uv run python -c "from backend.workers.deliver_worker import run; run()"
+
+demo:
+	uv run heavy-lifting-demo
 
 lint:
 	@if [ -d tests ]; then uv run ruff check src/backend tests; else uv run ruff check src/backend; fi

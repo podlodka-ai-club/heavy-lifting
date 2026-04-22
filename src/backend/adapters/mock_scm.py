@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
 from backend.schemas import (
     ScmBranchCreatePayload,
     ScmBranchReference,
@@ -30,19 +33,23 @@ class MockScm:
     def ensure_workspace(self, payload: ScmWorkspaceEnsurePayload) -> ScmWorkspace:
         stored_payload = payload.model_copy(deep=True)
         workspace = self._workspaces.get(stored_payload.workspace_key)
+        local_path = self._resolve_local_workspace_path(stored_payload.repo_url)
+        if local_path is None:
+            local_path = f"/tmp/mock-scm/{stored_payload.workspace_key}"
 
         if workspace is None:
             workspace = ScmWorkspace(
                 repo_url=stored_payload.repo_url,
                 workspace_key=stored_payload.workspace_key,
                 repo_ref=stored_payload.repo_ref,
-                local_path=f"/tmp/mock-scm/{stored_payload.workspace_key}",
+                local_path=local_path,
                 metadata=stored_payload.metadata,
             )
             self._workspaces[stored_payload.workspace_key] = workspace
         else:
             workspace.repo_url = stored_payload.repo_url
             workspace.repo_ref = stored_payload.repo_ref
+            workspace.local_path = local_path
             if stored_payload.metadata:
                 workspace.metadata = stored_payload.metadata
 
@@ -202,3 +209,26 @@ class MockScm:
 
     def _cursor_value(self, cursor: str) -> int:
         return int(cursor.split("-")[-1])
+
+    def _resolve_local_workspace_path(self, repo_url: str) -> str | None:
+        parsed = urlparse(repo_url)
+        candidate: Path | None = None
+
+        if parsed.scheme == "file":
+            if parsed.netloc not in ("", "localhost"):
+                return None
+            candidate = Path(unquote(parsed.path)).expanduser()
+        elif parsed.scheme == "":
+            candidate = Path(repo_url).expanduser()
+        else:
+            return None
+
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError:
+            return None
+
+        if not resolved.is_dir():
+            return None
+
+        return str(resolved)
