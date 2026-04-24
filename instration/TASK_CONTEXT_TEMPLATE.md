@@ -1,8 +1,10 @@
 # Task Context Template
 
+Use this optional template for `worklog/<username>/<worklog-id>/tasks/taskNN_context.md` when one atomic task needs extra detail beyond the main worklog context.
+
 ## Metadata
 
-- Task ID: `taskN`
+- Task ID: `taskNN`
 - Source:
 - Updated At:
 

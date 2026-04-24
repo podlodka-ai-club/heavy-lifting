@@ -1,8 +1,10 @@
 # Task Summary Template
 
+Use this template for local task summaries inside `worklog/<username>/<worklog-id>/tasks/`.
+
 ## Metadata
 
-- Task ID: `taskN`
+- Task ID: `taskNN`
 - Date:
 - Prepared By:
 
@@ -18,3 +20,7 @@ Short summary of the completed task.
 ## Next Step
 
 Describe the next task or action.
+
+## Docs Updated
+
+- `docs/path/to/doc.md`
