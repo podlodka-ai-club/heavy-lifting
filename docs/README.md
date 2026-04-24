@@ -5,11 +5,13 @@ This directory holds durable project knowledge for the Heavy Lifting orchestrato
 ## What lives here
 
 - `vision/` describes why the system exists, what outcomes it should deliver, and how the product should evolve.
+- `contracts/` defines durable interface and payload contracts between orchestrator stages.
 - `process/` documents repository workflows that should stay stable across individual tasks and contributors.
 
 ## How to use the docs
 
 - Start with `vision/system.md` to understand the product intent, actors, scenarios, and MVP boundaries.
+- Read `contracts/task-handoff.md` when working on task schemas, worker routing, or delivery semantics.
 - Read `vision/roadmap.md` to place the current MVP in the larger delivery plan.
 - Read `process/worklog.md` before starting implementation work so local execution notes follow the expected shape.
 

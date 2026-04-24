@@ -12,6 +12,7 @@ The target system is a reliable orchestration backend that:
 
 - receives well-structured work requests from an upstream tracker;
 - turns them into explicit internal task stages with durable state transitions;
+- classifies each task into a business-level execution path before work begins;
 - prepares a reproducible workspace and runs an external coding agent or local runner;
 - creates or updates pull requests through an SCM boundary;
 - processes follow-up review feedback as first-class work;
@@ -35,7 +36,7 @@ The tracker submits a new task to the orchestrator through the intake API. The o
 
 ### Triage
 
-The orchestration layer normalizes the incoming request, determines the next executable steps, and fans out internal work such as fetch, execute, and deliver tasks. Triage is responsible for shaping the pipeline, not for performing the implementation itself.
+The orchestration layer normalizes the incoming request, determines the business task kind, and fans out internal work such as fetch, execute, and deliver tasks. In the MVP, triage itself runs as an `execute` step owned by `worker2`, while `worker1` remains responsible for ingestion and task creation. Triage is responsible for shaping the pipeline, not for performing the implementation itself.
 
 ### Research
 
@@ -51,7 +52,19 @@ If a pull request receives review comments or requested changes, the orchestrato
 
 ### Delivery
 
-After execution completes, the orchestrator reports the result back to the tracker. Delivery includes status, a concise summary of what changed, links to branches or pull requests when available, and failure context when execution does not succeed.
+After execution completes, the orchestrator reports the result back to the tracker. Delivery includes status, a concise summary of what changed, links to branches or pull requests when available, and failure context when execution does not succeed. Delivery is driven by structured handoff data rather than free-text parsing.
+
+Any upstream step that produces tracker-ready `delivery` instructions may trigger a downstream `deliver` task. Delivery is therefore not limited to code implementation outcomes.
+
+## Contract Model
+
+The orchestration pipeline relies on a stable handoff contract documented in `docs/contracts/task-handoff.md`.
+
+- `context` carries stable task facts and source material.
+- `input_payload` carries the current-step command.
+- `result_payload` carries machine-readable outcome, routing, delivery instructions, and generated artifacts.
+
+This separation keeps worker boundaries explicit and allows triage, implementation, PR feedback, and delivery to reuse one contract model.
 
 ## MVP Scope
 
