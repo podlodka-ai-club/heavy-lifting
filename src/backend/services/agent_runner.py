@@ -295,7 +295,10 @@ class CliAgentRunner:
             "stderr_preview": stderr_preview,
             "usage": stdout_parse.usage_metadata,
             "runner_metadata": runner_metadata,
+            "execution_status": "succeeded" if exit_code == 0 else "failed",
         }
+        if exit_code != 0:
+            metadata["failure_message"] = self._build_summary(exit_code)
         return TaskResultPayload(
             summary=self._build_summary(exit_code),
             details=details,

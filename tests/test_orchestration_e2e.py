@@ -355,6 +355,110 @@ def test_http_intake_flow_persists_cli_token_usage_from_json_events(
         assert token_usage_entries[0].cost_usd == Decimal("0.008765")
 
 
+def test_http_intake_flow_stops_after_cli_non_zero_exit(monkeypatch, session_factory) -> None:
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=120,
+            provider_hint="openai",
+            model_hint="gpt-5.4",
+            profile="backend",
+        )
+    )
+    runtime = RuntimeContainer(
+        settings=replace(get_settings(), app_name="heavy-lifting-backend"),
+        tracker=MockTracker(),
+        scm=MockScm(),
+        agent_runner=runner,
+    )
+    app = create_app(runtime=runtime, session_factory=session_factory)
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=23,
+            stdout='{"type":"text","part":{"type":"text","text":"CLI failed."}}\n',
+            stderr="fatal: command failed",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    response = app.test_client().post(
+        "/tasks/intake",
+        json={
+            "context": {"title": "CLI non-zero exit e2e"},
+            "input_payload": {
+                "instructions": "Run the CLI worker and stop on failure.",
+                "base_branch": "main",
+                "branch_name": "task89/cli-non-zero",
+            },
+            "repo_url": "https://example.test/repo.git",
+            "repo_ref": "main",
+            "workspace_key": "repo-89",
+        },
+    )
+
+    assert response.status_code == 201
+
+    intake_worker = TrackerIntakeWorker(
+        tracker=runtime.tracker,
+        scm=runtime.scm,
+        tracker_name=runtime.settings.tracker_adapter,
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=runtime.scm,
+        agent_runner=runtime.agent_runner,
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=runtime.tracker, session_factory=session_factory)
+
+    intake_worker.poll_once()
+    execute_report = execute_worker.poll_once()
+    deliver_report = deliver_worker.poll_once()
+
+    assert execute_report.processed_execute_tasks == 0
+    assert execute_report.failed_execute_tasks == 1
+    assert deliver_report.processed_deliver_tasks == 0
+    assert deliver_report.failed_deliver_tasks == 0
+    assert runtime.scm._commit_sequence == 0
+    assert runtime.scm._pull_requests == {}
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id="task-1",
+        )
+
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        assert execute_task.status == TaskStatus.FAILED
+        assert execute_task.error == "CLI agent run failed with exit code 23."
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["summary"] == "CLI agent run failed with exit code 23."
+        assert execute_task.result_payload["metadata"]["execution_status"] == "failed"
+        assert execute_task.pr_external_id is None
+        assert execute_task.pr_url is None
+
+        deliver_task = repository.find_child_task(
+            parent_id=execute_task.id, task_type=TaskType.DELIVER
+        )
+        assert deliver_task is None
+
+        token_usage_entries = session.query(TokenUsage).order_by(TokenUsage.id.asc()).all()
+        assert token_usage_entries == []
+
+    assert runtime.tracker._tasks["task-1"].status == TaskStatus.NEW
+    assert runtime.tracker._comments.get("task-1", []) == []
+
+
 def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
     tracker = MockTracker()
     scm = MockScm()

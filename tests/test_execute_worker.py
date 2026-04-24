@@ -74,6 +74,27 @@ class EstimateOnlyAgentRunner:
         )
 
 
+class FailedCliAgentRunner:
+    def __init__(self, exit_code: int = 17) -> None:
+        self.exit_code = exit_code
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary=f"CLI agent run failed with exit code {self.exit_code}.",
+                details="stderr:\ncommand failed",
+                metadata={
+                    "runner_adapter": "cli",
+                    "exit_code": self.exit_code,
+                    "execution_status": "failed",
+                    "failure_message": (f"CLI agent run failed with exit code {self.exit_code}."),
+                },
+            )
+        )
+
+
 def test_execute_worker_processes_execute_task_and_creates_deliver(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     agent_runner = RecordingAgentRunner()
@@ -437,6 +458,74 @@ def test_execute_worker_marks_task_failed_when_runner_execution_step_fails(tmp_p
         assert execute_task is not None
         assert execute_task.status == TaskStatus.FAILED
         assert execute_task.error == "runner crashed"
+
+        token_usage_entries = session.query(TokenUsage).all()
+        assert token_usage_entries == []
+
+
+def test_execute_worker_marks_cli_non_zero_exit_failed_without_scm_follow_up(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = MockScm()
+    agent_runner = FailedCliAgentRunner(exit_code=17)
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=agent_runner,
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-88",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-88",
+                context={"title": "Tracker task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-88",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-88",
+                context={"title": "CLI failure"},
+                input_payload={
+                    "instructions": "Run a CLI command that fails.",
+                    "base_branch": "main",
+                    "branch_name": "task88/cli-failure",
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 0
+    assert report.failed_execute_tasks == 1
+    assert len(agent_runner.requests) == 1
+    assert scm._commit_sequence == 0
+    assert scm._pull_requests == {}
+
+    with session_scope(session_factory=session_factory) as session:
+        execute_task = session.get(Task, 2)
+        assert execute_task is not None
+        assert execute_task.status == TaskStatus.FAILED
+        assert execute_task.error == "CLI agent run failed with exit code 17."
+        assert execute_task.branch_name == "task88/cli-failure"
+        assert execute_task.pr_external_id is None
+        assert execute_task.pr_url is None
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["summary"] == "CLI agent run failed with exit code 17."
+        assert execute_task.result_payload["metadata"]["execution_status"] == "failed"
+
+        deliver_tasks = session.query(Task).filter(Task.task_type == TaskType.DELIVER).all()
+        assert deliver_tasks == []
 
         token_usage_entries = session.query(TokenUsage).all()
         assert token_usage_entries == []

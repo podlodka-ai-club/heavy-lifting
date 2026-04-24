@@ -100,6 +100,16 @@ class ExecuteWorker:
                     task=task,
                     prepared_execution=prepared_execution,
                 )
+                if run_result.execution_failed:
+                    self._mark_task_failed(
+                        task=task,
+                        error=run_result.failure_message or run_result.payload.summary,
+                        result_payload=run_result.payload,
+                        branch_name=prepared_execution.branch_name,
+                    )
+                    if task_type == TaskType.EXECUTE:
+                        return ExecuteWorkerReport(failed_execute_tasks=1)
+                    return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
                 if prepared_execution.skip_scm_artifacts:
                     self._complete_execute_task_without_scm(
                         repository=repository,
@@ -487,6 +497,23 @@ class ExecuteWorker:
         task.branch_name = branch_name
         task.pr_external_id = pr_external_id
         task.pr_url = pr_url
+
+    def _mark_task_failed(
+        self,
+        *,
+        task: Task,
+        error: str,
+        result_payload: TaskResultPayload | None = None,
+        branch_name: str | None = None,
+    ) -> None:
+        task.status = TaskStatus.FAILED
+        task.error = error
+        task.result_payload = (
+            _dump_result_payload(result_payload) if result_payload is not None else None
+        )
+        task.branch_name = branch_name
+        task.pr_external_id = None
+        task.pr_url = None
 
     def _ensure_deliver_task(
         self,
