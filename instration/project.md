@@ -4,7 +4,7 @@
 
 Build an MVP orchestrator on Python and Flask with PostgreSQL, three workers, and a modular architecture inside `src/backend`.
 
-The product context comes from Hacker Sprint 1: build an agent orchestrator that takes a backlog task, runs it through a selected workflow, and brings the result to a pull request. The distilled sprint brief is stored in `instration/hacker_sprint_1.md`, and the companion Excalidraw architecture scheme is captured in `instration/architecture_scheme.md`; this file remains the authoritative MVP technical specification.
+The product context comes from Hacker Sprint 1: build an agent orchestrator that takes a backlog task, runs it through a selected workflow, and brings the result to a pull request. The distilled sprint brief is stored in `docs/vision/hacker-sprint-1.md`, and the companion Excalidraw architecture scheme is captured in `docs/vision/architecture-scheme.md`; this file remains a migration-era MVP technical specification.
 
 The system should:
 
@@ -65,15 +65,18 @@ Must support:
 - maps PR feedback to the correct `execute` task;
 - creates child `pr_feedback` tasks.
 
+For durable event-ingestion taxonomy, normalization, and monitor-boundary rules, see `docs/contracts/event-ingestion.md`.
+
 ### Worker 2
 
 - processes `execute` and `pr_feedback` tasks;
+- runs triage, research, implementation, and PR response business actions through the step contract;
 - syncs repository state from git;
 - runs the coding agent;
 - stores execution results;
 - stores token usage and cost;
 - creates or updates PRs when code changes exist;
-- creates child `deliver` tasks after successful `execute`.
+- creates child `deliver` tasks whenever an upstream result contains tracker-ready `delivery` instructions.
 
 ### Worker 3
 
@@ -88,6 +91,30 @@ Must support:
 - `execute`
 - `deliver`
 - `pr_feedback`
+
+Task types describe pipeline stages, not the business meaning of the task. Business routing must be expressed through `role`, `input_payload`, and `result_payload`.
+
+## Business Task Kinds
+
+The MVP must support at least these business task kinds:
+
+- `research`
+- `implementation`
+- `clarification`
+- `review_response`
+- `rejected`
+
+The business kind is identified during triage and stored in `result_payload.classification.task_kind`.
+
+## Triage And Routing Rules
+
+- The durable triage signal set, supported outcomes, and routing matrix live in `docs/contracts/triage-routing.md`.
+- Every new tracker task must first go through a triage step before implementation work starts.
+- `worker1` ingests a new tracker task and creates the first executable step for triage.
+- The triage business step runs inside an `execute` task handled by `worker2`.
+- Triage determines whether the task can be taken into work, estimates complexity and story points, and chooses the next scenario.
+- Triage may finish with a tracker reply only, or route the task into a follow-up execution step such as research or implementation.
+- PR feedback remains a separate flow source, but uses the same payload handoff principles.
 
 ## Task Statuses
 
@@ -138,12 +165,18 @@ The `token_usage` table must contain at least:
 - `cost_usd`
 - `created_at`
 
-## Context Rules
+## Context And Payload Contract
 
-- `fetch.context` stores the base task context from the tracker.
-- `execute.context` stores the main execution context for coding work.
-- `pr_feedback` stores feedback-specific input, but inherits context through the task chain.
-- History of follow-up iterations is stored in child `pr_feedback` tasks, not overwritten in `execute`.
+The durable v1 handoff contract for `context`, `input_payload`, and `result_payload` now lives in `docs/contracts/task-handoff.md`.
+
+`instration/project.md` keeps only the migration-era summary:
+
+- `context` stores stable task facts and source information.
+- `input_payload` is the command for the current pipeline step.
+- `result_payload` is the structured result of the current step and the handoff to the next step.
+- Business-step actions map to pipeline task types as documented in `docs/contracts/task-handoff.md`.
+- Routing and delivery decisions must rely on machine-readable fields.
+- All new payload shapes must include `schema_version`.
 
 ## API Endpoints
 

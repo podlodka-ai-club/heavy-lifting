@@ -1,9 +1,9 @@
-# Task Progress
+# Task 56 Progress
 
 ## Metadata
 
 - Task ID: `task56`
-- Status: `done`
+- Status: `in_progress`
 - Updated At: `2026-04-24`
 
 ## Progress Log
@@ -12,31 +12,35 @@
 
 - Date: `2026-04-24`
 - Status: `in_progress`
-- Notes: Excalidraw room `7ae73c4cdabd554ffdc9` найден в Firestore проекта `excalidraw-room-persistence`; сцена расшифрована AES-GCM ключом из URL fragment. Извлечены 78 элементов, включая 34 text elements и 17 arrows.
+- Notes: Создана задача на переход к модели `docs/ + worklog/`: нужно разнести долговечную документацию и локальный execution trail, завести vision/process документы и обновить repo rules.
 
 ### Entry 2
 
 - Date: `2026-04-24`
+- Status: `in_progress`
+- Notes: Обновлены process-правила в `AGENTS.md` и `instration/*`: основной workflow переведен на `docs/process/worklog.md`, commit format изменен на `<worklog-id>/taskNN ...`, добавлен шаблон `instration/WORKLOG_CONTEXT_TEMPLATE.md`, а task templates теперь ориентированы на локальный `worklog/`.
+
+### Entry 3
+
+- Date: `2026-04-24`
+- Status: `in_progress`
+- Notes: Через `DEV` создан стартовый documentation foundation: `docs/README.md`, `docs/vision/system.md`, `docs/vision/roadmap.md`, `docs/process/worklog.md`, обновлены `README.md` и `.gitignore` для новой модели `docs/ + worklog/`. Тяжелые проверки не запускались, так как изменения документационные.
+
+### Entry 4
+
+- Date: `2026-04-24`
+- Status: `in_progress`
+- Notes: После review1 устранено расхождение по структуре worklog: task-артефакты перенесены в `worklog/<username>/<worklog-id>/tasks/`, а `instration/instruction.md` уточнен так, чтобы lifecycle и naming ссылались на один и тот же путь.
+
+### Entry 5
+
+- Date: `2026-04-24`
 - Status: `done`
-- Notes: Добавлен `instration/architecture_scheme.md` с описанием business process, runtime loops, agent roles, handoff, observability/statistics, API/storage mapping и backlog notes. `instration/project.md` обновлен ссылкой на архитектурный документ.
+- Notes: REVIEW round 2 в локальном worklog завершился с verdict `approved`. Для этой атомарной задачи кодовые проверки не запускались, потому что изменения ограничены документацией, шаблонами процесса и `.gitignore`. Подготовлены финальные task-артефакты и commit `task56/task01 перевести процесс на docs и worklog`.
 
 ## Completion Summary
 
-- Changed Files:
-  - `instration/architecture_scheme.md`
-  - `instration/project.md`
-  - `instration/tasks/task56.md`
-  - `instration/tasks/task56_progress.md`
-  - `instration/tasks/task56_review1.md`
-  - `instration/tasks/task56_summary.md`
-- Checks:
-  - `git diff --check` - passed
-  - `make lint` - not run; documentation-only change under `instration/`, no Python code changed.
-  - `make typecheck` - not run; documentation-only change under `instration/`, no Python code changed.
-- Assumptions:
-  - Черная часть Excalidraw-схемы описывает бизнес-процесс задачи от tracker до MR.
-  - Синяя часть схемы описывает runtime loops, API/statistics storage и backlog/setup notes.
-  - Опечатки в исходных подписях нормализованы в документации, смысл сохранен.
-- Risks:
-  - Excalidraw room является live-документом; если схема изменится позже, этот markdown останется снимком на `2026-04-24`.
-
+- Изменены файлы: `AGENTS.md`, `.gitignore`, `README.md`, `docs/README.md`, `docs/vision/system.md`, `docs/vision/roadmap.md`, `docs/process/worklog.md`, `instration/instruction.md`, `instration/TASK_TEMPLATE.md`, `instration/TASK_PROGRESS_TEMPLATE.md`, `instration/TASK_SUMMARY_TEMPLATE.md`, `instration/TASK_CONTEXT_TEMPLATE.md`, `instration/TASK_REVIEW_TEMPLATE.md`, `instration/WORKLOG_CONTEXT_TEMPLATE.md`, `instration/tasks/task56.md`, `instration/tasks/task56_progress.md`.
+- Создан documentation foundation в `docs/`, зафиксированы vision и roadmap, а workflow репозитория переведен на модель `docs/ + worklog/`.
+- REVIEW артефакты сохранены локально в `worklog/denis/task56/tasks/task01_review1.md` и `worklog/denis/task56/tasks/task01_review2.md`.
+- Проверки: тяжелые проверки не запускались, так как изменений в коде, тестах и runtime-конфигурации нет.

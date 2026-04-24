@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 from typing import Any
 
 from pydantic import BaseModel
@@ -10,6 +11,11 @@ from backend.task_constants import TaskStatus, TaskType
 
 
 def build_openapi_schema() -> dict[str, Any]:
+    return deepcopy(_cached_openapi_schema())
+
+
+@lru_cache(maxsize=1)
+def _cached_openapi_schema() -> dict[str, Any]:
     components = _build_components(TrackerTaskCreatePayload)
     components["schemas"].update(
         {

@@ -1,14 +1,17 @@
 # Task Template
 
+Use this template for atomic task files inside `worklog/<username>/<worklog-id>/tasks/`.
+
 ## Metadata
 
-- ID: `taskN`
+- ID: `taskNN`
 - Title:
 - Status: `todo`
 - Priority: `medium`
 - Owner: `agent-programmer`
 - Depends on: `none`
 - Next Tasks: `none`
+- Expected Docs Updates:
 
 ## Goal
 
@@ -25,7 +28,7 @@ Detailed implementation requirements, constraints, acceptance criteria, and note
 
 ## Context References
 
-- `instration/project.md`
+- `docs/vision/system.md`
 - `instration/TASK_CONTEXT_TEMPLATE.md`
 
 ## Review References
@@ -34,8 +37,8 @@ Detailed implementation requirements, constraints, acceptance criteria, and note
 
 ## Progress References
 
-- `instration/tasks/taskN_progress.md`
+- `worklog/<username>/<worklog-id>/tasks/taskNN_progress.md`
 
 ## Result
 
-Keep the task definition stable. Put execution progress, completion notes, changed files, and test results into the matching progress file.
+Keep the task definition stable. Put execution progress, completion notes, changed files, docs updates, and test results into the matching progress file.

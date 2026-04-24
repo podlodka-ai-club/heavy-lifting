@@ -51,7 +51,7 @@ The Notion page lists these optional areas as useful extensions beyond the basel
 
 ## Mapping To Current MVP Architecture
 
-The current MVP scope in `instration/project.md` maps the sprint requirements as follows:
+The current MVP scope maps the sprint requirements as follows:
 
 | Sprint requirement | Current repository concept |
 | --- | --- |
@@ -64,7 +64,7 @@ The current MVP scope in `instration/project.md` maps the sprint requirements as
 
 ## Architecture Notes
 
-The Notion page is a sprint brief, not a full architecture document. It does not define a concrete database schema, endpoint contract, worker split, or module layout. Those details are owned by this repository's project specification.
+The Notion page is a sprint brief, not a full architecture document. It does not define a concrete database schema, endpoint contract, worker split, or module layout. Those details are owned by this repository's project specification and durable docs.
 
 The important architectural implication from the sprint brief is the closed loop:
 
@@ -99,4 +99,3 @@ The repository currently treats these sprint ideas as future extensions unless a
 - multiple task-type strategies;
 - parallel implementation tournament;
 - long-term memory across tasks.
-

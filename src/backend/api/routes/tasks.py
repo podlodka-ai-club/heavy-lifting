@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer
 from backend.db import create_session, get_session_factory
+from backend.logging_setup import get_logger
 from backend.models import Task
 from backend.repositories.task_repository import TaskRepository
 from backend.schemas import TrackerTaskCreatePayload
@@ -91,13 +92,20 @@ def get_task(task_id: int):
 
 @tasks_blueprint.post("/tasks/intake")
 def intake_task():
+    logger = get_logger(__name__, component="api")
     payload_data = request.get_json(silent=True)
     if payload_data is None:
+        logger.warning("task_intake_invalid", reason="invalid_json")
         return jsonify({"error": "Invalid task intake payload", "details": []}), 400
 
     try:
         payload = TrackerTaskCreatePayload.model_validate(payload_data)
     except ValidationError as exc:
+        logger.warning(
+            "task_intake_invalid",
+            reason="validation_error",
+            validation_error_count=len(exc.errors()),
+        )
         return (
             jsonify(
                 {
@@ -109,6 +117,16 @@ def intake_task():
         )
 
     created_task = _get_runtime().tracker.create_task(payload)
+    logger.info(
+        "task_intake_accepted",
+        tracker_name=_get_runtime().settings.tracker_adapter,
+        tracker_external_id=created_task.external_id,
+        task_type=payload.task_type.value if payload.task_type is not None else None,
+        repo_url=payload.repo_url,
+        repo_ref=payload.repo_ref,
+        workspace_key=payload.workspace_key,
+        has_input_payload=payload.input_payload is not None,
+    )
     return jsonify({"external_id": created_task.external_id}), 201
 
 

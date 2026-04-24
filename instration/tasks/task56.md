@@ -3,46 +3,46 @@
 ## Metadata
 
 - ID: `task56`
-- Title: Добавить архитектурную схему из Excalidraw
+- Title: Перевести process-документацию на модель `docs` и `worklog`
 - Status: `done`
-- Priority: `medium`
+- Priority: `high`
 - Owner: `agent-programmer`
-- Depends on: `task55`
+- Depends on: `task54`, `task55`
 - Next Tasks: `none`
 
 ## Goal
 
-Сохранить в репозитории важную архитектурную информацию из Excalidraw-схемы и связать ее с текущей MVP-спецификацией.
+Зафиксировать новую модель проектной документации, в которой долговечные знания о системе живут в `docs/`, а кратковременная память разработчика или агента ведется в локальном `worklog/`.
 
 ## Detailed Description
 
-Нужно извлечь архитектурную схему из Excalidraw room, описать бизнес-процесс, технические runtime loops, роли агентов, handoff между агентами, observability/statistics и backlog notes.
+Текущий процесс завязан на `instration/tasks/` как на постоянное место для task-артефактов. Для параллельной работы нескольких разработчиков или агентов это создает лишний шум в репозитории и смешивает долговечные факты о системе с локальным execution trail. Нужно перейти на новую модель:
 
-Документ должен отделять фактический MVP scope от идей будущего расширения. Нельзя превращать все роли и блоки со схемы в обязательный текущий scope без отдельной задачи.
+- глобальное направление системы, архитектурные факты, контракты и process-правила фиксируются в `docs/`;
+- локальный контекст по конкретной фиче ведется в `worklog/<username>/<worklog-id>/`;
+- shared task registry в репозитории больше не используется как основной process-механизм;
+- завершение worklog требует актуализации соответствующих документов в `docs/`.
 
-Acceptance criteria:
-
-- В `instration/` есть отдельный markdown-документ по архитектурной схеме.
-- Документ содержит source link на Excalidraw.
-- Документ описывает business process и technical runtime отдельно.
-- Документ содержит mapping к текущей MVP-архитектуре.
-- `instration/project.md` ссылается на новый архитектурный документ.
+В рамках задачи нужно создать стартовую структуру `docs/`, описать vision, roadmap и worklog-процесс, обновить общие правила в `AGENTS.md`, `instration/instruction.md` и связанных шаблонах, а также исключить `worklog/` из git.
 
 ## Deliverables
 
-- `instration/architecture_scheme.md`
-- Обновление `instration/project.md`
-- Task progress, review и summary файлы для `task56`
+- Новая структура `docs/` с базовыми документами по vision и process
+- Обновленные process-правила в `AGENTS.md` и `instration/`
+- Игнорирование локального `worklog/` в git
+- Обновленный README с новой моделью работы
 
 ## Context References
 
-- `https://excalidraw.com/#room=7ae73c4cdabd554ffdc9,uxtWZeYav-Yd2Mi_cFOidA`
+- `AGENTS.md`
+- `README.md`
+- `instration/instruction.md`
+- `instration/TASK_TEMPLATE.md`
 - `instration/project.md`
-- `instration/hacker_sprint_1.md`
 
 ## Review References
 
-- `instration/tasks/task56_review1.md`
+- `instration/TASK_REVIEW_TEMPLATE.md`
 
 ## Progress References
 
@@ -51,4 +51,3 @@ Acceptance criteria:
 ## Result
 
 Keep the task definition stable. Put execution progress, completion notes, changed files, and test results into the matching progress file.
-

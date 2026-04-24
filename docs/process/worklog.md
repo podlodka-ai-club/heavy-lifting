@@ -1,0 +1,142 @@
+# Worklog Workflow
+
+## Purpose
+
+The worklog is local short-term memory for a single implementation thread. It captures task-specific context, progress notes, review history, and completion notes that are useful during execution but should not become the main long-term knowledge base of the repository.
+
+Durable facts, contracts, and decisions belong in `docs/`. A worklog is complete only when the relevant durable documentation has been updated.
+
+## Location And Ownership
+
+Each active effort lives under:
+
+```text
+worklog/<username>/<worklog-id>/
+```
+
+- `<username>` identifies the local contributor or agent owner.
+- `<worklog-id>` identifies the broader feature, task, or delivery thread.
+- The directory is local execution state and should stay gitignored.
+
+## Recommended Structure
+
+```text
+worklog/<username>/<worklog-id>/
+  context.md
+  status.md
+  tasks/
+    task01.md
+    task01_progress.md
+    task01_review1.md
+    task01_summary.md
+```
+
+Additional files are allowed when they improve clarity, but the worklog should stay lightweight and focused on the current thread.
+
+## Core Files
+
+### `context.md`
+
+Use `context.md` for the stable short-term frame of the worklog:
+
+- task intent and scope;
+- key inputs or links;
+- assumptions and open questions;
+- constraints that matter across multiple atomic tasks.
+
+### `status.md`
+
+Use `status.md` as the first recovery file after a restart.
+
+It should record:
+
+- the single active atomic task for the worklog, or `none` during an explicit handoff state between atomic tasks;
+- the current phase, such as planning, implementation, review, docs update, blocked, or handoff;
+- the immediate next action to take;
+- blockers and pending docs or process-file updates.
+
+`status.md` should stay short and operational. It does not replace `context.md` or task progress files; it points the reader to the right next file to open.
+
+Use `Active Task: none` only when there is no currently active atomic task and the status file is handing off to the next operational action, such as commit preparation or worklog closure.
+
+### Atomic task files
+
+Create one task file per atomic unit of work under `tasks/`, such as `tasks/task01.md`, `tasks/task02.md`, and so on.
+
+Each task file should state:
+
+- the goal of the atomic change;
+- expected acceptance notes or review focus;
+- any important constraints for that slice of work.
+
+### Progress files
+
+Track execution notes in matching progress files such as `tasks/task01_progress.md`.
+
+Progress notes should capture:
+
+- meaningful implementation steps;
+- notable decisions or assumptions made during execution;
+- checks that were run or intentionally skipped.
+
+Do not use progress files as a substitute for durable design documentation.
+
+### Review files
+
+Store review output in numbered files such as `tasks/task01_review1.md`, `tasks/task01_review2.md`, and so on.
+
+These files preserve the `DEV -> REVIEW -> DEV` loop for the atomic task and make it clear which follow-up changes were driven by review.
+
+### Summary files
+
+Close each atomic task with a summary file such as `tasks/task01_summary.md`.
+
+The summary should record:
+
+- what changed;
+- what checks were run;
+- which `docs/` pages were updated;
+- any remaining follow-up items that did not fit into the current atomic task.
+
+## Workflow Rules
+
+1. Create or update the active worklog before significant implementation work starts.
+2. Keep `status.md` current enough that a restart can recover the active task and the next action in one read.
+3. Keep one numbered worklog task per atomic, independently reviewable change.
+4. Run the `DEV -> REVIEW -> DEV(commit)` loop for each atomic task.
+5. Do not treat the worklog as done until the relevant `docs/` pages have been updated.
+6. Keep durable knowledge in `docs/`, not only in local execution notes.
+
+## Migrating Legacy Tasks
+
+If unfinished work still exists in legacy `instration/tasks/` artifacts:
+
+- create or choose the active local worklog that will continue the effort;
+- create local atomic task files that capture the next real units of work;
+- copy forward any still-relevant context or progress into the new worklog;
+- update the legacy task files to mark them as migration history and point to the active worklog path.
+
+Do not continue active implementation in the legacy shared task registry.
+
+## Commit Format
+
+Each atomic task ends with exactly one commit using this format:
+
+```text
+<worklog-id>/taskNN <short Russian action summary>
+```
+
+Examples:
+
+```text
+task56/task01 описать стартовую структуру docs
+task56/task02 уточнить workflow обработки pr feedback
+```
+
+## Practical Guidance
+
+- Keep worklog files concise and readable.
+- Prefer one active worklog per user and one `in_progress` atomic task per active worklog.
+- Prefer appending short factual notes over rewriting history.
+- If a task reveals a durable product or process decision, update `docs/` in the same task.
+- If a review requests follow-up changes, record the review artifact in the worklog before creating the final commit.

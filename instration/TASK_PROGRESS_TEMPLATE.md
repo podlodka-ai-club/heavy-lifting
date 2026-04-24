@@ -1,8 +1,10 @@
 # Task Progress Template
 
+Use this template for local progress files inside `worklog/<username>/<worklog-id>/tasks/`.
+
 ## Metadata
 
-- Task ID: `taskN`
+- Task ID: `taskNN`
 - Status: `todo`
 - Updated At:
 
@@ -16,4 +18,4 @@
 
 ## Completion Summary
 
-Add a short summary after completion, including what was done, changed files, tests run, and any follow-up notes.
+Add a short summary after completion, including what was done, changed files, docs updated, tests run, and any follow-up notes.

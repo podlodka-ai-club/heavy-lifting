@@ -4,12 +4,13 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
-from backend.logging_setup import configure_logging
+from backend.logging_setup import configure_logging, get_logger
 from backend.models import Task
 from backend.protocols.agent_runner import AgentRunnerProtocol, AgentRunRequest, AgentRunResult
 from backend.protocols.scm import ScmProtocol
@@ -48,8 +49,9 @@ class ExecuteWorkerReport:
 class PreparedExecution:
     task_context: EffectiveTaskContext
     workspace: ScmWorkspace
-    branch_name: str
+    branch_name: str | None
     runtime_metadata: dict[str, object]
+    skip_scm_artifacts: bool = False
 
 
 @dataclass(slots=True)
@@ -88,15 +90,43 @@ class ExecuteWorker:
                 return ExecuteWorkerReport()
 
             task.attempt += 1
+            logger = _task_logger(task, attempt=task.attempt)
+            logger.info("worker_task_picked_up")
 
             try:
                 task_chain = repository.load_task_chain(task.root_id or task.id)
                 prepared_execution = self._prepare_execution(task=task, task_chain=task_chain)
-                run_result = self._execute_prepared_execution(prepared_execution)
+                run_result = self._execute_prepared_execution(
+                    task=task,
+                    prepared_execution=prepared_execution,
+                )
+                if run_result.execution_failed:
+                    self._mark_task_failed(
+                        task=task,
+                        error=run_result.failure_message or run_result.payload.summary,
+                        result_payload=run_result.payload,
+                        branch_name=prepared_execution.branch_name,
+                    )
+                    if task_type == TaskType.EXECUTE:
+                        return ExecuteWorkerReport(failed_execute_tasks=1)
+                    return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+                if prepared_execution.skip_scm_artifacts:
+                    self._complete_execute_task_without_scm(
+                        repository=repository,
+                        task=task,
+                        task_context=prepared_execution.task_context,
+                        agent_payload=run_result.payload,
+                    )
+                    return ExecuteWorkerReport(processed_execute_tasks=1)
+
+                branch_name = prepared_execution.branch_name
+                if branch_name is None:
+                    raise ValueError("normal SCM execution requires branch_name")
+
                 commit_reference = self.scm.commit_changes(
                     ScmCommitChangesPayload(
                         workspace_key=prepared_execution.workspace.workspace_key,
-                        branch_name=prepared_execution.branch_name,
+                        branch_name=branch_name,
                         message=self._resolve_commit_message(
                             task_context=prepared_execution.task_context
                         ),
@@ -109,7 +139,7 @@ class ExecuteWorker:
                 push_reference = self.scm.push_branch(
                     ScmPushBranchPayload(
                         workspace_key=prepared_execution.workspace.workspace_key,
-                        branch_name=prepared_execution.branch_name,
+                        branch_name=branch_name,
                         metadata={
                             "task_id": task.id,
                             "flow_type": task.task_type.value,
@@ -122,7 +152,7 @@ class ExecuteWorker:
                         repository=repository,
                         task=task,
                         task_context=prepared_execution.task_context,
-                        branch_name=prepared_execution.branch_name,
+                        branch_name=branch_name,
                         workspace=prepared_execution.workspace,
                         commit_sha=commit_reference.commit_sha,
                         branch_url=push_reference.branch_url,
@@ -134,14 +164,20 @@ class ExecuteWorker:
                     repository=repository,
                     task=task,
                     task_context=prepared_execution.task_context,
-                    branch_name=prepared_execution.branch_name,
+                    branch_name=branch_name,
                     workspace=prepared_execution.workspace,
                     commit_sha=commit_reference.commit_sha,
                     branch_url=push_reference.branch_url,
                     agent_payload=run_result.payload,
                 )
+                logger.info(
+                    "pr_feedback_task_completed",
+                    branch_name=branch_name,
+                    commit_sha=commit_reference.commit_sha,
+                )
                 return ExecuteWorkerReport(processed_pr_feedback_tasks=1)
             except Exception as exc:
+                logger.exception("task_failed", error=str(exc))
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
                 if task_type == TaskType.EXECUTE:
@@ -150,8 +186,13 @@ class ExecuteWorker:
 
     def _prepare_execution(self, *, task: Task, task_chain: list[Task]) -> PreparedExecution:
         task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
+        skip_scm_artifacts = self._should_skip_scm_artifacts(task_context=task_context)
         workspace = self._ensure_workspace(task_context=task_context)
-        branch_name = self._sync_branch(task=task, task_context=task_context, workspace=workspace)
+        branch_name = None
+        if not skip_scm_artifacts:
+            branch_name = self._sync_branch(
+                task=task, task_context=task_context, workspace=workspace
+            )
         runtime_metadata: dict[str, object] = {
             "task_id": task.id,
             "task_type": task.task_type.value,
@@ -161,21 +202,50 @@ class ExecuteWorker:
             "repo_url": workspace.repo_url,
             "repo_ref": workspace.repo_ref,
         }
+        _task_logger(
+            task,
+            workspace_key=workspace.workspace_key,
+            workspace_path=workspace.local_path,
+            branch_name=branch_name,
+            repo_url=workspace.repo_url,
+            repo_ref=workspace.repo_ref,
+        ).info("workspace_prepared")
         return PreparedExecution(
             task_context=task_context,
             workspace=workspace,
             branch_name=branch_name,
             runtime_metadata=runtime_metadata,
+            skip_scm_artifacts=skip_scm_artifacts,
         )
 
-    def _execute_prepared_execution(self, prepared_execution: PreparedExecution) -> AgentRunResult:
-        return self.agent_runner.run(
+    def _execute_prepared_execution(
+        self,
+        *,
+        task: Task,
+        prepared_execution: PreparedExecution,
+    ) -> AgentRunResult:
+        logger = _task_logger(
+            task,
+            workspace_key=prepared_execution.workspace.workspace_key,
+            workspace_path=prepared_execution.workspace.local_path,
+            branch_name=prepared_execution.branch_name,
+            runner=self.agent_runner.__class__.__name__,
+        )
+        logger.info("agent_run_started")
+        result = self.agent_runner.run(
             AgentRunRequest(
                 task_context=prepared_execution.task_context,
                 workspace_path=prepared_execution.workspace.local_path,
                 metadata=prepared_execution.runtime_metadata,
             )
         )
+        logger.info(
+            "agent_run_finished",
+            result_summary=result.payload.summary,
+            token_usage_entries=len(result.payload.token_usage),
+            has_details=result.payload.details is not None,
+        )
+        return result
 
     def _ensure_workspace(self, *, task_context: EffectiveTaskContext) -> ScmWorkspace:
         repo_url = task_context.repo_url
@@ -277,6 +347,51 @@ class ExecuteWorker:
             pr_external_id=pr_external_id,
             pr_url=pr_url,
         )
+        _task_logger(
+            task,
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            pr_external_id=pr_external_id,
+            pr_url=pr_url,
+            pr_action=pr_action,
+        ).info("execute_task_completed")
+        self._record_token_usage(
+            repository=repository, task_id=task.id, usage=result_payload.token_usage
+        )
+        self._ensure_deliver_task(
+            repository=repository, execute_task=task, task_context=task_context
+        )
+
+    def _complete_execute_task_without_scm(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_context: EffectiveTaskContext,
+        agent_payload: TaskResultPayload,
+    ) -> None:
+        result_payload = self._build_result_payload(
+            agent_payload=self._build_delivery_only_payload(agent_payload=agent_payload),
+            flow_type=TaskType.EXECUTE,
+            branch_name=None,
+            commit_sha=None,
+            pr_url=None,
+            branch_url=None,
+            workspace=None,
+            pr_action="skipped",
+        )
+        self._mark_task_done(
+            task=task,
+            result_payload=result_payload,
+            branch_name=None,
+            pr_external_id=None,
+            pr_url=None,
+        )
+        _task_logger(
+            task,
+            scm_artifacts_skipped=True,
+            pr_action="skipped",
+        ).info("execute_task_completed")
         self._record_token_usage(
             repository=repository, task_id=task.id, usage=result_payload.token_usage
         )
@@ -355,6 +470,13 @@ class ExecuteWorker:
         task.branch_name = branch_name
         task.pr_external_id = pr_external_id
         task.pr_url = pr_url
+        _task_logger(
+            task,
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            pr_external_id=pr_external_id,
+            pr_url=pr_url,
+        ).info("pr_feedback_result_applied")
 
         self._record_token_usage(
             repository=repository, task_id=task.id, usage=result_payload.token_usage
@@ -365,7 +487,7 @@ class ExecuteWorker:
         *,
         task: Task,
         result_payload: TaskResultPayload,
-        branch_name: str,
+        branch_name: str | None,
         pr_external_id: str | None,
         pr_url: str | None,
     ) -> None:
@@ -375,6 +497,23 @@ class ExecuteWorker:
         task.branch_name = branch_name
         task.pr_external_id = pr_external_id
         task.pr_url = pr_url
+
+    def _mark_task_failed(
+        self,
+        *,
+        task: Task,
+        error: str,
+        result_payload: TaskResultPayload | None = None,
+        branch_name: str | None = None,
+    ) -> None:
+        task.status = TaskStatus.FAILED
+        task.error = error
+        task.result_payload = (
+            _dump_result_payload(result_payload) if result_payload is not None else None
+        )
+        task.branch_name = branch_name
+        task.pr_external_id = None
+        task.pr_url = None
 
     def _ensure_deliver_task(
         self,
@@ -394,7 +533,7 @@ class ExecuteWorker:
             if task_context.execution_context is not None
             else "execution result"
         )
-        repository.create_task(
+        deliver_task = repository.create_task(
             TaskCreateParams(
                 task_type=TaskType.DELIVER,
                 parent_id=execute_task.id,
@@ -410,6 +549,13 @@ class ExecuteWorker:
                 context={"title": f"Deliver result for {execution_title}"},
             )
         )
+        _task_logger(
+            execute_task,
+            deliver_task_id=deliver_task.id,
+            branch_name=deliver_task.branch_name,
+            pr_external_id=deliver_task.pr_external_id,
+            pr_url=deliver_task.pr_url,
+        ).info("deliver_task_created")
 
     def _record_token_usage(
         self,
@@ -437,23 +583,23 @@ class ExecuteWorker:
         *,
         agent_payload: TaskResultPayload,
         flow_type: TaskType,
-        branch_name: str,
-        commit_sha: str,
+        branch_name: str | None,
+        commit_sha: str | None,
         pr_url: str | None,
         branch_url: str | None,
-        workspace: ScmWorkspace,
+        workspace: ScmWorkspace | None,
         pr_action: str,
     ) -> TaskResultPayload:
         metadata = dict(agent_payload.metadata)
-        metadata.update(
-            {
-                "workspace_key": workspace.workspace_key,
-                "repo_url": workspace.repo_url,
-                "repo_ref": workspace.repo_ref,
-                "flow_type": flow_type.value,
-                "pr_action": pr_action,
-            }
-        )
+        metadata.update({"flow_type": flow_type.value, "pr_action": pr_action})
+        if workspace is not None:
+            metadata.update(
+                {
+                    "workspace_key": workspace.workspace_key,
+                    "repo_url": workspace.repo_url,
+                    "repo_ref": workspace.repo_ref,
+                }
+            )
         links = list(agent_payload.links)
         _append_link_once(links, label="branch", url=branch_url)
         _append_link_once(links, label="pull_request", url=pr_url)
@@ -465,6 +611,71 @@ class ExecuteWorker:
                 "links": links,
                 "metadata": metadata,
             }
+        )
+
+    def _build_delivery_only_payload(
+        self, *, agent_payload: TaskResultPayload
+    ) -> TaskResultPayload:
+        metadata = dict(agent_payload.metadata)
+        metadata["delivery_mode"] = "estimate_only"
+        tracker_comment = self._build_delivery_only_comment(agent_payload=agent_payload)
+        return agent_payload.model_copy(
+            update={
+                "branch_name": None,
+                "commit_sha": None,
+                "pr_url": None,
+                "links": [],
+                "tracker_comment": tracker_comment,
+                "metadata": metadata,
+            }
+        )
+
+    def _build_delivery_only_comment(self, *, agent_payload: TaskResultPayload) -> str:
+        stdout_preview = agent_payload.metadata.get("stdout_preview")
+        if isinstance(stdout_preview, str) and stdout_preview.strip():
+            return stdout_preview.strip()
+        if agent_payload.tracker_comment:
+            return agent_payload.tracker_comment
+        if agent_payload.details:
+            details = agent_payload.details.strip()
+            if details.startswith("stdout:\n"):
+                return details.removeprefix("stdout:\n").strip()
+            return details
+        return agent_payload.summary
+
+    def _should_skip_scm_artifacts(self, *, task_context: EffectiveTaskContext) -> bool:
+        if task_context.flow_type != TaskType.EXECUTE:
+            return False
+
+        text_parts = [
+            task_context.instructions,
+            task_context.tracker_context.title if task_context.tracker_context else None,
+            task_context.tracker_context.description if task_context.tracker_context else None,
+            task_context.execution_context.title if task_context.execution_context else None,
+            task_context.execution_context.description if task_context.execution_context else None,
+        ]
+        normalized_text = "\n".join(part.lower() for part in text_parts if part)
+        estimate_markers = (
+            "estimate only",
+            "only estimate",
+            "story point",
+            "story-point",
+            "оцен",
+            "только оцен",
+        )
+        no_code_markers = (
+            "do not modify code",
+            "don't modify code",
+            "do not change code",
+            "without code changes",
+            "no code changes",
+            "не изменяй код",
+            "не изменять код",
+            "не менять код",
+            "без изменений кода",
+        )
+        return any(marker in normalized_text for marker in estimate_markers) and any(
+            marker in normalized_text for marker in no_code_markers
         )
 
     def _resolve_branch_name(self, *, task: Task, task_context: EffectiveTaskContext) -> str:
@@ -564,7 +775,7 @@ def run(
 ) -> ExecuteWorker:
     settings = get_settings()
     logger = configure_logging(app_name=settings.app_name, component="worker2")
-    logger.info("Starting execute worker once=%s max_iterations=%s", once, max_iterations)
+    logger.info("worker_started", once=once, max_iterations=max_iterations)
     worker = build_execute_worker()
     if once:
         worker.poll_once()
@@ -599,6 +810,25 @@ def _slugify(value: str) -> str:
 
 def _dump_result_payload(payload: TaskResultPayload) -> dict[str, object]:
     return payload.model_dump(mode="json")
+
+
+def _task_logger(task: Task, **fields: Any):
+    log_fields = {
+        "task_id": task.id,
+        "root_task_id": task.root_id or task.id,
+        "parent_id": task.parent_id,
+        "task_type": task.task_type.value,
+        "task_status": task.status.value,
+        "tracker_name": task.tracker_name,
+        "tracker_external_id": task.external_task_id,
+        "tracker_parent_external_id": task.external_parent_id,
+        "workspace_key": task.workspace_key,
+        "branch_name": task.branch_name,
+        "pr_external_id": task.pr_external_id,
+        "pr_url": task.pr_url,
+    }
+    log_fields.update(fields)
+    return get_logger(__name__, component="worker2").bind(**log_fields)
 
 
 __all__ = [

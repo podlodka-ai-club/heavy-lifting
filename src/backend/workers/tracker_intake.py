@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
+from backend.logging_setup import get_logger
 from backend.protocols.scm import ScmProtocol
 from backend.protocols.tracker import TrackerProtocol
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
@@ -62,9 +63,10 @@ class TrackerIntakeWorker:
     _PR_FEEDBACK_CURSOR_METADATA_KEY = "scm_pr_feedback_cursor"
 
     def poll_once(self) -> TrackerIntakeReport:
+        logger = _worker_logger(tracker_name=self.tracker_name)
         report = self.poll_tracker_once()
         feedback_report = self.poll_pr_feedback_once()
-        return TrackerIntakeReport(
+        combined_report = TrackerIntakeReport(
             fetched_count=report.fetched_count,
             created_fetch_tasks=report.created_fetch_tasks,
             created_execute_tasks=report.created_execute_tasks,
@@ -74,46 +76,97 @@ class TrackerIntakeWorker:
             skipped_feedback_items=feedback_report.skipped_feedback_items,
             unmapped_feedback_items=feedback_report.unmapped_feedback_items,
         )
+        logger.info(
+            "tracker_intake_cycle_completed",
+            fetched_count=combined_report.fetched_count,
+            created_fetch_tasks=combined_report.created_fetch_tasks,
+            created_execute_tasks=combined_report.created_execute_tasks,
+            skipped_tasks=combined_report.skipped_tasks,
+            fetched_feedback_items=combined_report.fetched_feedback_items,
+            created_pr_feedback_tasks=combined_report.created_pr_feedback_tasks,
+            skipped_feedback_items=combined_report.skipped_feedback_items,
+            unmapped_feedback_items=combined_report.unmapped_feedback_items,
+        )
+        return combined_report
 
     def poll_tracker_once(self) -> TrackerIntakeReport:
-        tracker_tasks = self.tracker.fetch_tasks(
-            TrackerFetchTasksQuery(statuses=list(self.fetch_statuses), limit=self.fetch_limit)
+        logger = _worker_logger(tracker_name=self.tracker_name)
+        logger.info(
+            "tracker_poll_started",
+            fetch_limit=self.fetch_limit,
+            fetch_statuses=[status.value for status in self.fetch_statuses],
         )
-        report = TrackerIntakeReport(fetched_count=len(tracker_tasks))
+        try:
+            tracker_tasks = self.tracker.fetch_tasks(
+                TrackerFetchTasksQuery(statuses=list(self.fetch_statuses), limit=self.fetch_limit)
+            )
+            report = TrackerIntakeReport(fetched_count=len(tracker_tasks))
 
-        with session_scope(session_factory=self.session_factory) as session:
-            repository = TaskRepository(session)
-            for tracker_task in tracker_tasks:
-                outcome = self._ingest_tracker_task(
-                    repository=repository,
-                    tracker_task=tracker_task,
-                )
-                report = TrackerIntakeReport(
-                    fetched_count=report.fetched_count,
-                    created_fetch_tasks=report.created_fetch_tasks
-                    + int(outcome.created_fetch_task),
-                    created_execute_tasks=report.created_execute_tasks
-                    + int(outcome.created_execute_task),
-                    skipped_tasks=report.skipped_tasks
-                    + int(not outcome.created_fetch_task and not outcome.created_execute_task),
-                )
+            with session_scope(session_factory=self.session_factory) as session:
+                repository = TaskRepository(session)
+                for tracker_task in tracker_tasks:
+                    outcome = self._ingest_tracker_task(
+                        repository=repository,
+                        tracker_task=tracker_task,
+                    )
+                    report = TrackerIntakeReport(
+                        fetched_count=report.fetched_count,
+                        created_fetch_tasks=report.created_fetch_tasks
+                        + int(outcome.created_fetch_task),
+                        created_execute_tasks=report.created_execute_tasks
+                        + int(outcome.created_execute_task),
+                        skipped_tasks=report.skipped_tasks
+                        + int(not outcome.created_fetch_task and not outcome.created_execute_task),
+                    )
+        except Exception as exc:
+            logger.exception(
+                "tracker_poll_failed",
+                error=str(exc),
+                fetch_limit=self.fetch_limit,
+                fetch_statuses=[status.value for status in self.fetch_statuses],
+            )
+            raise
 
+        logger.info(
+            "tracker_poll_completed",
+            fetched_count=report.fetched_count,
+            created_fetch_tasks=report.created_fetch_tasks,
+            created_execute_tasks=report.created_execute_tasks,
+            skipped_tasks=report.skipped_tasks,
+        )
         return report
 
     def poll_pr_feedback_once(self) -> TrackerIntakeReport:
-        report = TrackerIntakeReport()
+        logger = _worker_logger(tracker_name=self.tracker_name)
+        logger.info("pr_feedback_poll_started", feedback_limit=self.feedback_limit)
+        try:
+            report = TrackerIntakeReport()
 
-        with session_scope(session_factory=self.session_factory) as session:
-            repository = TaskRepository(session)
-            execute_tasks = repository.list_execute_tasks_with_prs()
+            with session_scope(session_factory=self.session_factory) as session:
+                repository = TaskRepository(session)
+                execute_tasks = repository.list_execute_tasks_with_prs()
 
-            for execute_task in execute_tasks:
-                report = self._poll_execute_pr_feedback(
-                    repository=repository,
-                    execute_task=execute_task,
-                    report=report,
-                )
+                for execute_task in execute_tasks:
+                    report = self._poll_execute_pr_feedback(
+                        repository=repository,
+                        execute_task=execute_task,
+                        report=report,
+                    )
+        except Exception as exc:
+            logger.exception(
+                "pr_feedback_poll_failed",
+                error=str(exc),
+                feedback_limit=self.feedback_limit,
+            )
+            raise
 
+        logger.info(
+            "pr_feedback_poll_completed",
+            fetched_feedback_items=report.fetched_feedback_items,
+            created_pr_feedback_tasks=report.created_pr_feedback_tasks,
+            skipped_feedback_items=report.skipped_feedback_items,
+            unmapped_feedback_items=report.unmapped_feedback_items,
+        )
         return report
 
     def run_forever(
@@ -153,6 +206,7 @@ class TrackerIntakeWorker:
         repository: TaskRepository,
         tracker_task: TrackerTask,
     ) -> IntakeOutcome:
+        logger = _tracker_task_logger(tracker_task=tracker_task, tracker_name=self.tracker_name)
         fetch_task = repository.find_fetch_task_by_tracker_task(
             tracker_name=self.tracker_name,
             external_task_id=tracker_task.external_id,
@@ -175,6 +229,14 @@ class TrackerIntakeWorker:
                 )
             )
             created_fetch_task = True
+            logger.info(
+                "fetch_task_created",
+                task_id=fetch_task.id,
+                root_task_id=fetch_task.root_id or fetch_task.id,
+                repo_url=fetch_task.repo_url,
+                repo_ref=fetch_task.repo_ref,
+                workspace_key=fetch_task.workspace_key,
+            )
 
         execute_task = repository.find_child_task(
             parent_id=fetch_task.id, task_type=TaskType.EXECUTE
@@ -182,7 +244,7 @@ class TrackerIntakeWorker:
         created_execute_task = False
 
         if execute_task is None:
-            repository.create_task(
+            execute_task = repository.create_task(
                 TaskCreateParams(
                     task_type=TaskType.EXECUTE,
                     parent_id=fetch_task.id,
@@ -198,6 +260,20 @@ class TrackerIntakeWorker:
             )
             created_execute_task = True
 
+        if created_execute_task:
+            logger.info(
+                "execute_task_created",
+                task_id=execute_task.id,
+                root_task_id=execute_task.root_id or execute_task.id,
+                parent_id=execute_task.parent_id,
+                repo_url=execute_task.repo_url,
+                repo_ref=execute_task.repo_ref,
+                workspace_key=execute_task.workspace_key,
+            )
+
+        if not created_fetch_task and not created_execute_task:
+            logger.info("task_intake_skipped")
+
         return IntakeOutcome(
             created_fetch_task=created_fetch_task,
             created_execute_task=created_execute_task,
@@ -209,8 +285,14 @@ class TrackerIntakeWorker:
         repository: TaskRepository,
         feedback_item: ScmPullRequestFeedback,
     ) -> PrFeedbackIntakeOutcome:
+        logger = _worker_logger(
+            tracker_name=self.tracker_name,
+            pr_external_id=feedback_item.pr_external_id,
+            feedback_comment_id=feedback_item.comment_id,
+        )
         execute_task = repository.find_execute_task_by_pr_external_id(feedback_item.pr_external_id)
         if execute_task is None:
+            logger.info("pr_feedback_unmapped")
             return PrFeedbackIntakeOutcome(unmapped_feedback_item=True)
 
         existing_feedback_task = repository.find_child_task_by_external_id(
@@ -219,9 +301,15 @@ class TrackerIntakeWorker:
             external_task_id=feedback_item.comment_id,
         )
         if existing_feedback_task is not None:
+            logger.info(
+                "pr_feedback_skipped",
+                task_id=existing_feedback_task.id,
+                root_task_id=existing_feedback_task.root_id or existing_feedback_task.id,
+                parent_id=existing_feedback_task.parent_id,
+            )
             return PrFeedbackIntakeOutcome(skipped_feedback_item=True)
 
-        repository.create_task(
+        feedback_task = repository.create_task(
             TaskCreateParams(
                 task_type=TaskType.PR_FEEDBACK,
                 parent_id=execute_task.id,
@@ -238,6 +326,14 @@ class TrackerIntakeWorker:
                 input_payload=TaskInputPayload(pr_feedback=feedback_item).model_dump(mode="python"),
             )
         )
+        logger.info(
+            "pr_feedback_task_created",
+            task_id=feedback_task.id,
+            root_task_id=feedback_task.root_id or feedback_task.id,
+            parent_id=feedback_task.parent_id,
+            branch_name=feedback_task.branch_name,
+            workspace_key=feedback_task.workspace_key,
+        )
         return PrFeedbackIntakeOutcome(created_pr_feedback_task=True)
 
     def _poll_execute_pr_feedback(
@@ -247,9 +343,16 @@ class TrackerIntakeWorker:
         execute_task,
         report: TrackerIntakeReport,
     ) -> TrackerIntakeReport:
+        logger = _task_logger(execute_task)
         since_cursor = self._get_pr_feedback_cursor(execute_task)
         latest_cursor = since_cursor
         page_cursor: str | None = None
+
+        logger.info(
+            "pr_feedback_intake_started",
+            since_cursor=since_cursor,
+            feedback_limit=self.feedback_limit,
+        )
 
         while True:
             feedback_page = self.scm.read_pr_feedback(
@@ -290,6 +393,7 @@ class TrackerIntakeWorker:
             page_cursor = feedback_page.next_page_cursor
 
         self._set_pr_feedback_cursor(execute_task, latest_cursor)
+        logger.info("pr_feedback_intake_completed", latest_cursor=latest_cursor)
         return report
 
     def _get_pr_feedback_cursor(self, execute_task) -> str | None:
@@ -331,6 +435,36 @@ def _dump_model_or_none(value: SchemaModel | None) -> dict[str, object] | None:
     if value is None:
         return None
     return value.model_dump(mode="python")
+
+
+def _worker_logger(**fields: object):
+    return get_logger(__name__, component="worker1").bind(**fields)
+
+
+def _tracker_task_logger(*, tracker_task: TrackerTask, tracker_name: str):
+    return _worker_logger(
+        tracker_name=tracker_name,
+        tracker_external_id=tracker_task.external_id,
+        tracker_parent_external_id=tracker_task.parent_external_id,
+        repo_url=tracker_task.repo_url,
+        repo_ref=tracker_task.repo_ref,
+        workspace_key=tracker_task.workspace_key,
+    )
+
+
+def _task_logger(task):
+    return _worker_logger(
+        task_id=task.id,
+        root_task_id=task.root_id or task.id,
+        parent_id=task.parent_id,
+        task_type=task.task_type.value,
+        tracker_name=task.tracker_name,
+        tracker_external_id=task.external_task_id,
+        tracker_parent_external_id=task.external_parent_id,
+        workspace_key=task.workspace_key,
+        branch_name=task.branch_name,
+        pr_external_id=task.pr_external_id,
+    )
 
 
 __all__ = [

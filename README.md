@@ -40,9 +40,10 @@
 
 - `src/backend` — код приложения;
 - `tests` — тесты;
-- `instration/project.md` — актуальный scope MVP;
-- `instration/instruction.md` — workflow по task-файлам;
-- `instration/tasks/` — атомарные задачи, progress, review и summary;
+- `docs/` — долговечная документация по системе и процессам;
+- `docs/vision/system.md` — актуальное vision и границы MVP;
+- `docs/process/worklog.md` — workflow локального worklog;
+- `instration/project.md` — supporting scope и правила на время миграции процесса;
 - `AGENTS.md` — правила работы агентов в этом репозитории.
 
 ## Быстрый старт локально
@@ -345,28 +346,17 @@ uv run pytest tests/test_orchestration_e2e.py -k pr_feedback
 
 Если нужен именно контейнерный запуск, в `docker-compose.yml` уже описаны сервисы `api`, `worker1`, `worker2` и `worker3`, но для локальной разработки документация в этом README ориентирована на запуск через `uv` и `make`.
 
-## Workflow по task-файлам
+## Workflow через worklog
 
-Рабочий процесс описан в `instration/instruction.md` и `AGENTS.md`.
+Основной процесс теперь описан в `docs/process/worklog.md` и `docs/vision/system.md`.
 
 Короткая версия:
 
-1. Прочитать `instration/project.md`.
-2. Создать или обновить `instration/tasks/taskN.md` и `instration/tasks/taskN_progress.md` до начала значимой работы.
-3. Выполнить атомарную задачу и писать ход работы только в `instration/tasks/taskN_progress.md`.
-4. Передать результат в `REVIEW` и сохранить вывод в `instration/tasks/taskN_reviewK.md`.
-5. Если review принят, завершить задачу коммитом в формате `taskN <короткое русское действие>`.
-6. Сохранить короткий итог в `instration/tasks/taskN_summary.md`.
+1. Прочитать `docs/vision/system.md`, чтобы свериться с целью системы, MVP scope и ключевыми сценариями.
+2. Создать или обновить локальный worklog в `worklog/<username>/<worklog-id>/` до начала значимой работы.
+3. Держать в worklog `context.md`, атомарные task-файлы, progress, review и summary по текущей задаче.
+4. Выполнять цикл `DEV -> REVIEW -> DEV(commit)` для каждого атомарного изменения.
+5. Перед завершением worklog обновить релевантные страницы в `docs/`, если появились новые долговечные знания.
+6. Делать commit в формате `<worklog-id>/taskNN <короткое русское действие>` после review approval.
 
-Обязательный цикл для атомарной задачи:
-
-```text
-DEV -> REVIEW -> DEV(commit)
-```
-
-Дополнительные правила:
-
-- не делать commit до review approval;
-- один atomic task = один commit;
-- перед коммитом кодовых изменений запускать `make lint` и `make typecheck`;
-- историю follow-up итераций хранить в дочерних `pr_feedback` задачах.
+`instration/project.md`, `instration/instruction.md` и другие файлы в `instration/` остаются supporting-артефактами процесса, но shared task registry в репозитории больше не считается основным рабочим механизмом.

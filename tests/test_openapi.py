@@ -5,6 +5,7 @@ from dataclasses import replace
 from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
 from backend.api.app import create_app
+from backend.api.openapi import build_openapi_schema
 from backend.composition import RuntimeContainer
 from backend.services.agent_runner import LocalAgentRunner
 from backend.settings import get_settings
@@ -71,6 +72,14 @@ def test_openapi_json_describes_task_and_stats_responses() -> None:
     assert schema["paths"]["/stats"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/StatsResponse"}
+
+
+def test_build_openapi_schema_returns_isolated_copy() -> None:
+    first_schema = build_openapi_schema()
+
+    first_schema["info"]["title"] = "mutated"
+
+    assert build_openapi_schema()["info"]["title"] == "Heavy Lifting API"
 
 
 def _runtime() -> RuntimeContainer:

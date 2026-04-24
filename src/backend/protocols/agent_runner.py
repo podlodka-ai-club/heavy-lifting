@@ -24,6 +24,21 @@ class AgentRunResult:
     def summary_metadata(self) -> dict[str, object]:
         return dict(self.payload.metadata)
 
+    @property
+    def execution_failed(self) -> bool:
+        status = self.payload.metadata.get("execution_status")
+        return status == "failed"
+
+    @property
+    def failure_message(self) -> str | None:
+        if not self.execution_failed:
+            return None
+
+        failure_message = self.payload.metadata.get("failure_message")
+        if isinstance(failure_message, str) and failure_message.strip():
+            return failure_message
+        return self.payload.summary
+
 
 @runtime_checkable
 class AgentRunnerProtocol(Protocol):

@@ -3,45 +3,43 @@
 ## Metadata
 
 - ID: `task55`
-- Title: Добавить контекст Hacker Sprint 1 в документацию
-- Status: `done`
+- Title: Описать event ingestion для комментариев в tracker и PR
+- Status: `migrated`
 - Priority: `medium`
 - Owner: `agent-programmer`
-- Depends on: `task54`
+- Depends on: `task53`, `task54`
 - Next Tasks: `none`
 
 ## Goal
 
-Сохранить в репозитории важный контекст из Notion-страницы Hacker Sprint 1 и связать его с текущей MVP-архитектурой проекта.
+Спроектировать единый подход к периодическому сбору новых событий из tracker и SCM без смешивания intake новых задач с follow-up событиями.
 
 ## Detailed Description
 
-Нужно добавить документацию внутри `instration/`, потому что это зона, которую основной оркестрирующий агент может редактировать напрямую. Документация должна зафиксировать тему спринта, минимальные требования, дополнительные блоки и честное соответствие текущему MVP.
+Помимо новых задач, система должна реагировать на дополнительные события: комментарии в tracker, PR feedback, изменения статуса и другие follow-up сигналы. Сейчас polling PR feedback уже встроен в `worker1`, но в дальнейшем это может потребовать отдельного worker-а или выделенного monitor flow.
 
-Важно не выдавать Notion-страницу за полноценную архитектурную спецификацию: источник содержит sprint brief, требования и идеи расширений, а конкретная архитектура репозитория описана в `instration/project.md`.
+Нужно описать, какие события считаются входом в оркестратор, как они нормализуются, в какие internal tasks преобразуются и как исключаются дубликаты. Отдельно нужно проработать, нужно ли в MVP выносить polling comments/PR feedback в отдельный worker или пока достаточно оставить это в ingestion worker с явным разделением ролей.
 
-Acceptance criteria:
+В рамках задачи нужно подготовить проектное решение без кода: event taxonomy, deduplication keys, mapping событий в internal tasks и рекомендуемое разбиение ответственности по worker-ам.
 
-- В `instration/` есть отдельный документ с выжимкой Notion-страницы.
-- `instration/project.md` ссылается на новый документ как на исходный контекст.
-- В документации явно описано соответствие sprint brief текущему MVP.
-- Зафиксировано, какие идеи остаются будущими расширениями.
+Legacy note: active continuation moved to the local worklog `worklog/denis/triage-routing/tasks/task03.md`.
 
 ## Deliverables
 
-- `instration/hacker_sprint_1.md`
-- Обновление `instration/project.md`
-- Task progress, review и summary файлы для `task55`
+- Описание event taxonomy для tracker и SCM
+- Правила нормализации и deduplication для follow-up событий
+- Рекомендация по выделению отдельного monitor worker или сохранению логики в текущем ingestion worker
 
 ## Context References
 
-- `https://www.notion.so/Hacker-Sprint-1-33f2db4c860e8064a657e199b4578f66`
 - `instration/project.md`
-- `instration/instruction.md`
+- `src/backend/workers/tracker_intake.py`
+- `src/backend/protocols/tracker.py`
+- `src/backend/protocols/scm.py`
 
 ## Review References
 
-- `instration/tasks/task55_review1.md`
+- `instration/TASK_REVIEW_TEMPLATE.md`
 
 ## Progress References
 
@@ -51,3 +49,4 @@ Acceptance criteria:
 
 Keep the task definition stable. Put execution progress, completion notes, changed files, and test results into the matching progress file.
 
+This legacy task file remains only as migration history. Continue active work in the worklog.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from decimal import Decimal
 
 from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import Base
@@ -184,6 +185,8 @@ def test_cli_agent_runner_builds_command_from_config() -> None:
         "run",
         "--dir",
         "/workspace/task46",
+        "--format",
+        "json",
         "--model",
         "openai/gpt-5.4",
         "prompt body",
@@ -212,7 +215,14 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
         return subprocess.CompletedProcess(
             args=command,
             returncode=0,
-            stdout="Applied requested changes.\nCreated patch.",
+            stdout=(
+                '{"type":"step_start","part":{"type":"step-start"}}\n'
+                '{"type":"text","part":{"type":"text","text":"Applied requested changes."}}\n'
+                '{"type":"text","part":{"type":"text","text":"Created patch."}}\n'
+                '{"type":"step_finish","part":{"type":"step-finish","tokens":{"total":144,'
+                '"input":101,"output":33,"reasoning":10,"cache":{"read":7,"write":2}},'
+                '"cost":"0.004321"}}\n'
+            ),
             stderr="",
         )
 
@@ -231,6 +241,8 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
         "run",
         "--dir",
         str(tmp_path / "workspace"),
+        "--format",
+        "json",
         "--model",
         "openai/gpt-5.4",
         captured["command"][-1],
@@ -249,7 +261,17 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
     assert result.payload.summary == "CLI agent run completed successfully."
     assert result.payload.branch_name == "task46/cli-runner"
     assert result.payload.details == "stdout:\nApplied requested changes.\nCreated patch."
-    assert result.payload.token_usage == []
+    assert [entry.model_dump() for entry in result.payload.token_usage] == [
+        {
+            "model": "gpt-5.4",
+            "provider": "openai",
+            "input_tokens": 101,
+            "output_tokens": 33,
+            "cached_tokens": 7,
+            "estimated": False,
+            "cost_usd": Decimal("0.004321"),
+        }
+    ]
     assert result.summary_metadata == {
         "runner_adapter": "cli",
         "runner": "opencode",
@@ -261,13 +283,39 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
             "run",
             "--dir",
             str(tmp_path / "workspace"),
+            "--format",
+            "json",
             "--model",
             "openai/gpt-5.4",
             captured["command"][-1],
         ],
         "exit_code": 0,
+        "execution_status": "succeeded",
         "stdout_preview": "Applied requested changes.\nCreated patch.",
+        "stdout_raw_preview": (
+            '{"type":"step_start","part":{"type":"step-start"}}\n'
+            '{"type":"text","part":{"type":"text","text":"Applied requested changes."}}\n'
+            '{"type":"text","part":{"type":"text","text":"Created patch."}}\n'
+            '{"type":"step_finish","part":{"type":"step-finish","tokens":{"total":144,'
+            '"input":101,"output":33,"reasoning":10,"cache":{"read":7,"write":2}},'
+            '"cost":"0.004321"}}'
+        ),
+        "stdout_preview_source": "text_events",
+        "stdout_event_count": 4,
+        "stdout_event_types": ["step_start", "text", "text", "step_finish"],
         "stderr_preview": None,
+        "usage": {
+            "status": "parsed",
+            "model": "gpt-5.4",
+            "provider": "openai",
+            "input_tokens": 101,
+            "output_tokens": 33,
+            "cached_tokens": 7,
+            "cost_usd": "0.004321",
+            "reasoning_tokens": 10,
+            "total_tokens": 144,
+            "cache_write_tokens": 2,
+        },
         "runner_metadata": {
             "subcommand": "run",
             "profile": "backend",
@@ -294,7 +342,7 @@ def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None
         return subprocess.CompletedProcess(
             args=command,
             returncode=17,
-            stdout="",
+            stdout='{"type":"text","part":{"type":"text","text":"Model request failed."}}\n',
             stderr="Model request failed.",
         )
 
@@ -309,9 +357,16 @@ def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None
     )
 
     assert result.payload.summary == "CLI agent run failed with exit code 17."
-    assert result.payload.details == "stderr:\nModel request failed."
+    assert (
+        result.payload.details == "stdout:\nModel request failed.\nstderr:\nModel request failed."
+    )
     assert result.summary_metadata["exit_code"] == 17
-    assert result.summary_metadata["stdout_preview"] is None
+    assert result.summary_metadata["stdout_preview"] == "Model request failed."
+    assert result.summary_metadata["stdout_preview_source"] == "text_events"
+    assert result.summary_metadata["usage"] == {
+        "status": "missing",
+        "reason": "step_finish_not_found",
+    }
     assert result.summary_metadata["stderr_preview"] == "Model request failed."
     assert result.summary_metadata["runner_metadata"] == {
         "subcommand": "run",
@@ -321,6 +376,99 @@ def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None
         "model_argument": None,
         "api_key_env_var": None,
         "base_url_env_var": None,
+    }
+
+
+def test_cli_agent_runner_falls_back_when_usage_is_missing(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=(
+                '{"type":"step_start","part":{"type":"step-start"}}\n'
+                '{"type":"text","part":{"type":"text","text":"No usage payload returned."}}\n'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.details == "stdout:\nNo usage payload returned."
+    assert result.payload.token_usage == []
+    assert result.summary_metadata["usage"] == {
+        "status": "missing",
+        "reason": "step_finish_not_found",
+    }
+
+
+def test_cli_agent_runner_marks_malformed_usage_explicitly(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=(
+                '{"type":"text","part":{"type":"text","text":"Malformed usage."}}\n'
+                '{"type":"step_finish","part":{"type":"step-finish","tokens":{"input":"oops",'
+                '"output":3,"cache":{"read":0}},"cost":0}}\n'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.token_usage == []
+    assert result.summary_metadata["usage"]["status"] == "malformed"
+    assert result.summary_metadata["usage"]["reason"] == "invalid_usage_fields"
+    assert "tokens.input" in result.summary_metadata["usage"]["error"]
+
+
+def test_cli_agent_runner_falls_back_when_cost_is_missing(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=(
+                '{"type":"text","part":{"type":"text","text":"Usage without cost."}}\n'
+                '{"type":"step_finish","part":{"type":"step-finish","tokens":{"input":8,'
+                '"output":3,"cache":{"read":1}}}}\n'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.details == "stdout:\nUsage without cost."
+    assert result.payload.token_usage == []
+    assert result.summary_metadata["usage"] == {
+        "status": "missing",
+        "reason": "cost_not_found",
     }
 
 
@@ -347,14 +495,16 @@ def test_cli_agent_runner_uses_model_hint_without_provider(monkeypatch, tmp_path
         AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
     )
 
-    assert captured["command"][:5] == [
+    assert captured["command"][:6] == [
         "opencode",
         "run",
         "--dir",
         str(tmp_path / "workspace"),
-        "--model",
+        "--format",
+        "json",
     ]
-    assert captured["command"][5] == "gpt-5.4"
+    assert captured["command"][6] == "--model"
+    assert captured["command"][7] == "gpt-5.4"
     assert "--agent" not in captured["command"]
 
 

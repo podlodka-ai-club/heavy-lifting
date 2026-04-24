@@ -8,7 +8,7 @@
 
 ## Purpose
 
-This document captures the architectural intent from the Excalidraw scheme. The scheme is a planning artifact, not a full implementation contract. `instration/project.md` remains the authoritative MVP specification; this file explains the visual process and the intended orchestration model behind it.
+This document captures the architectural intent from the Excalidraw scheme. The scheme is a planning artifact, not a full implementation contract. `docs/vision/system.md` remains the durable MVP system vision, while `instration/project.md` keeps migration-era implementation details.
 
 The scheme has two main layers:
 
@@ -95,7 +95,7 @@ The scheme says agents share results through:
 
 In this repository, that intent maps to:
 
-- `instration/tasks/taskN_progress.md` for human-readable task progress;
+- `worklog/<username>/<worklog-id>/tasks/taskNN_progress.md` for local human-readable execution progress;
 - `tasks.context`, `tasks.input_payload`, and `tasks.result_payload` for durable runtime handoff;
 - child tasks for follow-up work, especially `pr_feedback`.
 
@@ -162,4 +162,3 @@ The scheme supports the current MVP direction, but it also contains ideas that s
 - deployment automation.
 
 The immediate architectural priority is not to add more agents. The priority is to keep the task lifecycle explicit enough that those agents can be introduced without rewriting persistence and worker boundaries.
-

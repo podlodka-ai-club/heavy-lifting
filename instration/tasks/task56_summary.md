@@ -1,21 +1,27 @@
-# Task Summary
+# Task 56 Summary
 
 ## Metadata
 
 - Task ID: `task56`
 - Date: `2026-04-24`
-- Prepared By: `DEV`
+- Prepared By: `agent-programmer`
 
 ## Summary
 
-Добавлен `instration/architecture_scheme.md` с выжимкой архитектурной Excalidraw-схемы: business process, runtime loops, agent roles, handoff, observability/statistics, API/storage mapping и backlog notes. `instration/project.md` теперь ссылается на этот документ как на companion architecture context.
+Переведен repository workflow на модель `docs/ + worklog/`: долговечные знания теперь фиксируются в `docs/`, а локальная кратковременная память по фичам переносится в gitignored `worklog/`.
 
 ## Who Did What
 
-- `DEV`: расшифровал Excalidraw room, извлек структуру схемы, добавил документацию и task artifacts.
-- `REVIEW`: проверил документационные изменения и одобрил `task56`.
+- `DEV`: создал стартовую структуру `docs/`, обновил `README.md` и `.gitignore`, а также локальный worklog для task56.
+- `REVIEW`: провел два раунда review в локальном worklog; в первом раунде выявил расхождение по пути task-артефактов, во втором подтвердил исправление и одобрил задачу.
 
 ## Next Step
 
-Использовать `instration/architecture_scheme.md` при планировании следующих задач, не расширяя MVP scope без отдельного task definition.
+Продолжить миграцию durable contracts и process knowledge из `instration/` в `docs/`, уменьшая зависимость от migration-era файлов.
 
+## Docs Updated
+
+- `docs/README.md`
+- `docs/vision/system.md`
+- `docs/vision/roadmap.md`
+- `docs/process/worklog.md`
