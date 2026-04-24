@@ -104,6 +104,7 @@ The business kind is identified during triage and stored in `result_payload.clas
 
 ## Triage And Routing Rules
 
+- The durable triage signal set, supported outcomes, and routing matrix live in `docs/contracts/triage-routing.md`.
 - Every new tracker task must first go through a triage step before implementation work starts.
 - `worker1` ingests a new tracker task and creates the first executable step for triage.
 - The triage business step runs inside an `execute` task handled by `worker2`.

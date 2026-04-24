@@ -38,6 +38,8 @@ The tracker submits a new task to the orchestrator through the intake API. The o
 
 The orchestration layer normalizes the incoming request, determines the business task kind, and fans out internal work such as fetch, execute, and deliver tasks. In the MVP, triage itself runs as an `execute` step owned by `worker2`, while `worker1` remains responsible for ingestion and task creation. Triage is responsible for shaping the pipeline, not for performing the implementation itself.
 
+For new intake, triage may route the task into research, route it into implementation, or stop with a tracker reply such as clarification, rejection, research-only output, or estimate-only output.
+
 ### Research
 
 Before code changes are applied, the runner may need to inspect repository context, read supporting documentation, and collect constraints from the task payload. Research produces enough structured context for implementation without trying to become a general knowledge system.
@@ -65,6 +67,8 @@ The orchestration pipeline relies on a stable handoff contract documented in `do
 - `result_payload` carries machine-readable outcome, routing, delivery instructions, and generated artifacts.
 
 This separation keeps worker boundaries explicit and allows triage, implementation, PR feedback, and delivery to reuse one contract model.
+
+The triage-specific signal set and routing matrix are documented in `docs/contracts/triage-routing.md`.
 
 ## MVP Scope
 
