@@ -6,6 +6,8 @@ Heavy Lifting is an MVP backend orchestrator that accepts implementation work fr
 
 The system exists to reduce manual coordination overhead between task intake, execution, review feedback, and result delivery while preserving a clear audit trail of what happened for each task.
 
+The product direction comes from Hacker Sprint 1: build an agent orchestrator that takes a backlog task, runs it through a selected workflow, and brings the result to a pull request. The distilled sprint brief lives in `docs/vision/hacker-sprint-1.md`, and the companion Excalidraw architecture scheme lives in `docs/vision/architecture-scheme.md`.
+
 ## Target State
 
 The target system is a reliable orchestration backend that:
@@ -95,6 +97,7 @@ The MVP intentionally stays narrow:
 - protocol boundaries around tracker and SCM integrations;
 - local development support through `MockTracker` and `MockScm`;
 - durable persistence limited to `tasks` and `token_usage`;
+- machine-readable OpenAPI schema through `GET /openapi.json`;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
 

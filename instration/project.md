@@ -4,6 +4,8 @@
 
 Build an MVP orchestrator on Python and Flask with PostgreSQL, three workers, and a modular architecture inside `src/backend`.
 
+The product context comes from Hacker Sprint 1: build an agent orchestrator that takes a backlog task, runs it through a selected workflow, and brings the result to a pull request. The distilled sprint brief is stored in `docs/vision/hacker-sprint-1.md`, and the companion Excalidraw architecture scheme is captured in `docs/vision/architecture-scheme.md`; this file remains a migration-era MVP technical specification.
+
 The system should:
 
 - accept manual task intake through the API;
@@ -179,6 +181,7 @@ The durable v1 handoff contract for `context`, `input_payload`, and `result_payl
 ## API Endpoints
 
 - `GET /health`
+- `GET /openapi.json`
 - `GET /tasks`
 - `GET /tasks/<id>`
 - `GET /stats`

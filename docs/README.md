@@ -11,6 +11,8 @@ This directory holds durable project knowledge for the Heavy Lifting orchestrato
 ## How to use the docs
 
 - Start with `vision/system.md` to understand the product intent, actors, scenarios, and MVP boundaries.
+- Read `vision/hacker-sprint-1.md` for the original sprint brief that motivates the project.
+- Read `vision/architecture-scheme.md` for the companion Excalidraw architecture scheme.
 - Read `contracts/task-handoff.md` when working on task schemas, worker routing, or delivery semantics.
 - Read `contracts/triage-routing.md` when working on intake classification, triage outcomes, or the MVP routing matrix.
 - Read `contracts/event-ingestion.md` when working on tracker comments, PR feedback ingestion, or monitor responsibilities.

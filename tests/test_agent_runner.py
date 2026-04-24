@@ -290,6 +290,7 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
             captured["command"][-1],
         ],
         "exit_code": 0,
+        "execution_status": "succeeded",
         "stdout_preview": "Applied requested changes.\nCreated patch.",
         "stdout_raw_preview": (
             '{"type":"step_start","part":{"type":"step-start"}}\n'
