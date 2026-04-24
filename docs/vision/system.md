@@ -48,6 +48,8 @@ Before code changes are applied, the runner may need to inspect repository conte
 
 The runner prepares a repository workspace, applies the requested changes, runs the required project checks, and produces artifacts such as branch metadata, commit information, and candidate pull request content.
 
+Estimate-only intake is the current exception: `worker2` still runs the agent to obtain the estimate text, but it skips branch, commit, push, and PR side effects and hands the result straight to `worker3` for tracker delivery.
+
 ### PR Feedback
 
 If a pull request receives review comments or requested changes, the orchestrator creates a follow-up task linked to the original implementation thread. The same branch and PR remain the center of the iteration so the history stays continuous.
@@ -92,6 +94,7 @@ The MVP intentionally stays narrow:
 - local development support through `MockTracker` and `MockScm`;
 - durable persistence limited to `tasks` and `token_usage`;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
+- estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
 
 ## Non-Goals
 

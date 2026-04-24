@@ -71,6 +71,10 @@ The "only estimate" scenario is a routing outcome, not a separate business task 
 
 `reply_with_estimate_only` is used when the intake explicitly asks for estimation or take-in-work assessment, and triage has enough information to answer that question without launching research or implementation.
 
+In the current MVP runtime, estimate-only intake is detected with an explicit text heuristic taken from the observed CLI verification flow: the normalized tracker title, description, or step instructions must contain both an estimate marker such as `story point`, `estimate only`, or `оцен...` and a no-code marker such as `do not modify code`, `without code changes`, or `не изменять код`.
+
+When that heuristic matches, `worker2` still runs the agent once to produce the estimate content, but the pipeline skips branch creation, commit, push, and PR creation and proceeds directly to a downstream `deliver` task.
+
 ## Routing Matrix
 
 The MVP routing matrix is:

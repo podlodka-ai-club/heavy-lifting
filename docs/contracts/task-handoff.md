@@ -208,6 +208,8 @@ That rule applies to:
 - It must populate `artifacts` when code changes, commits, branches, or PRs are produced.
 - If execution succeeds, routing should allow downstream delivery without parsing free text.
 
+For the current estimate-only MVP branch, `worker2` may also complete an `execute` task without SCM artifacts. In that case the execute result keeps the tracker-facing estimate text in `tracker_comment`, leaves branch and PR fields empty, marks `metadata.delivery_mode = estimate_only`, and still creates a downstream `deliver` task.
+
 ### PR Feedback
 
 - A PR feedback step uses `input_payload.action = respond_pr`.
@@ -221,6 +223,7 @@ That rule applies to:
 - It runs as a `deliver` task owned by `worker3`.
 - The delivery worker reads tracker instructions from upstream `result_payload.delivery` rather than from `summary` or `details`.
 - Delivery may attach links from `result_payload.artifacts` when present.
+- If the upstream execute result is estimate-only, delivery sends the estimate text from `tracker_comment` and attaches no SCM links.
 
 ## Scenario Summary
 

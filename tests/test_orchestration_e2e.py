@@ -71,6 +71,32 @@ class RecordingAgentRunner:
         )
 
 
+class EstimateOnlyRecordingRunner:
+    def __init__(self) -> None:
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary="CLI agent run completed successfully.",
+                details=(
+                    "stdout:\n2 story points\nReason: adding CLI command logging "
+                    "is a small isolated change."
+                ),
+                metadata={
+                    "runner_adapter": "cli",
+                    "request_metadata": dict(request.metadata),
+                    "workspace_path": request.workspace_path,
+                    "stdout_preview": (
+                        "2 story points\nReason: adding CLI command logging "
+                        "is a small isolated change."
+                    ),
+                },
+            )
+        )
+
+
 def test_http_intake_flow_runs_workers_end_to_end(session_factory) -> None:
     runner = RecordingAgentRunner()
     runtime = RuntimeContainer(
@@ -311,6 +337,102 @@ def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
         "https://example.test/repo/tree/task33/e2e-flow",
         "https://example.test/repo/pull/1",
     ]
+
+
+def test_orchestration_flow_routes_estimate_only_to_delivery_without_scm_side_effects(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    runner = EstimateOnlyRecordingRunner()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Estimate CLI logging task",
+                description="Estimate only. Do not modify code.",
+                acceptance_criteria=["Return story point estimate to tracker"],
+            ),
+            input_payload=TaskInputPayload(
+                instructions="Give only a story point estimate and do not modify code.",
+                base_branch="main",
+                branch_name="task63/estimate-only",
+            ),
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-63",
+        )
+    )
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    intake_report = intake_worker.poll_once()
+    execute_report = execute_worker.poll_once()
+    deliver_report = deliver_worker.poll_once()
+
+    assert intake_report.created_execute_tasks == 1
+    assert execute_report.processed_execute_tasks == 1
+    assert execute_report.failed_execute_tasks == 0
+    assert deliver_report.processed_deliver_tasks == 1
+    assert len(runner.requests) == 1
+    assert runner.requests[0].metadata["branch_name"] is None
+    assert scm._branches == {}
+    assert scm._pull_requests == {}
+    assert scm._commit_sequence == 0
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        deliver_task = repository.find_child_task(
+            parent_id=execute_task.id, task_type=TaskType.DELIVER
+        )
+        assert deliver_task is not None
+        assert execute_task.status == TaskStatus.DONE
+        assert deliver_task.status == TaskStatus.DONE
+        assert execute_task.branch_name is None
+        assert execute_task.pr_external_id is None
+        assert execute_task.pr_url is None
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["tracker_comment"] == (
+            "2 story points\nReason: adding CLI command logging is a small isolated change."
+        )
+        assert execute_task.result_payload["metadata"]["delivery_mode"] == "estimate_only"
+        assert execute_task.result_payload["metadata"]["pr_action"] == "skipped"
+        assert deliver_task.result_payload is not None
+        assert deliver_task.result_payload["links"] == []
+        assert deliver_task.result_payload["metadata"] == {
+            "tracker_external_id": tracker_task.external_id,
+            "tracker_status": "done",
+            "comment_posted": True,
+            "links_attached": 0,
+        }
+
+    assert tracker._tasks[tracker_task.external_id].status == TaskStatus.DONE
+    assert len(tracker._comments[tracker_task.external_id]) == 1
+    assert tracker._comments[tracker_task.external_id][0].body == (
+        "2 story points\nReason: adding CLI command logging is a small isolated change."
+    )
+    assert tracker._tasks[tracker_task.external_id].context.references == []
 
 
 def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_factory) -> None:
