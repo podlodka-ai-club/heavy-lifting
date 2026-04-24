@@ -8,6 +8,10 @@
 - Updated At:
 - Status: `draft`
 
+## Recovery Pointer
+
+- Current Status File: `status.md`
+
 ## Goal
 
 What feature, initiative, or problem this worklog covers.

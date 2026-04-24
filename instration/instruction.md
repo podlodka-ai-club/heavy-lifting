@@ -13,6 +13,7 @@ This directory stores process rules, project templates, migration-era specificat
 - `instration/TASK_CONTEXT_TEMPLATE.md` - optional supplemental context template for a worklog task.
 - `instration/TASK_REVIEW_TEMPLATE.md` - template for task review results inside a local worklog.
 - `instration/WORKLOG_CONTEXT_TEMPLATE.md` - template for top-level feature or initiative context in a worklog.
+- `instration/WORKLOG_STATUS_TEMPLATE.md` - template for the quick recovery status file in a worklog.
 - `instration/CONFIG_SETTINGS_SKILL.md` - skill for adding and using application settings.
 - `instration/PRE_COMMIT_CHECKS_SKILL.md` - skill for mandatory pre-commit checks.
 - `instration/tasks/` - legacy shared task history kept for migration and audit; do not use it as the primary workflow for new feature work.
@@ -22,19 +23,21 @@ This directory stores process rules, project templates, migration-era specificat
 1. Read `docs/vision/system.md`, the relevant `docs/` pages, and `instration/project.md` when migration details are still needed.
 2. Create a local worklog directory `worklog/<username>/<worklog-id>/` before significant work.
 3. Create `context.md` in that worklog from `instration/WORKLOG_CONTEXT_TEMPLATE.md` and describe the feature, scope, constraints, and target docs updates.
-4. Break the work into atomic task files under `worklog/<username>/<worklog-id>/tasks/` using `instration/TASK_TEMPLATE.md` and `instration/TASK_PROGRESS_TEMPLATE.md`.
-5. If an atomic task needs more detail, create a supplemental task context document from `instration/TASK_CONTEXT_TEMPLATE.md`.
-6. Assign the atomic task to `DEV`, implement it, and record progress only in the matching file under `worklog/<username>/<worklog-id>/tasks/`.
-7. After implementation, run `REVIEW` and store the output in `taskNN_review1.md` or the next numbered review file inside `worklog/<username>/<worklog-id>/tasks/`.
-8. If review requests changes, send the task back to `DEV`, apply fixes, update the progress file, and run the next review round.
-9. If review is approved, `DEV` must create the git commit for this atomic task automatically using the required message format.
-10. Use one atomic task per commit.
-11. Create `taskNN_summary.md` inside `worklog/<username>/<worklog-id>/tasks/` with a short summary of what was done, what docs changed, and what comes next.
-12. Before closing the worklog, update the relevant `docs/` pages so durable knowledge is not trapped in the local worklog.
+4. Create `status.md` from `instration/WORKLOG_STATUS_TEMPLATE.md` and keep it updated with the active task and immediate next action.
+5. Break the work into atomic task files under `worklog/<username>/<worklog-id>/tasks/` using `instration/TASK_TEMPLATE.md` and `instration/TASK_PROGRESS_TEMPLATE.md`.
+6. If an atomic task needs more detail, create a supplemental task context document from `instration/TASK_CONTEXT_TEMPLATE.md`.
+7. Assign the atomic task to `DEV`, implement it, and record progress only in the matching file under `worklog/<username>/<worklog-id>/tasks/`.
+8. After implementation, run `REVIEW` and store the output in `taskNN_review1.md` or the next numbered review file inside `worklog/<username>/<worklog-id>/tasks/`.
+9. If review requests changes, send the task back to `DEV`, apply fixes, update the progress file, and run the next review round.
+10. If review is approved, `DEV` must create the git commit for this atomic task automatically using the required message format.
+11. Use one atomic task per commit.
+12. Create `taskNN_summary.md` inside `worklog/<username>/<worklog-id>/tasks/` with a short summary of what was done, what docs changed, and what comes next.
+13. Before closing the worklog, update the relevant `docs/` pages so durable knowledge is not trapped in the local worklog.
 
 ## Rules
 
 - Each worklog and each atomic task must have a clear status.
+- Each active worklog should have a `status.md` that identifies the current atomic task and immediate next action. Use `Active Task: none` only for an explicit handoff state between atomic tasks.
 - Each atomic task must have a detailed description before implementation starts.
 - Progress notes, changed files, and test results belong in `taskNN_progress.md`, not in `taskNN.md`.
 - Review notes belong in numbered files such as `taskNN_review1.md`, `taskNN_review2.md`, and so on.
@@ -63,6 +66,7 @@ This directory stores process rules, project templates, migration-era specificat
 
 - Worklog root: `worklog/<username>/<worklog-id>/`
 - Worklog context: `worklog/<username>/<worklog-id>/context.md`
+- Worklog status: `worklog/<username>/<worklog-id>/status.md`
 - Atomic tasks: `worklog/<username>/<worklog-id>/tasks/task01.md`, `task02.md`, ...
 - Progress files: `worklog/<username>/<worklog-id>/tasks/task01_progress.md`
 - Summary files: `worklog/<username>/<worklog-id>/tasks/task01_summary.md`

@@ -23,6 +23,7 @@ worklog/<username>/<worklog-id>/
 ```text
 worklog/<username>/<worklog-id>/
   context.md
+  status.md
   tasks/
     task01.md
     task01_progress.md
@@ -42,6 +43,21 @@ Use `context.md` for the stable short-term frame of the worklog:
 - key inputs or links;
 - assumptions and open questions;
 - constraints that matter across multiple atomic tasks.
+
+### `status.md`
+
+Use `status.md` as the first recovery file after a restart.
+
+It should record:
+
+- the single active atomic task for the worklog, or `none` during an explicit handoff state between atomic tasks;
+- the current phase, such as planning, implementation, review, docs update, blocked, or handoff;
+- the immediate next action to take;
+- blockers and pending docs or process-file updates.
+
+`status.md` should stay short and operational. It does not replace `context.md` or task progress files; it points the reader to the right next file to open.
+
+Use `Active Task: none` only when there is no currently active atomic task and the status file is handing off to the next operational action, such as commit preparation or worklog closure.
 
 ### Atomic task files
 
@@ -85,10 +101,11 @@ The summary should record:
 ## Workflow Rules
 
 1. Create or update the active worklog before significant implementation work starts.
-2. Keep one numbered worklog task per atomic, independently reviewable change.
-3. Run the `DEV -> REVIEW -> DEV(commit)` loop for each atomic task.
-4. Do not treat the worklog as done until the relevant `docs/` pages have been updated.
-5. Keep durable knowledge in `docs/`, not only in local execution notes.
+2. Keep `status.md` current enough that a restart can recover the active task and the next action in one read.
+3. Keep one numbered worklog task per atomic, independently reviewable change.
+4. Run the `DEV -> REVIEW -> DEV(commit)` loop for each atomic task.
+5. Do not treat the worklog as done until the relevant `docs/` pages have been updated.
+6. Keep durable knowledge in `docs/`, not only in local execution notes.
 
 ## Migrating Legacy Tasks
 
@@ -119,6 +136,7 @@ task56/task02 уточнить workflow обработки pr feedback
 ## Practical Guidance
 
 - Keep worklog files concise and readable.
+- Prefer one active worklog per user and one `in_progress` atomic task per active worklog.
 - Prefer appending short factual notes over rewriting history.
 - If a task reveals a durable product or process decision, update `docs/` in the same task.
 - If a review requests follow-up changes, record the review artifact in the worklog before creating the final commit.
