@@ -16,6 +16,7 @@ This directory stores process rules, project templates, migration-era specificat
 - `instration/WORKLOG_STATUS_TEMPLATE.md` - template for the quick recovery status file in a worklog.
 - `instration/CONFIG_SETTINGS_SKILL.md` - skill for adding and using application settings.
 - `instration/PRE_COMMIT_CHECKS_SKILL.md` - skill for mandatory pre-commit checks.
+- `instration/RUNTIME_SCENARIO_RUNNER_SUBAGENT.md` - reusable contract for a subagent that runs real end-to-end pipeline scenarios and reports the results.
 - `instration/tasks/` - legacy shared task history kept for migration and audit; do not use it as the primary workflow for new feature work.
 
 ## Worklog Lifecycle
