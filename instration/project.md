@@ -63,6 +63,8 @@ Must support:
 - maps PR feedback to the correct `execute` task;
 - creates child `pr_feedback` tasks.
 
+For durable event-ingestion taxonomy, normalization, and monitor-boundary rules, see `docs/contracts/event-ingestion.md`.
+
 ### Worker 2
 
 - processes `execute` and `pr_feedback` tasks;

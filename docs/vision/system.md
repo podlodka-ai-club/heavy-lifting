@@ -52,6 +52,8 @@ The runner prepares a repository workspace, applies the requested changes, runs 
 
 If a pull request receives review comments or requested changes, the orchestrator creates a follow-up task linked to the original implementation thread. The same branch and PR remain the center of the iteration so the history stays continuous.
 
+Follow-up feedback enters the system through the event-ingestion path rather than as a new top-level intake task.
+
 ### Delivery
 
 After execution completes, the orchestrator reports the result back to the tracker. Delivery includes status, a concise summary of what changed, links to branches or pull requests when available, and failure context when execution does not succeed. Delivery is driven by structured handoff data rather than free-text parsing.
@@ -69,6 +71,8 @@ The orchestration pipeline relies on a stable handoff contract documented in `do
 This separation keeps worker boundaries explicit and allows triage, implementation, PR feedback, and delivery to reuse one contract model.
 
 The triage-specific signal set and routing matrix are documented in `docs/contracts/triage-routing.md`.
+
+The follow-up event taxonomy, normalization rules, and monitor responsibilities are documented in `docs/contracts/event-ingestion.md`.
 
 ## MVP Scope
 

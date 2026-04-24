@@ -13,6 +13,7 @@ This directory holds durable project knowledge for the Heavy Lifting orchestrato
 - Start with `vision/system.md` to understand the product intent, actors, scenarios, and MVP boundaries.
 - Read `contracts/task-handoff.md` when working on task schemas, worker routing, or delivery semantics.
 - Read `contracts/triage-routing.md` when working on intake classification, triage outcomes, or the MVP routing matrix.
+- Read `contracts/event-ingestion.md` when working on tracker comments, PR feedback ingestion, or monitor responsibilities.
 - Read `vision/roadmap.md` to place the current MVP in the larger delivery plan.
 - Read `process/worklog.md` before starting implementation work so local execution notes follow the expected shape.
 
