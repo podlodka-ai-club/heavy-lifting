@@ -1,0 +1,55 @@
+{
+  "scenario_id": "cli-estimate-only",
+  "goal": "verify that a real CLI-backed estimate-only request reaches the runtime, skips SCM side effects, and delivers estimate text only",
+  "database_suffix": "cli_estimate_only",
+  "artifacts_suffix": "cli_estimate_only_artifacts",
+  "workspace_key": "repo-estimate",
+  "port": 8010,
+  "env": {
+    "AGENT_RUNNER_ADAPTER": "cli",
+    "CLI_AGENT_PROVIDER": "openai",
+    "CLI_AGENT_MODEL": "gpt-5.4"
+  },
+  "steps": [
+    "Create a disposable workspace copy for the repo runtime.",
+    "Bootstrap the temporary SQLite database.",
+    "Start the demo in the background and wait for healthcheck success.",
+    "POST an estimate-only intake task.",
+    "Allow the worker pipeline to process the task until the execute and deliver states settle.",
+    "Inspect logs, persisted task rows, token usage rows, and delivery payloads.",
+    "Clean up background processes before finishing."
+  ],
+  "inputs": [
+    "intake payload asking only for estimation, with explicit no-code-change instructions"
+  ],
+  "assertions": [
+    "The CLI runner is invoked through the real runtime path.",
+    "The execute task finishes successfully.",
+    "No commit, push, or PR side effects are created for the estimate-only run.",
+    "The deliver path receives estimate text only.",
+    "Artifact collection captures whether token usage rows were created."
+  ],
+  "collect": [
+    "demo log file",
+    "temp database observations",
+    "task payload summary",
+    "delivery payload summary"
+  ],
+  "intake_payload": {
+    "context": {
+      "title": "Real CLI estimate-only verification",
+      "description": "Trigger a real estimate-only CLI flow.",
+      "acceptance_criteria": [
+        "Estimate result is delivered without SCM side effects"
+      ]
+    },
+    "input_payload": {
+      "instructions": "Estimate only. Do not modify code. Return a short estimate and rationale.",
+      "base_branch": "main",
+      "branch_name": "task-estimate/real-cli"
+    },
+    "repo_url": "https://example.test/repo.git",
+    "repo_ref": "main",
+    "workspace_key": "repo-estimate"
+  }
+}

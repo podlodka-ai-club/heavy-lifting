@@ -1,0 +1,57 @@
+{
+  "scenario_id": "cli-nonzero-exit",
+  "goal": "verify that a real CLI-backed failure path stops after worker2, persists a failed execute result, and does not create commit, PR, or deliver side effects",
+  "database_suffix": "cli_nonzero",
+  "artifacts_suffix": "cli_nonzero_artifacts",
+  "workspace_key": "repo-90",
+  "port": 8011,
+  "env": {
+    "AGENT_RUNNER_ADAPTER": "cli",
+    "CLI_AGENT_PROVIDER": "openai",
+    "CLI_AGENT_MODEL": "definitely-invalid-model-for-runtime-check"
+  },
+  "steps": [
+    "Create a disposable workspace copy for the repo runtime.",
+    "Bootstrap the temporary SQLite database.",
+    "Start the demo in the background and wait for healthcheck success.",
+    "POST a normal execute intake task that should reach the CLI runner.",
+    "Allow the worker pipeline to process the task and wait until the execute task settles.",
+    "Inspect logs, persisted task rows, token usage rows, and any mock SCM side effects.",
+    "Clean up background processes before finishing."
+  ],
+  "inputs": [
+    "intake payload for a tiny implementation task that should reach the real CLI runner"
+  ],
+  "assertions": [
+    "The CLI runner is invoked through the real runtime path.",
+    "The selected trigger is evaluated honestly: if it exits non-zero, the execute task ends in failed status and the persisted execute result records a failed CLI run.",
+    "If the selected trigger still exits zero in this environment, the scenario must be reported as failed with preserved evidence instead of claiming the failure branch was verified.",
+    "When a real non-zero exit occurs, no deliver task is created.",
+    "When a real non-zero exit occurs, no mock commit or PR is created after the failed run.",
+    "When a real non-zero exit occurs, no token usage rows are written for the failed run."
+  ],
+  "collect": [
+    "demo log file",
+    "temp database observations",
+    "execute task payload summary",
+    "mock SCM state observations",
+    "evidence showing whether the chosen trigger produced a real non-zero exit"
+  ],
+  "intake_payload": {
+    "context": {
+      "title": "Real CLI non-zero exit verification",
+      "description": "Trigger a real CLI-backed failure path.",
+      "acceptance_criteria": [
+        "Execution failure is recorded without downstream delivery side effects"
+      ]
+    },
+    "input_payload": {
+      "instructions": "Try to implement a tiny change so the runtime reaches the CLI runner.",
+      "base_branch": "main",
+      "branch_name": "task90/real-cli-nonzero"
+    },
+    "repo_url": "https://example.test/repo.git",
+    "repo_ref": "main",
+    "workspace_key": "repo-90"
+  }
+}

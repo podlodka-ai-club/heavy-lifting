@@ -1,0 +1,54 @@
+{
+  "scenario_id": "cli-token-accounting",
+  "goal": "verify that a real CLI-backed successful run persists normalized token usage from JSON events",
+  "database_suffix": "cli_token_accounting",
+  "artifacts_suffix": "cli_token_accounting_artifacts",
+  "workspace_key": "repo-token",
+  "port": 8012,
+  "env": {
+    "AGENT_RUNNER_ADAPTER": "cli",
+    "CLI_AGENT_PROVIDER": "openai",
+    "CLI_AGENT_MODEL": "gpt-5.4"
+  },
+  "steps": [
+    "Create a disposable workspace copy for the repo runtime.",
+    "Bootstrap the temporary SQLite database.",
+    "Start the demo in the background and wait for healthcheck success.",
+    "POST a normal execute intake task that should reach the real CLI runner.",
+    "Allow the worker pipeline to process the task until execute and deliver settle.",
+    "Inspect logs, persisted task rows, token usage rows, and execution metadata.",
+    "Clean up background processes before finishing."
+  ],
+  "inputs": [
+    "intake payload for a tiny implementation task that should complete normally"
+  ],
+  "assertions": [
+    "The CLI runner is invoked through the real runtime path.",
+    "The execute task finishes successfully.",
+    "Execution metadata records parsed usage information.",
+    "At least one normalized token_usage row is persisted when the CLI emits usage data."
+  ],
+  "collect": [
+    "demo log file",
+    "temp database observations",
+    "execute payload summary",
+    "token usage rows"
+  ],
+  "intake_payload": {
+    "context": {
+      "title": "Real CLI token accounting verification",
+      "description": "Trigger a real CLI-backed success path.",
+      "acceptance_criteria": [
+        "Normalized token usage is persisted from the CLI JSON output"
+      ]
+    },
+    "input_payload": {
+      "instructions": "Make a tiny implementation change so the runtime reaches the CLI runner and produces a normal successful result.",
+      "base_branch": "main",
+      "branch_name": "task-token/real-cli"
+    },
+    "repo_url": "https://example.test/repo.git",
+    "repo_ref": "main",
+    "workspace_key": "repo-token"
+  }
+}
