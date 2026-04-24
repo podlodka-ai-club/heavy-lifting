@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 from backend.logging_setup import get_logger
 from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
@@ -157,16 +159,27 @@ class CliAgentRunner:
             command=command,
             completed_process=completed_process,
         )
+        usage_metadata = payload.metadata.get("usage")
+        usage_status = usage_metadata.get("status") if isinstance(usage_metadata, dict) else None
         logger.info(
             "agent_run_finished",
             exit_code=completed_process.returncode,
             stdout_length=len(completed_process.stdout),
             stderr_length=len(completed_process.stderr),
+            token_usage_entries=len(payload.token_usage),
+            usage_status=usage_status,
         )
         return AgentRunResult(payload=payload)
 
     def _build_command(self, *, request: AgentRunRequest, prompt: str) -> list[str]:
-        command = [self.config.command, self.config.subcommand, "--dir", request.workspace_path]
+        command = [
+            self.config.command,
+            self.config.subcommand,
+            "--dir",
+            request.workspace_path,
+            "--format",
+            "json",
+        ]
 
         model = self._resolve_model()
         if model is not None:
@@ -253,7 +266,8 @@ class CliAgentRunner:
         completed_process: subprocess.CompletedProcess[str],
     ) -> TaskResultPayload:
         exit_code = completed_process.returncode
-        stdout_preview = self._build_preview(completed_process.stdout)
+        stdout_parse = self._parse_stdout(completed_process.stdout)
+        stdout_preview = stdout_parse.preview
         stderr_preview = self._build_preview(completed_process.stderr)
         details = self._build_details(stdout_preview=stdout_preview, stderr_preview=stderr_preview)
         runner_metadata: dict[str, object] = {
@@ -274,7 +288,12 @@ class CliAgentRunner:
             "command": command,
             "exit_code": exit_code,
             "stdout_preview": stdout_preview,
+            "stdout_raw_preview": stdout_parse.raw_preview,
+            "stdout_preview_source": stdout_parse.preview_source,
+            "stdout_event_count": stdout_parse.event_count,
+            "stdout_event_types": stdout_parse.event_types,
             "stderr_preview": stderr_preview,
+            "usage": stdout_parse.usage_metadata,
             "runner_metadata": runner_metadata,
         }
         return TaskResultPayload(
@@ -282,6 +301,7 @@ class CliAgentRunner:
             details=details,
             branch_name=request.task_context.branch_name,
             pr_url=request.task_context.pr_url,
+            token_usage=stdout_parse.token_usage,
             metadata=metadata,
         )
 
@@ -311,6 +331,216 @@ class CliAgentRunner:
         if len(normalized) <= limit:
             return normalized
         return normalized[: limit - 3] + "..."
+
+    def _parse_stdout(self, stdout: str) -> _CliStdoutParseResult:
+        raw_preview = self._build_preview(stdout)
+        lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+        if not lines:
+            return _CliStdoutParseResult(
+                preview=None,
+                raw_preview=raw_preview,
+                preview_source=None,
+                token_usage=[],
+                event_count=0,
+                event_types=[],
+                usage_metadata={"status": "missing", "reason": "stdout_empty"},
+            )
+
+        events: list[dict[str, object]] = []
+        event_types: list[str] = []
+        text_parts: list[str] = []
+        step_finish_part: dict[str, object] | None = None
+
+        for index, line in enumerate(lines, start=1):
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                return _CliStdoutParseResult(
+                    preview=raw_preview,
+                    raw_preview=raw_preview,
+                    preview_source="raw_stdout",
+                    token_usage=[],
+                    event_count=len(events),
+                    event_types=event_types,
+                    usage_metadata={
+                        "status": "malformed",
+                        "reason": "invalid_json_line",
+                        "line": index,
+                        "error": str(exc),
+                    },
+                )
+
+            if not isinstance(event, dict):
+                return _CliStdoutParseResult(
+                    preview=raw_preview,
+                    raw_preview=raw_preview,
+                    preview_source="raw_stdout",
+                    token_usage=[],
+                    event_count=len(events),
+                    event_types=event_types,
+                    usage_metadata={
+                        "status": "malformed",
+                        "reason": "non_object_event",
+                        "line": index,
+                    },
+                )
+
+            events.append(event)
+            event_type = event.get("type")
+            if isinstance(event_type, str):
+                event_types.append(event_type)
+
+            part = event.get("part")
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_parts.append(text.strip())
+
+                if event_type == "step_finish":
+                    step_finish_part = part
+
+        preview = self._build_preview("\n".join(text_parts))
+        preview_source = "text_events" if preview else None
+        if preview is None:
+            preview = raw_preview
+            preview_source = "raw_stdout" if raw_preview else None
+
+        if step_finish_part is None:
+            return _CliStdoutParseResult(
+                preview=preview,
+                raw_preview=raw_preview,
+                preview_source=preview_source,
+                token_usage=[],
+                event_count=len(events),
+                event_types=event_types,
+                usage_metadata={"status": "missing", "reason": "step_finish_not_found"},
+            )
+
+        usage_parse_result = self._build_token_usage(step_finish_part)
+        return _CliStdoutParseResult(
+            preview=preview,
+            raw_preview=raw_preview,
+            preview_source=preview_source,
+            token_usage=usage_parse_result.token_usage,
+            event_count=len(events),
+            event_types=event_types,
+            usage_metadata=usage_parse_result.metadata,
+        )
+
+    def _build_token_usage(self, step_finish_part: dict[str, object]) -> _CliUsageParseResult:
+        tokens = step_finish_part.get("tokens")
+        if not isinstance(tokens, dict):
+            return _CliUsageParseResult(
+                token_usage=[],
+                metadata={"status": "missing", "reason": "tokens_not_found"},
+            )
+
+        cache = tokens.get("cache")
+        if cache is None:
+            cache = {}
+        if not isinstance(cache, dict):
+            return _CliUsageParseResult(
+                token_usage=[],
+                metadata={"status": "malformed", "reason": "cache_not_object"},
+            )
+
+        cost = step_finish_part.get("cost")
+        if cost is None:
+            return _CliUsageParseResult(
+                token_usage=[],
+                metadata={"status": "missing", "reason": "cost_not_found"},
+            )
+
+        try:
+            usage = TokenUsagePayload(
+                model=self._resolve_usage_model(),
+                provider=self._resolve_usage_provider(),
+                input_tokens=self._require_int(tokens.get("input"), field_name="tokens.input"),
+                output_tokens=self._require_int(tokens.get("output"), field_name="tokens.output"),
+                cached_tokens=self._require_int(
+                    cache.get("read", 0), field_name="tokens.cache.read"
+                ),
+                estimated=False,
+                cost_usd=self._require_decimal(cost, field_name="cost"),
+            )
+        except ValueError as exc:
+            return _CliUsageParseResult(
+                token_usage=[],
+                metadata={
+                    "status": "malformed",
+                    "reason": "invalid_usage_fields",
+                    "error": str(exc),
+                },
+            )
+
+        return _CliUsageParseResult(
+            token_usage=[usage],
+            metadata={
+                "status": "parsed",
+                "model": usage.model,
+                "provider": usage.provider,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cached_tokens": usage.cached_tokens,
+                "cost_usd": str(usage.cost_usd),
+                "reasoning_tokens": self._optional_int(tokens.get("reasoning")),
+                "total_tokens": self._optional_int(tokens.get("total")),
+                "cache_write_tokens": self._optional_int(cache.get("write")),
+            },
+        )
+
+    def _resolve_usage_provider(self) -> str:
+        return self.config.provider_hint or "unknown"
+
+    def _resolve_usage_model(self) -> str:
+        resolved_model = self._resolve_model()
+        if resolved_model and "/" in resolved_model:
+            _, _, model = resolved_model.partition("/")
+            if model:
+                return model
+        return self.config.model_hint or resolved_model or "unknown"
+
+    def _require_int(self, value: object, *, field_name: str) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{field_name} must be a non-negative integer")
+        return value
+
+    def _optional_int(self, value: object) -> int | None:
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
+    def _require_decimal(self, value: object, *, field_name: str) -> Decimal:
+        if isinstance(value, bool):
+            raise ValueError(f"{field_name} must be a non-negative decimal")
+
+        if isinstance(value, int | float | str):
+            try:
+                decimal_value = Decimal(str(value))
+            except InvalidOperation as exc:
+                raise ValueError(f"{field_name} must be a non-negative decimal") from exc
+            if decimal_value < 0:
+                raise ValueError(f"{field_name} must be a non-negative decimal")
+            return decimal_value
+
+        raise ValueError(f"{field_name} must be a non-negative decimal")
+
+
+@dataclass(frozen=True, slots=True)
+class _CliUsageParseResult:
+    token_usage: list[TokenUsagePayload]
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _CliStdoutParseResult:
+    preview: str | None
+    raw_preview: str | None
+    preview_source: str | None
+    token_usage: list[TokenUsagePayload]
+    event_count: int
+    event_types: list[str]
+    usage_metadata: dict[str, object]
 
 
 __all__ = ["CliAgentRunner", "CliAgentRunnerConfig", "LocalAgentRunner"]

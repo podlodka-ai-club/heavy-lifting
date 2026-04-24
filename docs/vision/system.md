@@ -48,6 +48,8 @@ Before code changes are applied, the runner may need to inspect repository conte
 
 The runner prepares a repository workspace, applies the requested changes, runs the required project checks, and produces artifacts such as branch metadata, commit information, and candidate pull request content.
 
+For CLI-backed execution, the orchestrator runs `opencode run --format json` and extracts the final `step_finish` usage block into the normalized `token_usage` records. Human-readable delivery details still come from the streamed text events, while missing or malformed usage data remains explicit in execution metadata instead of silently fabricating token rows.
+
 Estimate-only intake is the current exception: `worker2` still runs the agent to obtain the estimate text, but it skips branch, commit, push, and PR side effects and hands the result straight to `worker3` for tracker delivery.
 
 ### PR Feedback
