@@ -90,6 +90,17 @@ The summary should record:
 4. Do not treat the worklog as done until the relevant `docs/` pages have been updated.
 5. Keep durable knowledge in `docs/`, not only in local execution notes.
 
+## Migrating Legacy Tasks
+
+If unfinished work still exists in legacy `instration/tasks/` artifacts:
+
+- create or choose the active local worklog that will continue the effort;
+- create local atomic task files that capture the next real units of work;
+- copy forward any still-relevant context or progress into the new worklog;
+- update the legacy task files to mark them as migration history and point to the active worklog path.
+
+Do not continue active implementation in the legacy shared task registry.
+
 ## Commit Format
 
 Each atomic task ends with exactly one commit using this format:

@@ -53,6 +53,12 @@ This directory stores process rules, project templates, migration-era specificat
 - When adding or changing config parameters, follow `instration/CONFIG_SETTINGS_SKILL.md`.
 - `worklog/` is local short-term memory and should stay gitignored.
 
+## Legacy Task Migration
+
+- Unfinished items in `instration/tasks/` must be resumed through an active local worklog, not continued in place.
+- When migrating such an item, create the corresponding local worklog task, carry forward any still-relevant progress, and update the legacy file status to indicate that it now serves as migration history only.
+- Legacy task files may point to the active local worklog path for operator convenience on the same machine.
+
 ## Suggested Naming
 
 - Worklog root: `worklog/<username>/<worklog-id>/`
