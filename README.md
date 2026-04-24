@@ -30,6 +30,7 @@
 Полезные endpoints API:
 
 - `GET /health`
+- `GET /openapi.json`
 - `GET /tasks`
 - `GET /tasks/<id>`
 - `GET /stats`
@@ -280,6 +281,12 @@ API:
 
 ```bash
 make api
+```
+
+OpenAPI схема доступна из запущенного API:
+
+```bash
+curl http://127.0.0.1:8000/openapi.json
 ```
 
 Отдельные воркеры запускаются в разных терминалах:

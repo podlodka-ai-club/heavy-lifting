@@ -146,6 +146,7 @@ The `token_usage` table must contain at least:
 ## API Endpoints
 
 - `GET /health`
+- `GET /openapi.json`
 - `GET /tasks`
 - `GET /tasks/<id>`
 - `GET /stats`
