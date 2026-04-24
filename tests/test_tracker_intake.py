@@ -43,6 +43,16 @@ class NonAscendingPaginatedScm(MockScm):
         return self._pages[page_index].model_copy(deep=True)
 
 
+class FailingTracker(MockTracker):
+    def fetch_tasks(self, query):
+        raise RuntimeError("tracker fetch failed")
+
+
+class FailingScm(MockScm):
+    def read_pr_feedback(self, query):
+        raise RuntimeError("scm feedback fetch failed")
+
+
 @pytest.fixture
 def session_factory(tmp_path):
     engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
@@ -567,3 +577,90 @@ def test_build_tracker_intake_worker_uses_runtime_settings(session_factory) -> N
     assert worker.poll_interval == 12
     assert worker.pr_poll_interval == 7
     assert worker.session_factory is session_factory
+
+
+def test_tracker_poll_logs_structured_failure_event(session_factory, caplog) -> None:
+    caplog.set_level("INFO")
+    worker = TrackerIntakeWorker(
+        tracker=FailingTracker(),
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+        fetch_limit=25,
+    )
+
+    with pytest.raises(RuntimeError, match="tracker fetch failed"):
+        worker.poll_tracker_once()
+
+    failure_events = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("event") == "tracker_poll_failed"
+    ]
+    assert len(failure_events) == 1
+    assert failure_events[0]["component"] == "worker1"
+    assert failure_events[0]["tracker_name"] == "mock"
+    assert failure_events[0]["fetch_limit"] == 25
+    assert failure_events[0]["fetch_statuses"] == ["new"]
+    assert failure_events[0]["error"] == "tracker fetch failed"
+
+
+def test_pr_feedback_poll_logs_structured_failure_event(session_factory, caplog) -> None:
+    caplog.set_level("INFO")
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="tracker-task-92",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-92",
+                context={"title": "Task 92 root"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="tracker-task-92",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-92",
+                branch_name="task92/pr-feedback",
+                pr_external_id="pr-92",
+                pr_url="https://example.test/repo/pull/92",
+                context={"title": "Task 92 root", "metadata": {}},
+            )
+        )
+
+    worker = TrackerIntakeWorker(
+        tracker=MockTracker(),
+        scm=FailingScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+        feedback_limit=7,
+    )
+
+    with pytest.raises(RuntimeError, match="scm feedback fetch failed"):
+        worker.poll_pr_feedback_once()
+
+    failure_events = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("event") == "pr_feedback_poll_failed"
+    ]
+    assert len(failure_events) == 1
+    assert failure_events[0]["component"] == "worker1"
+    assert failure_events[0]["tracker_name"] == "mock"
+    assert failure_events[0]["feedback_limit"] == 7
+    assert failure_events[0]["error"] == "scm feedback fetch failed"
+
+    intake_events = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("component") == "worker1"
+    ]
+    assert "pr_feedback_intake_started" in [entry["event"] for entry in intake_events]

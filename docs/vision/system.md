@@ -74,6 +74,14 @@ The triage-specific signal set and routing matrix are documented in `docs/contra
 
 The follow-up event taxonomy, normalization rules, and monitor responsibilities are documented in `docs/contracts/event-ingestion.md`.
 
+## Runtime Observability
+
+Runtime logs are emitted as structured JSON events from the API, workers, and agent runner boundary.
+
+- Stable event names cover intake, worker pickup, workspace preparation, agent execution, result handoff, and tracker delivery.
+- Correlation fields such as `task_id`, `root_task_id`, `workspace_key`, `branch_name`, and `pr_external_id` make it possible to follow one execution thread across workers.
+- Logs are intended for operational tracing only; durable task routing and delivery decisions still flow through `context`, `input_payload`, and `result_payload`.
+
 ## MVP Scope
 
 The MVP intentionally stays narrow:

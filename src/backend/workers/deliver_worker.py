@@ -3,12 +3,14 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
-from backend.logging_setup import configure_logging
+from backend.logging_setup import configure_logging, get_logger
+from backend.models import Task
 from backend.protocols.tracker import TrackerProtocol
 from backend.repositories.task_repository import TaskRepository
 from backend.schemas import (
@@ -45,6 +47,7 @@ class DeliverWorker:
                 return DeliverWorkerReport()
 
             task.attempt += 1
+            logger = _task_logger(task, attempt=task.attempt)
 
             try:
                 task_chain = repository.load_task_chain(task.root_id or task.id)
@@ -56,6 +59,14 @@ class DeliverWorker:
                 tracker_task_id = self._resolve_tracker_task_id(task_context=task_context)
                 comment_body = self._build_comment_body(execute_result=execute_result)
                 links = self._build_links(execute_result=execute_result)
+                logger.info(
+                    "delivery_started",
+                    tracker_external_id=tracker_task_id,
+                    execute_task_id=task_context.execute_task.task.id
+                    if task_context.execute_task is not None
+                    else None,
+                    link_count=len(links),
+                )
 
                 self.tracker.add_comment(
                     TrackerCommentCreatePayload(
@@ -104,8 +115,15 @@ class DeliverWorker:
                         },
                     )
                 )
+                logger.info(
+                    "delivery_completed",
+                    tracker_external_id=tracker_task_id,
+                    comment_posted=True,
+                    link_count=len(links),
+                )
                 return DeliverWorkerReport(processed_deliver_tasks=1)
             except Exception as exc:
+                logger.exception("task_failed", error=str(exc))
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
                 return DeliverWorkerReport(failed_deliver_tasks=1)
@@ -176,7 +194,7 @@ def run(
 ) -> DeliverWorker:
     settings = get_settings()
     logger = configure_logging(app_name=settings.app_name, component="worker3")
-    logger.info("Starting deliver worker once=%s max_iterations=%s", once, max_iterations)
+    logger.info("worker_started", once=once, max_iterations=max_iterations)
     worker = build_deliver_worker()
     if once:
         worker.poll_once()
@@ -187,6 +205,25 @@ def run(
 
 def _dump_result_payload(payload: TaskResultPayload) -> dict[str, object]:
     return payload.model_dump(mode="json")
+
+
+def _task_logger(task: Task, **fields: Any):
+    log_fields = {
+        "task_id": task.id,
+        "root_task_id": task.root_id or task.id,
+        "parent_id": task.parent_id,
+        "task_type": task.task_type.value,
+        "task_status": task.status.value,
+        "tracker_name": task.tracker_name,
+        "tracker_external_id": task.external_task_id,
+        "tracker_parent_external_id": task.external_parent_id,
+        "workspace_key": task.workspace_key,
+        "branch_name": task.branch_name,
+        "pr_external_id": task.pr_external_id,
+        "pr_url": task.pr_url,
+    }
+    log_fields.update(fields)
+    return get_logger(__name__, component="worker3").bind(**log_fields)
 
 
 __all__ = [

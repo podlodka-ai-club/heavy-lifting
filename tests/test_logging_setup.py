@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 
@@ -7,13 +8,13 @@ from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
 from backend.api import app as api_app
 from backend.composition import RuntimeContainer
-from backend.logging_setup import configure_flask_logging, configure_logging
+from backend.logging_setup import configure_flask_logging, configure_logging, get_logger
 from backend.services.agent_runner import LocalAgentRunner
 from backend.settings import get_settings
 from backend.workers import deliver_worker, execute_worker, fetch_worker
 
 
-def test_configure_logging_reuses_shared_root_handler() -> None:
+def test_configure_logging_reuses_shared_root_handler(capsys) -> None:
     _clear_shared_handler()
 
     first_logger = configure_logging(app_name="heavy-lifting-backend", component="api")
@@ -25,22 +26,22 @@ def test_configure_logging_reuses_shared_root_handler() -> None:
         if getattr(handler, "_heavy_lifting_handler", False)
     ]
 
-    assert first_logger.name == "heavy-lifting-backend.api"
-    assert second_logger.name == "heavy-lifting-backend.worker2"
     assert len(shared_handlers) == 1
+    assert first_logger is not None
+    assert second_logger is not None
 
-    record = logging.LogRecord(
-        name="backend.test",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="hello",
-        args=(),
-        exc_info=None,
+    capsys.readouterr()
+    get_logger("backend.test", component="worker2", app_name="heavy-lifting-backend").info(
+        "worker_started",
+        max_iterations=1,
     )
-    formatted = shared_handlers[0].formatter.format(record)
-    assert "[heavy-lifting-backend:worker2]" in formatted
-    assert "backend.test: hello" in formatted
+    log_entry = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert log_entry["event"] == "worker_started"
+    assert log_entry["app_name"] == "heavy-lifting-backend"
+    assert log_entry["component"] == "worker2"
+    assert log_entry["level"] == "info"
+    assert log_entry["logger"] == "backend.test"
+    assert log_entry["max_iterations"] == 1
 
 
 def test_configure_flask_logging_enables_root_propagation() -> None:
@@ -70,12 +71,10 @@ def test_worker_entrypoints_configure_shared_logging(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 
     class StubLogger:
-        def info(self, message: str, once: bool, max_iterations: int | None) -> None:
-            assert (
-                message == "Starting fetch worker once=%s max_iterations=%s"
-                or message == ("Starting execute worker once=%s max_iterations=%s")
-                or message == "Starting deliver worker once=%s max_iterations=%s"
-            )
+        def info(self, event: str, **kwargs: object) -> None:
+            assert event == "worker_started"
+            assert kwargs["once"] is True
+            assert kwargs["max_iterations"] is None
 
     class StubWorker:
         def poll_once(self) -> None:

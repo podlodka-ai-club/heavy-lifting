@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass, field
 
+from backend.logging_setup import get_logger
 from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.schemas import TaskContext, TaskResultPayload, TokenUsagePayload
 from backend.services.token_costs import TokenCostService
@@ -30,6 +31,14 @@ class LocalAgentRunner:
     name: str = "local-placeholder-runner"
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
+        logger = _runner_logger(
+            request,
+            runner_adapter="local",
+            runner=self.name,
+            provider=self.provider,
+            model=self.model,
+        )
+        logger.info("agent_run_started")
         usage = self.token_cost_service.with_estimated_cost(self._build_token_usage(request))
         metadata = self._build_summary_metadata(request=request, usage=usage)
         payload = TaskResultPayload(
@@ -39,6 +48,11 @@ class LocalAgentRunner:
             pr_url=request.task_context.pr_url,
             token_usage=[usage],
             metadata=metadata,
+        )
+        logger.info(
+            "agent_run_finished",
+            token_usage_entries=1,
+            estimated_cost_usd=str(usage.cost_usd),
         )
         return AgentRunResult(payload=payload)
 
@@ -122,6 +136,15 @@ class CliAgentRunner:
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         prompt = self._build_prompt(request)
         command = self._build_command(request=request, prompt=prompt)
+        logger = _runner_logger(
+            request,
+            runner_adapter="cli",
+            runner=self.config.command,
+            subcommand=self.config.subcommand,
+            command_preview=command[:-1] + ["<prompt>"],
+            prompt_length=len(prompt),
+        )
+        logger.info("agent_run_started")
         completed_process = subprocess.run(
             command,
             cwd=request.workspace_path,
@@ -133,6 +156,12 @@ class CliAgentRunner:
             request=request,
             command=command,
             completed_process=completed_process,
+        )
+        logger.info(
+            "agent_run_finished",
+            exit_code=completed_process.returncode,
+            stdout_length=len(completed_process.stdout),
+            stderr_length=len(completed_process.stderr),
         )
         return AgentRunResult(payload=payload)
 
@@ -285,3 +314,18 @@ class CliAgentRunner:
 
 
 __all__ = ["CliAgentRunner", "CliAgentRunnerConfig", "LocalAgentRunner"]
+
+
+def _runner_logger(request: AgentRunRequest, **fields: object):
+    task = request.task_context.current_task.task
+    return get_logger(__name__, component="agent_runner").bind(
+        task_id=task.id,
+        root_task_id=request.task_context.root_task.task.id,
+        parent_id=task.parent_id,
+        flow_type=request.task_context.flow_type.value,
+        workspace_key=request.task_context.workspace_key,
+        branch_name=request.task_context.branch_name,
+        pr_external_id=request.task_context.pr_external_id,
+        workspace_path=request.workspace_path,
+        **fields,
+    )

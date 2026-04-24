@@ -327,6 +327,72 @@ def test_execute_worker_marks_task_failed_when_runner_execution_step_fails(tmp_p
         assert token_usage_entries == []
 
 
+def test_execute_worker_emits_structured_lifecycle_logs(tmp_path, caplog) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    agent_runner = RecordingAgentRunner()
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=agent_runner,
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-61",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-61",
+                context={"title": "Tracker task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-61",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-61",
+                context={"title": "Structured logging"},
+                input_payload={
+                    "instructions": "Emit lifecycle logs.",
+                    "base_branch": "main",
+                    "branch_name": "task61/structured-logging",
+                },
+            )
+        )
+
+    caplog.set_level("INFO")
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 1
+    worker_events = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("component") == "worker2"
+    ]
+    assert [entry["event"] for entry in worker_events] == [
+        "worker_task_picked_up",
+        "workspace_prepared",
+        "agent_run_started",
+        "agent_run_finished",
+        "execute_task_completed",
+        "deliver_task_created",
+    ]
+    assert all(entry["task_id"] == 2 for entry in worker_events)
+    assert all(entry["root_task_id"] == 1 for entry in worker_events)
+    assert all(entry["workspace_key"] == "repo-61" for entry in worker_events[1:])
+    assert worker_events[1]["branch_name"] == "task61/structured-logging"
+    assert worker_events[4]["pr_action"] == "created"
+    assert worker_events[5]["deliver_task_id"] == 3
+
+
 def _build_session_factory(tmp_path):
     engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
     Base.metadata.create_all(engine)

@@ -12,7 +12,7 @@ def run(
 ) -> TrackerIntakeWorker:
     settings = get_settings()
     logger = configure_logging(app_name=settings.app_name, component="worker1")
-    logger.info("Starting fetch worker once=%s max_iterations=%s", once, max_iterations)
+    logger.info("worker_started", once=once, max_iterations=max_iterations)
     worker = build_tracker_intake_worker()
     if once:
         worker.poll_once()
