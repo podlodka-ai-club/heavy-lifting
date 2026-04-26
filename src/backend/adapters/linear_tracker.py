@@ -109,6 +109,41 @@ mutation LinearIssueCreate($input: IssueCreateInput!) {
 }
 """.strip()
 
+_COMMENT_CREATE_MUTATION = """
+mutation LinearCommentCreate($input: CommentCreateInput!) {
+  commentCreate(input: $input) {
+    success
+    comment {
+      id
+    }
+  }
+}
+""".strip()
+
+_ISSUE_UPDATE_MUTATION = """
+mutation LinearIssueUpdate($id: String!, $input: IssueUpdateInput!) {
+  issueUpdate(id: $id, input: $input) {
+    success
+    issue {
+      id
+      url
+    }
+  }
+}
+""".strip()
+
+_ATTACHMENT_CREATE_MUTATION = """
+mutation LinearAttachmentCreate($input: AttachmentCreateInput!) {
+  attachmentCreate(input: $input) {
+    success
+    attachment {
+      id
+      url
+    }
+  }
+}
+""".strip()
+
 
 class LinearRateLimitError(RuntimeError):
     pass
@@ -763,13 +798,78 @@ class LinearTracker:
         return injected
 
     def add_comment(self, payload: TrackerCommentCreatePayload) -> TrackerCommentReference:
-        raise NotImplementedError("add_comment will be implemented in task06")
+        variables = {
+            "input": {
+                "issueId": payload.external_task_id,
+                "body": payload.body,
+            }
+        }
+        data = self._client.execute(_COMMENT_CREATE_MUTATION, variables)
+        comment = self._require_success_child(
+            data, mutation_key="commentCreate", child_key="comment"
+        )
+        comment_id = comment.get("id")
+        if not isinstance(comment_id, str) or not comment_id:
+            raise RuntimeError(
+                "Linear commentCreate response missing comment id"
+            )
+        return TrackerCommentReference(comment_id=comment_id)
 
     def update_status(self, payload: TrackerStatusUpdatePayload) -> TrackerTaskReference:
-        raise NotImplementedError("update_status will be implemented in task06")
+        state_id = self._status_to_state_id(payload.status)
+        variables = {
+            "id": payload.external_task_id,
+            "input": {"stateId": state_id},
+        }
+        data = self._client.execute(_ISSUE_UPDATE_MUTATION, variables)
+        issue = self._require_success_child(
+            data, mutation_key="issueUpdate", child_key="issue"
+        )
+        url_raw = issue.get("url")
+        url = url_raw if isinstance(url_raw, str) and url_raw else None
+        return TrackerTaskReference(
+            external_id=payload.external_task_id, url=url
+        )
 
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference:
-        raise NotImplementedError("attach_links will be implemented in task06")
+        for link in payload.links:
+            variables = {
+                "input": {
+                    "issueId": payload.external_task_id,
+                    "url": link.url,
+                    "title": link.label,
+                }
+            }
+            data = self._client.execute(_ATTACHMENT_CREATE_MUTATION, variables)
+            try:
+                self._require_success_child(
+                    data, mutation_key="attachmentCreate", child_key="attachment"
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"Linear attachmentCreate failed for url={link.url!r}: {exc}"
+                ) from None
+        return TrackerTaskReference(external_id=payload.external_task_id)
+
+    @staticmethod
+    def _require_success_child(
+        data: Mapping[str, Any], *, mutation_key: str, child_key: str
+    ) -> dict[str, Any]:
+        result = data.get(mutation_key)
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"Linear {mutation_key} response missing '{mutation_key}' object"
+            )
+        if not result.get("success"):
+            raise RuntimeError(
+                f"Linear {mutation_key} returned success=false"
+            )
+        child = result.get(child_key)
+        if not isinstance(child, dict):
+            raise RuntimeError(
+                f"Linear {mutation_key} response missing '{child_key}' object"
+            )
+        return child
 
 
 __all__ = [

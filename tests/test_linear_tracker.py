@@ -20,7 +20,11 @@ from backend.protocols.tracker import TrackerProtocol
 from backend.schemas import (
     TaskContext,
     TaskInputPayload,
+    TaskLink,
+    TrackerCommentCreatePayload,
     TrackerFetchTasksQuery,
+    TrackerLinksAttachPayload,
+    TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
 )
@@ -1267,3 +1271,375 @@ def test_create_task_raises_when_issue_payload_missing(
         tracker.create_task(_create_payload(description="Body"))
 
     assert "issue" in str(exc_info.value)
+
+
+def _comment_create_response_body(
+    *, comment_id: str = "cmt-1", success: bool = True
+) -> bytes:
+    return json.dumps(
+        {
+            "data": {
+                "commentCreate": {
+                    "success": success,
+                    "comment": {"id": comment_id} if success else None,
+                }
+            }
+        }
+    ).encode("utf-8")
+
+
+def _issue_update_response_body(
+    *,
+    issue_id: str = "ISS-1",
+    url: str | None = "https://linear.app/team/issue/ISS-1",
+    success: bool = True,
+) -> bytes:
+    return json.dumps(
+        {
+            "data": {
+                "issueUpdate": {
+                    "success": success,
+                    "issue": {"id": issue_id, "url": url} if success else None,
+                }
+            }
+        }
+    ).encode("utf-8")
+
+
+def _attachment_create_response_body(
+    *,
+    attachment_id: str = "att-1",
+    url: str = "https://example.test/pr/1",
+    success: bool = True,
+) -> bytes:
+    return json.dumps(
+        {
+            "data": {
+                "attachmentCreate": {
+                    "success": success,
+                    "attachment": (
+                        {"id": attachment_id, "url": url} if success else None
+                    ),
+                }
+            }
+        }
+    ).encode("utf-8")
+
+
+def test_add_comment_sends_issue_id_and_body_and_returns_comment_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, calls = _scripted_http_requester(
+        [_comment_create_response_body(comment_id="cmt-42")]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    ref = tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id="ISS-7", body="Hello from worker"
+        )
+    )
+
+    assert ref.comment_id == "cmt-42"
+    assert len(calls) == 1
+    input_vars = calls[0]["variables"]["input"]
+    assert input_vars == {"issueId": "ISS-7", "body": "Hello from worker"}
+
+
+def test_add_comment_raises_when_response_success_is_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, _ = _scripted_http_requester(
+        [_comment_create_response_body(success=False)]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.add_comment(
+            TrackerCommentCreatePayload(external_task_id="ISS-1", body="x")
+        )
+
+    assert "success=false" in str(exc_info.value)
+
+
+def test_add_comment_raises_when_comment_payload_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {"data": {"commentCreate": {"success": True, "comment": None}}}
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.add_comment(
+            TrackerCommentCreatePayload(external_task_id="ISS-1", body="x")
+        )
+
+    assert "comment" in str(exc_info.value)
+
+
+def test_add_comment_raises_when_comment_id_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {"data": {"commentCreate": {"success": True, "comment": {"id": ""}}}}
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.add_comment(
+            TrackerCommentCreatePayload(external_task_id="ISS-1", body="x")
+        )
+
+    assert "comment id" in str(exc_info.value)
+
+
+def test_update_status_uses_explicit_state_id_without_calling_team_states(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.DONE: "state-done"},
+    )
+    fake, calls = _scripted_http_requester(
+        [_issue_update_response_body(issue_id="ISS-9", url="https://l/i/9")]
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    ref = tracker.update_status(
+        TrackerStatusUpdatePayload(
+            external_task_id="ISS-9", status=TaskStatus.DONE
+        )
+    )
+
+    assert ref.external_id == "ISS-9"
+    assert ref.url == "https://l/i/9"
+    assert len(calls) == 1
+    variables = calls[0]["variables"]
+    assert variables["id"] == "ISS-9"
+    assert variables["input"] == {"stateId": "state-done"}
+
+
+def test_update_status_falls_back_to_team_states_when_no_explicit_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    states_body = _states_response_body(
+        [
+            {"id": "started-late", "name": "WIP", "type": "started",
+             "position": 200.0},
+            {"id": "started-early", "name": "Doing", "type": "started",
+             "position": 50.0},
+        ]
+    )
+    fake, calls = _scripted_http_requester(
+        [states_body, _issue_update_response_body(issue_id="ISS-9")]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    tracker.update_status(
+        TrackerStatusUpdatePayload(
+            external_task_id="ISS-9", status=TaskStatus.PROCESSING
+        )
+    )
+
+    assert len(calls) == 2
+    assert calls[1]["variables"]["input"] == {"stateId": "started-early"}
+
+
+def test_update_status_propagates_runtime_error_when_status_unmappable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    states_body = _states_response_body(
+        [
+            {"id": "started-1", "name": "Doing", "type": "started",
+             "position": 10.0},
+        ]
+    )
+    fake, _ = _scripted_http_requester([states_body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.update_status(
+            TrackerStatusUpdatePayload(
+                external_task_id="ISS-1", status=TaskStatus.DONE
+            )
+        )
+
+    assert "LINEAR_STATE_ID_DONE" in str(exc_info.value)
+
+
+def test_update_status_raises_when_response_success_is_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.DONE: "state-done"},
+    )
+    fake, _ = _scripted_http_requester(
+        [_issue_update_response_body(success=False)]
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.update_status(
+            TrackerStatusUpdatePayload(
+                external_task_id="ISS-1", status=TaskStatus.DONE
+            )
+        )
+
+    assert "success=false" in str(exc_info.value)
+
+
+def test_update_status_returns_reference_without_url_when_response_url_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.DONE: "state-done"},
+    )
+    fake, _ = _scripted_http_requester([_issue_update_response_body(url=None)])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    ref = tracker.update_status(
+        TrackerStatusUpdatePayload(
+            external_task_id="ISS-1", status=TaskStatus.DONE
+        )
+    )
+
+    assert ref.external_id == "ISS-1"
+    assert ref.url is None
+
+
+def test_attach_links_sends_one_mutation_per_link_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, calls = _scripted_http_requester(
+        [
+            _attachment_create_response_body(
+                attachment_id="att-1", url="https://example.test/pr/1"
+            ),
+            _attachment_create_response_body(
+                attachment_id="att-2", url="https://example.test/pr/2"
+            ),
+            _attachment_create_response_body(
+                attachment_id="att-3", url="https://example.test/pr/3"
+            ),
+        ]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    ref = tracker.attach_links(
+        TrackerLinksAttachPayload(
+            external_task_id="ISS-5",
+            links=[
+                TaskLink(label="PR #1", url="https://example.test/pr/1"),
+                TaskLink(label="PR #2", url="https://example.test/pr/2"),
+                TaskLink(label="PR #3", url="https://example.test/pr/3"),
+            ],
+        )
+    )
+
+    assert ref.external_id == "ISS-5"
+    assert ref.url is None
+    assert len(calls) == 3
+    for index, call in enumerate(calls, start=1):
+        input_vars = call["variables"]["input"]
+        assert input_vars == {
+            "issueId": "ISS-5",
+            "url": f"https://example.test/pr/{index}",
+            "title": f"PR #{index}",
+        }
+
+
+def test_attach_links_with_single_link_sends_one_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, calls = _scripted_http_requester(
+        [_attachment_create_response_body(url="https://example.test/x")]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    tracker.attach_links(
+        TrackerLinksAttachPayload(
+            external_task_id="ISS-1",
+            links=[TaskLink(label="X", url="https://example.test/x")],
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["variables"]["input"] == {
+        "issueId": "ISS-1",
+        "url": "https://example.test/x",
+        "title": "X",
+    }
+
+
+def test_attach_links_is_idempotent_on_repeat_call_with_same_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    # Linear returns success=true on duplicate (issueId, url) — it just
+    # updates the existing attachment instead of creating a new one.
+    fake, calls = _scripted_http_requester(
+        [
+            _attachment_create_response_body(
+                attachment_id="att-1", url="https://example.test/pr/1"
+            ),
+            _attachment_create_response_body(
+                attachment_id="att-1", url="https://example.test/pr/1"
+            ),
+        ]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    payload = TrackerLinksAttachPayload(
+        external_task_id="ISS-3",
+        links=[TaskLink(label="PR #1", url="https://example.test/pr/1")],
+    )
+
+    tracker.attach_links(payload)
+    tracker.attach_links(payload)
+
+    assert len(calls) == 2
+    for call in calls:
+        assert call["variables"]["input"]["url"] == "https://example.test/pr/1"
+
+
+def test_attach_links_raises_with_url_when_attachment_create_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, _ = _scripted_http_requester(
+        [
+            _attachment_create_response_body(url="https://example.test/ok"),
+            _attachment_create_response_body(
+                url="https://example.test/bad", success=False
+            ),
+        ]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.attach_links(
+            TrackerLinksAttachPayload(
+                external_task_id="ISS-1",
+                links=[
+                    TaskLink(label="ok", url="https://example.test/ok"),
+                    TaskLink(label="bad", url="https://example.test/bad"),
+                ],
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "https://example.test/bad" in message
+    assert "success=false" in message
