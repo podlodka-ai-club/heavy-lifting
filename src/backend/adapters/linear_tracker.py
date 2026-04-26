@@ -4,12 +4,17 @@ import json
 import os
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
+
 from backend.logging_setup import get_logger
 from backend.schemas import (
+    TaskContext,
+    TaskInputPayload,
+    TaskLink,
     TrackerCommentCreatePayload,
     TrackerCommentReference,
     TrackerFetchTasksQuery,
@@ -66,6 +71,31 @@ _TASK_STATUS_TO_ENV_HINT: Mapping[TaskStatus, str] = {
     TaskStatus.DONE: "LINEAR_STATE_ID_DONE",
     TaskStatus.FAILED: "LINEAR_STATE_ID_FAILED",
 }
+
+_LINEAR_PAGE_LIMIT = 250
+
+_FETCH_ISSUES_QUERY = """
+query LinearFetchIssues(
+  $filter: IssueFilter,
+  $first: Int!,
+  $after: String,
+  $orderBy: PaginationOrderBy
+) {
+  issues(filter: $filter, first: $first, after: $after, orderBy: $orderBy) {
+    nodes {
+      id
+      parent { id }
+      title
+      description
+      state { id type name }
+      labels { nodes { id name } }
+      attachments { nodes { url title } }
+      url
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+""".strip()
 
 
 class LinearRateLimitError(RuntimeError):
@@ -362,7 +392,241 @@ class LinearTracker:
         return _STATE_TYPE_TO_TASK_STATUS.get(state_type)
 
     def fetch_tasks(self, query: TrackerFetchTasksQuery) -> list[TrackerTask]:
-        raise NotImplementedError("fetch_tasks will be implemented in task04")
+        state_types = self._collect_fetch_state_types(query.statuses)
+        if not state_types:
+            return []
+
+        filter_dict = self._build_issues_filter(state_types, query.task_type)
+
+        collected: list[TrackerTask] = []
+        after: str | None = None
+        pages_done = 0
+        has_next = True
+
+        while (
+            len(collected) < query.limit
+            and has_next
+            and pages_done < self._config.max_pages
+        ):
+            remaining = query.limit - len(collected)
+            first = min(remaining, _LINEAR_PAGE_LIMIT)
+            variables: dict[str, Any] = {
+                "filter": filter_dict,
+                "first": first,
+                "after": after,
+                "orderBy": "createdAt",
+            }
+            data = self._client.execute(_FETCH_ISSUES_QUERY, variables)
+            issues_block = data.get("issues")
+            if not isinstance(issues_block, dict):
+                raise RuntimeError(
+                    "Linear issues response missing 'issues' object"
+                )
+            nodes = issues_block.get("nodes")
+            if not isinstance(nodes, list):
+                raise RuntimeError("Linear issues.nodes is not a list")
+
+            for raw_issue in nodes:
+                if not isinstance(raw_issue, dict):
+                    continue
+                tracker_task = self._to_tracker_task(raw_issue)
+                if tracker_task is None:
+                    continue
+                collected.append(tracker_task)
+                if len(collected) >= query.limit:
+                    break
+
+            page_info = issues_block.get("pageInfo")
+            if isinstance(page_info, dict):
+                has_next = bool(page_info.get("hasNextPage"))
+                end_cursor = page_info.get("endCursor")
+                after = end_cursor if isinstance(end_cursor, str) else None
+            else:
+                has_next = False
+                after = None
+
+            pages_done += 1
+            if after is None:
+                break
+
+        if (
+            has_next
+            and len(collected) < query.limit
+            and pages_done >= self._config.max_pages
+        ):
+            _logger.warning(
+                "linear_fetch_max_pages_reached",
+                pages_done=pages_done,
+                collected=len(collected),
+                limit=query.limit,
+                max_pages=self._config.max_pages,
+            )
+
+        return collected
+
+    def _collect_fetch_state_types(
+        self, statuses: Sequence[TaskStatus]
+    ) -> list[str]:
+        desired = set(statuses)
+        candidates = [
+            state_type
+            for state_type, status in _STATE_TYPE_TO_TASK_STATUS.items()
+            if status in desired
+        ]
+        if self._config.fetch_state_types:
+            allowed = set(self._config.fetch_state_types)
+            candidates = [t for t in candidates if t in allowed]
+        return candidates
+
+    def _build_issues_filter(
+        self,
+        state_types: Sequence[str],
+        task_type: TaskType | None,
+    ) -> dict[str, Any]:
+        label_ids: list[str] = []
+        if task_type is not None:
+            mapped = self._config.task_type_to_label_id.get(task_type)
+            if mapped:
+                label_ids.append(mapped)
+            else:
+                _logger.warning(
+                    "linear_task_type_label_missing",
+                    task_type=task_type.value,
+                )
+        if self._config.fetch_label_id:
+            label_ids.append(self._config.fetch_label_id)
+
+        state_clause: dict[str, Any] = {"state": {"type": {"in": list(state_types)}}}
+        if not label_ids:
+            return state_clause
+        if len(label_ids) == 1:
+            return {**state_clause, "labels": {"id": {"eq": label_ids[0]}}}
+        label_clauses = [{"labels": {"id": {"eq": lid}}} for lid in label_ids]
+        return {"and": [state_clause, *label_clauses]}
+
+    def _to_tracker_task(self, issue: Mapping[str, Any]) -> TrackerTask | None:
+        external_id = issue.get("id")
+        if not isinstance(external_id, str) or not external_id:
+            return None
+
+        state = issue.get("state")
+        state_type = state.get("type") if isinstance(state, dict) else None
+        status_type = state_type if isinstance(state_type, str) else None
+        status = self._state_to_task_status(status_type)
+        if status is None:
+            _logger.warning(
+                "linear_unknown_state_type",
+                state_type=status_type,
+                issue_id=external_id,
+            )
+            return None
+
+        parent = issue.get("parent")
+        parent_id_raw = parent.get("id") if isinstance(parent, dict) else None
+        parent_id = parent_id_raw if isinstance(parent_id_raw, str) else None
+
+        title_raw = issue.get("title")
+        title = title_raw if isinstance(title_raw, str) and title_raw else external_id
+
+        description_raw = issue.get("description")
+        description: str | None = (
+            description_raw if isinstance(description_raw, str) else None
+        )
+        cleaned_description_raw, payload_dict = _extract_input_block(description)
+        cleaned_description: str | None = cleaned_description_raw or None
+
+        references = self._extract_references(issue.get("attachments"))
+        task_type = self._extract_task_type(issue.get("labels"))
+        repo_url, repo_ref, workspace_key, input_payload = (
+            self._extract_input_payload(payload_dict, external_id)
+        )
+
+        metadata: dict[str, Any] = {"linear_team_id": self._config.team_id}
+        issue_url = issue.get("url")
+        if isinstance(issue_url, str) and issue_url:
+            metadata["linear_issue_url"] = issue_url
+
+        return TrackerTask(
+            external_id=external_id,
+            parent_external_id=parent_id,
+            status=status,
+            task_type=task_type,
+            context=TaskContext(
+                title=title,
+                description=cleaned_description,
+                references=references,
+            ),
+            input_payload=input_payload,
+            repo_url=repo_url,
+            repo_ref=repo_ref,
+            workspace_key=workspace_key,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _extract_references(attachments: Any) -> list[TaskLink]:
+        nodes = attachments.get("nodes") if isinstance(attachments, dict) else None
+        if not isinstance(nodes, list):
+            return []
+        result: list[TaskLink] = []
+        for raw in nodes:
+            if not isinstance(raw, dict):
+                continue
+            url = raw.get("url")
+            if not isinstance(url, str) or not url:
+                continue
+            title = raw.get("title")
+            label = title if isinstance(title, str) and title else url
+            result.append(TaskLink(label=label, url=url))
+        return result
+
+    def _extract_task_type(self, labels: Any) -> TaskType | None:
+        if not self._config.task_type_to_label_id:
+            return None
+        nodes = labels.get("nodes") if isinstance(labels, dict) else None
+        if not isinstance(nodes, list):
+            return None
+        reverse = {
+            label_id: task_type
+            for task_type, label_id in self._config.task_type_to_label_id.items()
+        }
+        for raw in nodes:
+            if not isinstance(raw, dict):
+                continue
+            label_id = raw.get("id")
+            if isinstance(label_id, str) and label_id in reverse:
+                return reverse[label_id]
+        return None
+
+    @staticmethod
+    def _extract_input_payload(
+        payload_dict: dict[str, Any] | None, issue_id: str
+    ) -> tuple[str | None, str | None, str | None, TaskInputPayload | None]:
+        if not payload_dict:
+            return None, None, None, None
+
+        def _opt_str(key: str) -> str | None:
+            value = payload_dict.get(key)
+            return value if isinstance(value, str) and value else None
+
+        repo_url = _opt_str("repo_url")
+        repo_ref = _opt_str("repo_ref")
+        workspace_key = _opt_str("workspace_key")
+
+        input_dict = payload_dict.get("input")
+        input_payload: TaskInputPayload | None = None
+        if isinstance(input_dict, dict):
+            try:
+                input_payload = TaskInputPayload.model_validate(input_dict)
+            except ValidationError as exc:
+                _logger.warning(
+                    "linear_input_payload_invalid",
+                    error=str(exc),
+                    issue_id=issue_id,
+                )
+                input_payload = None
+
+        return repo_url, repo_ref, workspace_key, input_payload
 
     def create_task(self, payload: TrackerTaskCreatePayload) -> TrackerTaskReference:
         raise NotImplementedError("create_task will be implemented in task05")

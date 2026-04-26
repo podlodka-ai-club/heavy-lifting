@@ -17,7 +17,8 @@ from backend.adapters.linear_tracker import (
     _inject_input_block,
 )
 from backend.protocols.tracker import TrackerProtocol
-from backend.task_constants import TaskStatus
+from backend.schemas import TrackerFetchTasksQuery
+from backend.task_constants import TaskStatus, TaskType
 
 
 def _make_config(**overrides: Any) -> LinearTrackerConfig:
@@ -527,3 +528,370 @@ def test_resolve_workflow_states_raises_when_state_position_not_numeric(
         tracker._status_to_state_id(TaskStatus.PROCESSING)
 
     assert "position" in str(exc_info.value)
+
+
+def _issues_response_body(
+    nodes: list[dict[str, Any]],
+    *,
+    has_next: bool = False,
+    end_cursor: str | None = None,
+) -> bytes:
+    return json.dumps(
+        {
+            "data": {
+                "issues": {
+                    "nodes": nodes,
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                }
+            }
+        }
+    ).encode("utf-8")
+
+
+def _scripted_http_requester(
+    bodies: list[bytes],
+) -> tuple[Any, list[dict[str, Any]]]:
+    calls: list[dict[str, Any]] = []
+    queue = list(bodies)
+
+    def fake(req: urllib.request.Request, _timeout: float) -> Any:
+        body_bytes = req.data or b""
+        parsed = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+        calls.append(
+            {
+                "query": parsed.get("query"),
+                "variables": parsed.get("variables"),
+            }
+        )
+        if not queue:
+            raise AssertionError("no scripted response left for http_requester")
+        return _FakeResponse(queue.pop(0))
+
+    return fake, calls
+
+
+def _issue_node(
+    *,
+    issue_id: str,
+    state_type: str = "unstarted",
+    title: str = "Some issue",
+    description: str | None = None,
+    parent_id: str | None = None,
+    label_nodes: list[dict[str, Any]] | None = None,
+    attachment_nodes: list[dict[str, Any]] | None = None,
+    url: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": issue_id,
+        "parent": {"id": parent_id} if parent_id else None,
+        "title": title,
+        "description": description,
+        "state": {"id": f"state-{state_type}", "type": state_type, "name": state_type.upper()},
+        "labels": {"nodes": label_nodes or []},
+        "attachments": {"nodes": attachment_nodes or []},
+        "url": url or f"https://linear.app/team/issue/{issue_id}",
+    }
+
+
+def test_fetch_tasks_returns_empty_when_state_intersection_is_empty() -> None:
+    config = _make_config(fetch_state_types=("started",))
+    tracker = LinearTracker(config, http_requester=_never_called)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50)
+    )
+
+    assert result == []
+
+
+def test_fetch_tasks_single_page_maps_issue_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    issue = _issue_node(
+        issue_id="ISS-1",
+        title="Implement X",
+        description="Hello\n\n"
+        + INPUT_BLOCK_OPEN
+        + "\n"
+        + json.dumps(
+            {
+                "repo_url": "https://example.test/repo",
+                "repo_ref": "main",
+                "workspace_key": "ws-1",
+                "input": {"instructions": "do work", "branch_name": "feat/x"},
+            }
+        )
+        + "\n"
+        + INPUT_BLOCK_CLOSE,
+        parent_id="ISS-PARENT",
+        attachment_nodes=[
+            {"url": "https://example.test/pr/1", "title": "PR #1"},
+            {"url": "https://example.test/pr/2", "title": None},
+        ],
+        url="https://linear.app/team/issue/ISS-1",
+    )
+    body = _issues_response_body([issue])
+    fake, calls = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50)
+    )
+
+    assert len(result) == 1
+    task = result[0]
+    assert task.external_id == "ISS-1"
+    assert task.parent_external_id == "ISS-PARENT"
+    assert task.status is TaskStatus.NEW
+    assert task.context.title == "Implement X"
+    assert task.context.description == "Hello"
+    assert [link.url for link in task.context.references] == [
+        "https://example.test/pr/1",
+        "https://example.test/pr/2",
+    ]
+    assert task.context.references[0].label == "PR #1"
+    # second attachment had no title — falls back to url as label
+    assert task.context.references[1].label == "https://example.test/pr/2"
+    assert task.repo_url == "https://example.test/repo"
+    assert task.repo_ref == "main"
+    assert task.workspace_key == "ws-1"
+    assert task.input_payload is not None
+    assert task.input_payload.instructions == "do work"
+    assert task.input_payload.branch_name == "feat/x"
+    assert task.metadata["linear_issue_url"] == "https://linear.app/team/issue/ISS-1"
+    assert task.metadata["linear_team_id"] == "team-1"
+
+    assert len(calls) == 1
+    variables = calls[0]["variables"]
+    assert variables["orderBy"] == "createdAt"
+    assert variables["first"] <= 250
+    assert variables["after"] is None
+    state_filter = variables["filter"]["state"]["type"]["in"]
+    assert set(state_filter) == {"triage", "backlog", "unstarted"}
+
+
+def test_fetch_tasks_paginates_with_clamp_to_250_aggregating_to_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    page1 = _issues_response_body(
+        [_issue_node(issue_id=f"P1-{i}") for i in range(250)],
+        has_next=True,
+        end_cursor="cur-1",
+    )
+    page2 = _issues_response_body(
+        [_issue_node(issue_id=f"P2-{i}") for i in range(250)],
+        has_next=True,
+        end_cursor="cur-2",
+    )
+    page3 = _issues_response_body(
+        [_issue_node(issue_id=f"P3-{i}") for i in range(100)],
+        has_next=False,
+        end_cursor=None,
+    )
+    fake, calls = _scripted_http_requester([page1, page2, page3])
+    tracker = LinearTracker(_make_config(max_pages=4), http_requester=fake)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=600)
+    )
+
+    assert len(result) == 600
+    assert len(calls) == 3
+    assert calls[0]["variables"]["first"] == 250
+    assert calls[0]["variables"]["after"] is None
+    assert calls[1]["variables"]["first"] == 250
+    assert calls[1]["variables"]["after"] == "cur-1"
+    assert calls[2]["variables"]["first"] == 100
+    assert calls[2]["variables"]["after"] == "cur-2"
+
+
+def test_fetch_tasks_stops_at_max_pages_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    caplog.set_level("WARNING")
+    page1 = _issues_response_body(
+        [_issue_node(issue_id=f"P1-{i}") for i in range(250)],
+        has_next=True,
+        end_cursor="cur-1",
+    )
+    page2 = _issues_response_body(
+        [_issue_node(issue_id=f"P2-{i}") for i in range(250)],
+        has_next=True,
+        end_cursor="cur-2",
+    )
+    fake, calls = _scripted_http_requester([page1, page2])
+    tracker = LinearTracker(_make_config(max_pages=2), http_requester=fake)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=1000)
+    )
+
+    assert len(result) == 500
+    assert len(calls) == 2
+    warnings = [
+        r.msg
+        for r in caplog.records
+        if isinstance(r.msg, dict)
+        and r.msg.get("event") == "linear_fetch_max_pages_reached"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0]["pages_done"] == 2
+    assert warnings[0]["collected"] == 500
+    assert warnings[0]["limit"] == 1000
+
+
+def test_fetch_tasks_filter_includes_task_type_label_when_mapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        task_type_to_label_id={TaskType.PR_FEEDBACK: "label-prf"},
+    )
+    fake, calls = _scripted_http_requester([_issues_response_body([])])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.fetch_tasks(
+        TrackerFetchTasksQuery(
+            statuses=[TaskStatus.NEW], task_type=TaskType.PR_FEEDBACK, limit=10
+        )
+    )
+
+    filter_dict = calls[0]["variables"]["filter"]
+    assert filter_dict["labels"] == {"id": {"eq": "label-prf"}}
+    assert "and" not in filter_dict
+
+
+def test_fetch_tasks_filter_combines_label_and_fetch_label_via_and(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        task_type_to_label_id={TaskType.EXECUTE: "label-exec"},
+        fetch_label_id="label-fetch",
+    )
+    fake, calls = _scripted_http_requester([_issues_response_body([])])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.fetch_tasks(
+        TrackerFetchTasksQuery(
+            statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10
+        )
+    )
+
+    filter_dict = calls[0]["variables"]["filter"]
+    assert "and" in filter_dict
+    label_clauses = [
+        clause for clause in filter_dict["and"] if "labels" in clause
+    ]
+    label_ids = sorted(c["labels"]["id"]["eq"] for c in label_clauses)
+    assert label_ids == ["label-exec", "label-fetch"]
+
+
+def test_fetch_tasks_warns_when_task_type_has_no_label_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    caplog.set_level("WARNING")
+    fake, calls = _scripted_http_requester([_issues_response_body([])])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    tracker.fetch_tasks(
+        TrackerFetchTasksQuery(
+            statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10
+        )
+    )
+
+    filter_dict = calls[0]["variables"]["filter"]
+    assert "labels" not in filter_dict
+    warnings = [
+        r.msg
+        for r in caplog.records
+        if isinstance(r.msg, dict)
+        and r.msg.get("event") == "linear_task_type_label_missing"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0]["task_type"] == "execute"
+
+
+def test_fetch_tasks_skips_issue_with_unknown_state_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = _issues_response_body(
+        [
+            _issue_node(issue_id="GOOD", state_type="unstarted"),
+            _issue_node(issue_id="WEIRD", state_type="custom-blocked"),
+        ]
+    )
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50)
+    )
+
+    assert [task.external_id for task in result] == ["GOOD"]
+
+
+def test_fetch_tasks_assigns_task_type_via_reverse_label_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        task_type_to_label_id={TaskType.PR_FEEDBACK: "label-prf"},
+    )
+    issue = _issue_node(
+        issue_id="ISS-2",
+        label_nodes=[
+            {"id": "label-prf", "name": "pr-feedback"},
+            {"id": "other", "name": "misc"},
+        ],
+    )
+    fake, _ = _scripted_http_requester([_issues_response_body([issue])])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10)
+    )
+
+    assert len(result) == 1
+    assert result[0].task_type is TaskType.PR_FEEDBACK
+
+
+def test_fetch_tasks_handles_invalid_input_payload_gracefully(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    caplog.set_level("WARNING")
+    description = (
+        "header\n\n"
+        + INPUT_BLOCK_OPEN
+        + "\n"
+        + json.dumps({"input": {"unknown_field": "boom"}})
+        + "\n"
+        + INPUT_BLOCK_CLOSE
+    )
+    issue = _issue_node(issue_id="ISS-3", description=description)
+    fake, _ = _scripted_http_requester([_issues_response_body([issue])])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10)
+    )
+
+    assert len(result) == 1
+    assert result[0].input_payload is None
+    invalid_warnings = [
+        r.msg
+        for r in caplog.records
+        if isinstance(r.msg, dict)
+        and r.msg.get("event") == "linear_input_payload_invalid"
+    ]
+    assert len(invalid_warnings) == 1
+    assert invalid_warnings[0]["issue_id"] == "ISS-3"
