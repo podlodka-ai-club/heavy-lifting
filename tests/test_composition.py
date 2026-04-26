@@ -1,5 +1,8 @@
 from dataclasses import replace
 
+import pytest
+
+from backend.adapters.linear_tracker import LinearTracker
 from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
 from backend.api.app import create_app
@@ -10,6 +13,7 @@ from backend.composition import (
 from backend.protocols.agent_runner import AgentRunnerProtocol
 from backend.services.agent_runner import CliAgentRunner, LocalAgentRunner
 from backend.settings import get_settings
+from backend.task_constants import TaskStatus, TaskType
 from backend.workers import deliver_worker, execute_worker, fetch_worker
 
 
@@ -78,6 +82,128 @@ def test_create_runtime_container_rejects_unknown_adapter(monkeypatch) -> None:
         assert str(exc) == "Unsupported tracker adapter: unknown"
     else:
         raise AssertionError("Expected ValueError for unknown tracker adapter")
+
+
+def _clear_tracker_env(monkeypatch) -> None:
+    for var in (
+        "TRACKER_ADAPTER",
+        "SCM_ADAPTER",
+        "AGENT_RUNNER_ADAPTER",
+        "LINEAR_TEAM_ID",
+        "LINEAR_TOKEN_ENV_VAR",
+        "LINEAR_API_KEY",
+        "LINEAR_STATE_ID_NEW",
+        "LINEAR_STATE_ID_PROCESSING",
+        "LINEAR_STATE_ID_DONE",
+        "LINEAR_STATE_ID_FAILED",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    get_settings.cache_clear()
+
+
+def test_create_runtime_container_builds_linear_tracker_from_settings(monkeypatch) -> None:
+    _clear_tracker_env(monkeypatch)
+    settings = replace(
+        get_settings(),
+        tracker_adapter="linear",
+        linear_team_id="team-1",
+        linear_token_env_var="LINEAR_API_KEY",
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.tracker, LinearTracker)
+    assert runtime.tracker._config.team_id == "team-1"
+    assert runtime.tracker._config.token_env_var == "LINEAR_API_KEY"
+    # Token value is intentionally NOT validated at composition time —
+    # _GraphqlClient.execute resolves it lazily on the first call.
+
+
+def test_create_runtime_container_rejects_linear_without_team_id(monkeypatch) -> None:
+    _clear_tracker_env(monkeypatch)
+    settings = replace(
+        get_settings(),
+        tracker_adapter="linear",
+        linear_team_id=None,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        create_runtime_container(settings=settings)
+    assert "LINEAR_TEAM_ID must be set" in str(exc_info.value)
+
+
+def test_create_runtime_container_rejects_linear_without_token_env_var(monkeypatch) -> None:
+    _clear_tracker_env(monkeypatch)
+    settings = replace(
+        get_settings(),
+        tracker_adapter="linear",
+        linear_team_id="team-1",
+        linear_token_env_var="",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        create_runtime_container(settings=settings)
+    assert "LINEAR_TOKEN_ENV_VAR must be set" in str(exc_info.value)
+
+
+def test_create_runtime_container_passes_through_linear_settings(monkeypatch) -> None:
+    _clear_tracker_env(monkeypatch)
+    settings = replace(
+        get_settings(),
+        tracker_adapter="linear",
+        linear_team_id="team-2",
+        linear_token_env_var="MY_LINEAR_TOKEN",
+        linear_api_url="https://example.test/graphql",
+        linear_state_id_new="state-new",
+        linear_state_id_processing="state-proc",
+        linear_state_id_done="state-done",
+        linear_state_id_failed="state-failed",
+        linear_task_type_label_mapping={"fetch": "lbl-fetch"},
+        linear_fetch_state_types=("backlog",),
+        linear_fetch_label_id="lbl-incoming",
+        linear_max_pages=2,
+        linear_description_warn_threshold=10,
+        linear_request_timeout_seconds=7,
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.tracker, LinearTracker)
+    config = runtime.tracker._config
+    assert config.api_url == "https://example.test/graphql"
+    assert config.team_id == "team-2"
+    assert config.timeout_seconds == 7
+    assert config.fetch_label_id == "lbl-incoming"
+    assert config.fetch_state_types == ("backlog",)
+    assert config.max_pages == 2
+    assert config.description_warn_threshold == 10
+    assert config.explicit_status_to_state_id == {
+        TaskStatus.NEW: "state-new",
+        TaskStatus.PROCESSING: "state-proc",
+        TaskStatus.DONE: "state-done",
+        TaskStatus.FAILED: "state-failed",
+    }
+    assert config.task_type_to_label_id == {TaskType.FETCH: "lbl-fetch"}
+
+
+def test_create_runtime_container_skips_unknown_task_type_label_mapping(monkeypatch) -> None:
+    _clear_tracker_env(monkeypatch)
+    settings = replace(
+        get_settings(),
+        tracker_adapter="linear",
+        linear_team_id="team-3",
+        linear_task_type_label_mapping={
+            "unknown_type": "lbl-x",
+            "fetch": "lbl-fetch",
+        },
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.tracker, LinearTracker)
+    assert runtime.tracker._config.task_type_to_label_id == {
+        TaskType.FETCH: "lbl-fetch",
+    }
 
 
 def test_create_runtime_container_rejects_unknown_agent_runner(monkeypatch) -> None:

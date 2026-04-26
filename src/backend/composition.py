@@ -5,13 +5,25 @@ from dataclasses import dataclass
 
 from flask import Flask
 
+from backend.adapters.linear_tracker import LinearTracker, LinearTrackerConfig
 from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
+from backend.logging_setup import get_logger
 from backend.protocols.agent_runner import AgentRunnerProtocol
 from backend.protocols.scm import ScmProtocol
 from backend.protocols.tracker import TrackerProtocol
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.settings import Settings, get_settings
+from backend.task_constants import TaskStatus, TaskType
+
+_logger = get_logger(component="composition")
+
+_TASK_STATUS_BY_STATE_ENV: Mapping[TaskStatus, str] = {
+    TaskStatus.NEW: "linear_state_id_new",
+    TaskStatus.PROCESSING: "linear_state_id_processing",
+    TaskStatus.DONE: "linear_state_id_done",
+    TaskStatus.FAILED: "linear_state_id_failed",
+}
 
 TrackerFactory = Callable[[Settings], TrackerProtocol]
 ScmFactory = Callable[[Settings], ScmProtocol]
@@ -35,6 +47,50 @@ class RuntimeContainer:
 
 def _build_mock_tracker(_: Settings) -> TrackerProtocol:
     return MockTracker()
+
+
+def _build_linear_tracker(settings: Settings) -> TrackerProtocol:
+    if not settings.linear_team_id:
+        raise ValueError(
+            "LINEAR_TEAM_ID must be set when tracker_adapter='linear'"
+        )
+    if not settings.linear_token_env_var:
+        raise ValueError(
+            "LINEAR_TOKEN_ENV_VAR must be set when tracker_adapter='linear'"
+        )
+
+    explicit_status_to_state_id: dict[TaskStatus, str] = {}
+    for status, attr in _TASK_STATUS_BY_STATE_ENV.items():
+        state_id = getattr(settings, attr)
+        if state_id:
+            explicit_status_to_state_id[status] = state_id
+
+    task_type_to_label_id: dict[TaskType, str] = {}
+    for raw_key, label_id in settings.linear_task_type_label_mapping.items():
+        try:
+            task_type = TaskType(raw_key)
+        except ValueError:
+            _logger.warning(
+                "linear_task_type_label_mapping_unknown_key",
+                key=raw_key,
+            )
+            continue
+        if label_id:
+            task_type_to_label_id[task_type] = label_id
+
+    config = LinearTrackerConfig(
+        api_url=settings.linear_api_url,
+        token_env_var=settings.linear_token_env_var,
+        team_id=settings.linear_team_id,
+        timeout_seconds=settings.linear_request_timeout_seconds,
+        fetch_label_id=settings.linear_fetch_label_id,
+        explicit_status_to_state_id=explicit_status_to_state_id,
+        fetch_state_types=settings.linear_fetch_state_types,
+        task_type_to_label_id=task_type_to_label_id,
+        max_pages=settings.linear_max_pages,
+        description_warn_threshold=settings.linear_description_warn_threshold,
+    )
+    return LinearTracker(config)
 
 
 def _build_mock_scm(_: Settings) -> ScmProtocol:
@@ -68,7 +124,10 @@ def _build_cli_agent_runner(settings: Settings) -> AgentRunnerProtocol:
 
 
 DEFAULT_ADAPTER_REGISTRY = AdapterRegistry(
-    tracker_factories={"mock": _build_mock_tracker},
+    tracker_factories={
+        "mock": _build_mock_tracker,
+        "linear": _build_linear_tracker,
+    },
     scm_factories={"mock": _build_mock_scm},
     agent_runner_factories={
         "local": _build_local_agent_runner,
