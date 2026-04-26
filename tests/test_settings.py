@@ -26,6 +26,19 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "CLI_AGENT_BASE_URL_ENV_VAR",
         "TRACKER_POLL_INTERVAL",
         "PR_POLL_INTERVAL",
+        "LINEAR_API_URL",
+        "LINEAR_TOKEN_ENV_VAR",
+        "LINEAR_TEAM_ID",
+        "LINEAR_REQUEST_TIMEOUT_SECONDS",
+        "LINEAR_FETCH_LABEL_ID",
+        "LINEAR_STATE_ID_NEW",
+        "LINEAR_STATE_ID_PROCESSING",
+        "LINEAR_STATE_ID_DONE",
+        "LINEAR_STATE_ID_FAILED",
+        "LINEAR_FETCH_STATE_TYPES",
+        "LINEAR_TASK_TYPE_LABEL_MAPPING",
+        "LINEAR_MAX_PAGES",
+        "LINEAR_DESCRIPTION_WARN_THRESHOLD",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -57,6 +70,19 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.cli_agent_base_url_env_var == "OPENAI_BASE_URL"
     assert settings.tracker_poll_interval == 30
     assert settings.pr_poll_interval == 60
+    assert settings.linear_api_url == "https://api.linear.app/graphql"
+    assert settings.linear_token_env_var == "LINEAR_API_KEY"
+    assert settings.linear_team_id is None
+    assert settings.linear_request_timeout_seconds == 30
+    assert settings.linear_fetch_label_id is None
+    assert settings.linear_state_id_new is None
+    assert settings.linear_state_id_processing is None
+    assert settings.linear_state_id_done is None
+    assert settings.linear_state_id_failed is None
+    assert settings.linear_fetch_state_types == ("triage", "backlog", "unstarted")
+    assert settings.linear_task_type_label_mapping == {}
+    assert settings.linear_max_pages == 4
+    assert settings.linear_description_warn_threshold == 50000
 
 
 def test_get_settings_reads_env_overrides(monkeypatch) -> None:
@@ -82,6 +108,19 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("CLI_AGENT_BASE_URL_ENV_VAR", "CUSTOM_BASE_URL")
     monkeypatch.setenv("TRACKER_POLL_INTERVAL", "15")
     monkeypatch.setenv("PR_POLL_INTERVAL", "45")
+    monkeypatch.setenv("LINEAR_API_URL", "https://custom.linear.app")
+    monkeypatch.setenv("LINEAR_TOKEN_ENV_VAR", "MY_LINEAR_KEY")
+    monkeypatch.setenv("LINEAR_TEAM_ID", "team-123")
+    monkeypatch.setenv("LINEAR_REQUEST_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("LINEAR_FETCH_LABEL_ID", "label-123")
+    monkeypatch.setenv("LINEAR_STATE_ID_NEW", "state-new")
+    monkeypatch.setenv("LINEAR_STATE_ID_PROCESSING", "state-proc")
+    monkeypatch.setenv("LINEAR_STATE_ID_DONE", "state-done")
+    monkeypatch.setenv("LINEAR_STATE_ID_FAILED", "state-fail")
+    monkeypatch.setenv("LINEAR_FETCH_STATE_TYPES", " triage, started, , ")
+    monkeypatch.setenv("LINEAR_TASK_TYPE_LABEL_MAPPING", '{"bug":"label-bug", "feature":"label-feat"}')
+    monkeypatch.setenv("LINEAR_MAX_PAGES", "10")
+    monkeypatch.setenv("LINEAR_DESCRIPTION_WARN_THRESHOLD", "10000")
 
     get_settings.cache_clear()
     settings = get_settings()
@@ -109,6 +148,19 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.cli_agent_base_url_env_var == "CUSTOM_BASE_URL"
     assert settings.tracker_poll_interval == 15
     assert settings.pr_poll_interval == 45
+    assert settings.linear_api_url == "https://custom.linear.app"
+    assert settings.linear_token_env_var == "MY_LINEAR_KEY"
+    assert settings.linear_team_id == "team-123"
+    assert settings.linear_request_timeout_seconds == 60
+    assert settings.linear_fetch_label_id == "label-123"
+    assert settings.linear_state_id_new == "state-new"
+    assert settings.linear_state_id_processing == "state-proc"
+    assert settings.linear_state_id_done == "state-done"
+    assert settings.linear_state_id_failed == "state-fail"
+    assert settings.linear_fetch_state_types == ("triage", "started")
+    assert settings.linear_task_type_label_mapping == {"bug": "label-bug", "feature": "label-feat"}
+    assert settings.linear_max_pages == 10
+    assert settings.linear_description_warn_threshold == 10000
 
 
 def test_get_settings_prefers_explicit_database_url(monkeypatch) -> None:
@@ -136,3 +188,21 @@ def test_get_settings_normalizes_postgresql_database_url(monkeypatch) -> None:
     assert settings.database_url == (
         "postgresql+psycopg://heavy_lifting:heavy_lifting@postgres:5432/heavy_lifting"
     )
+
+
+def test_get_settings_invalid_json_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("LINEAR_TASK_TYPE_LABEL_MAPPING", 'not-json')
+    
+    get_settings.cache_clear()
+    settings = get_settings()
+    
+    assert settings.linear_task_type_label_mapping == {}
+
+
+def test_get_settings_not_dict_json_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("LINEAR_TASK_TYPE_LABEL_MAPPING", '["list", "instead", "of", "dict"]')
+    
+    get_settings.cache_clear()
+    settings = get_settings()
+    
+    assert settings.linear_task_type_label_mapping == {}

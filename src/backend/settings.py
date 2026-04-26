@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -5,6 +6,26 @@ from functools import lru_cache
 
 def _get_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
+
+
+def _get_tuple(name: str, default: str) -> tuple[str, ...]:
+    val = os.getenv(name, default)
+    if not val.strip():
+        return ()
+    return tuple(x.strip() for x in val.split(",") if x.strip())
+
+
+def _get_dict(name: str, default: str) -> dict[str, str]:
+    val = os.getenv(name, default)
+    if not val.strip():
+        return {}
+    try:
+        parsed = json.loads(val)
+        if isinstance(parsed, dict):
+            return {str(k): str(v) for k, v in parsed.items()}
+        return {}
+    except json.JSONDecodeError:
+        return {}
 
 
 def _normalize_database_url(database_url: str) -> str:
@@ -55,6 +76,19 @@ class Settings:
     cli_agent_base_url_env_var: str | None
     tracker_poll_interval: int
     pr_poll_interval: int
+    linear_api_url: str
+    linear_token_env_var: str
+    linear_team_id: str | None
+    linear_request_timeout_seconds: int
+    linear_fetch_label_id: str | None
+    linear_state_id_new: str | None
+    linear_state_id_processing: str | None
+    linear_state_id_done: str | None
+    linear_state_id_failed: str | None
+    linear_fetch_state_types: tuple[str, ...]
+    linear_task_type_label_mapping: dict[str, str]
+    linear_max_pages: int
+    linear_description_warn_threshold: int
 
 
 @lru_cache(maxsize=1)
@@ -96,6 +130,19 @@ def get_settings() -> Settings:
         or None,
         tracker_poll_interval=_get_int("TRACKER_POLL_INTERVAL", 30),
         pr_poll_interval=_get_int("PR_POLL_INTERVAL", 60),
+        linear_api_url=os.getenv("LINEAR_API_URL", "https://api.linear.app/graphql"),
+        linear_token_env_var=os.getenv("LINEAR_TOKEN_ENV_VAR", "LINEAR_API_KEY"),
+        linear_team_id=os.getenv("LINEAR_TEAM_ID") or None,
+        linear_request_timeout_seconds=_get_int("LINEAR_REQUEST_TIMEOUT_SECONDS", 30),
+        linear_fetch_label_id=os.getenv("LINEAR_FETCH_LABEL_ID") or None,
+        linear_state_id_new=os.getenv("LINEAR_STATE_ID_NEW") or None,
+        linear_state_id_processing=os.getenv("LINEAR_STATE_ID_PROCESSING") or None,
+        linear_state_id_done=os.getenv("LINEAR_STATE_ID_DONE") or None,
+        linear_state_id_failed=os.getenv("LINEAR_STATE_ID_FAILED") or None,
+        linear_fetch_state_types=_get_tuple("LINEAR_FETCH_STATE_TYPES", "triage,backlog,unstarted"),
+        linear_task_type_label_mapping=_get_dict("LINEAR_TASK_TYPE_LABEL_MAPPING", "{}"),
+        linear_max_pages=_get_int("LINEAR_MAX_PAGES", 4),
+        linear_description_warn_threshold=_get_int("LINEAR_DESCRIPTION_WARN_THRESHOLD", 50000),
     )
 
 
