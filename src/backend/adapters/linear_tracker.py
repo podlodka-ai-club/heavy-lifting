@@ -97,6 +97,18 @@ query LinearFetchIssues(
 }
 """.strip()
 
+_ISSUE_CREATE_MUTATION = """
+mutation LinearIssueCreate($input: IssueCreateInput!) {
+  issueCreate(input: $input) {
+    success
+    issue {
+      id
+      url
+    }
+  }
+}
+""".strip()
+
 
 class LinearRateLimitError(RuntimeError):
     pass
@@ -629,10 +641,126 @@ class LinearTracker:
         return repo_url, repo_ref, workspace_key, input_payload
 
     def create_task(self, payload: TrackerTaskCreatePayload) -> TrackerTaskReference:
-        raise NotImplementedError("create_task will be implemented in task05")
+        variables = self._build_create_variables(payload, parent_external_id=None)
+        return self._execute_issue_create(variables)
 
     def create_subtask(self, payload: TrackerSubtaskCreatePayload) -> TrackerTaskReference:
-        raise NotImplementedError("create_subtask will be implemented in task05")
+        variables = self._build_create_variables(
+            payload, parent_external_id=payload.parent_external_id
+        )
+        return self._execute_issue_create(variables)
+
+    def _execute_issue_create(self, variables: dict[str, Any]) -> TrackerTaskReference:
+        data = self._client.execute(_ISSUE_CREATE_MUTATION, {"input": variables})
+        result = data.get("issueCreate")
+        if not isinstance(result, dict):
+            raise RuntimeError("Linear issueCreate response missing 'issueCreate'")
+        if not result.get("success"):
+            raise RuntimeError("Linear issueCreate returned success=false")
+        issue = result.get("issue")
+        if not isinstance(issue, dict):
+            raise RuntimeError("Linear issueCreate response missing 'issue' object")
+        external_id = issue.get("id")
+        if not isinstance(external_id, str) or not external_id:
+            raise RuntimeError("Linear issueCreate response missing issue id")
+        url_raw = issue.get("url")
+        url = url_raw if isinstance(url_raw, str) and url_raw else None
+        return TrackerTaskReference(external_id=external_id, url=url)
+
+    def _build_create_variables(
+        self,
+        payload: TrackerTaskCreatePayload,
+        *,
+        parent_external_id: str | None,
+    ) -> dict[str, Any]:
+        team_id = self._resolve_team_id(payload)
+        state_id = self._status_to_state_id(payload.status)
+        description = self._inject_input_block_with_warning(
+            payload.context.description,
+            self._build_input_block_payload(payload),
+            title=payload.context.title,
+        )
+
+        variables: dict[str, Any] = {
+            "teamId": team_id,
+            "title": payload.context.title,
+            "stateId": state_id,
+        }
+        if description is not None:
+            variables["description"] = description
+        label_ids = self._resolve_label_ids(payload.task_type)
+        if label_ids:
+            variables["labelIds"] = label_ids
+        if parent_external_id:
+            variables["parentId"] = parent_external_id
+        return variables
+
+    def _resolve_team_id(self, payload: TrackerTaskCreatePayload) -> str:
+        override = payload.metadata.get("linear_team_id")
+        if isinstance(override, str) and override:
+            return override
+        return self._config.team_id
+
+    def _resolve_label_ids(self, task_type: TaskType | None) -> list[str]:
+        if task_type is None:
+            return []
+        mapped = self._config.task_type_to_label_id.get(task_type)
+        return [mapped] if mapped else []
+
+    @staticmethod
+    def _build_input_block_payload(
+        payload: TrackerTaskCreatePayload,
+    ) -> dict[str, Any]:
+        block: dict[str, Any] = {}
+        if payload.repo_url:
+            block["repo_url"] = payload.repo_url
+        if payload.repo_ref:
+            block["repo_ref"] = payload.repo_ref
+        if payload.workspace_key:
+            block["workspace_key"] = payload.workspace_key
+        if payload.input_payload is not None:
+            input_dump = payload.input_payload.model_dump(
+                mode="json", exclude_none=True
+            )
+            input_dump = {
+                k: v for k, v in input_dump.items() if not (isinstance(v, dict) and not v)
+            }
+            if input_dump:
+                block["input"] = input_dump
+        return block
+
+    def _inject_input_block_with_warning(
+        self,
+        description: str | None,
+        payload_dict: Mapping[str, Any],
+        *,
+        title: str,
+    ) -> str | None:
+        threshold = self._config.description_warn_threshold
+        base_length = len(description) if description else 0
+
+        if not payload_dict:
+            if threshold > 0 and base_length > threshold:
+                _logger.warning(
+                    "linear_description_warn_threshold_exceeded",
+                    title=title,
+                    description_length=base_length,
+                    block_length=0,
+                    threshold=threshold,
+                )
+            return description
+
+        injected = _inject_input_block(description, payload_dict)
+        if threshold > 0 and len(injected) > threshold:
+            block_length = len(injected) - base_length
+            _logger.warning(
+                "linear_description_warn_threshold_exceeded",
+                title=title,
+                description_length=len(injected),
+                block_length=block_length,
+                threshold=threshold,
+            )
+        return injected
 
     def add_comment(self, payload: TrackerCommentCreatePayload) -> TrackerCommentReference:
         raise NotImplementedError("add_comment will be implemented in task06")

@@ -17,7 +17,13 @@ from backend.adapters.linear_tracker import (
     _inject_input_block,
 )
 from backend.protocols.tracker import TrackerProtocol
-from backend.schemas import TrackerFetchTasksQuery
+from backend.schemas import (
+    TaskContext,
+    TaskInputPayload,
+    TrackerFetchTasksQuery,
+    TrackerSubtaskCreatePayload,
+    TrackerTaskCreatePayload,
+)
 from backend.task_constants import TaskStatus, TaskType
 
 
@@ -895,3 +901,369 @@ def test_fetch_tasks_handles_invalid_input_payload_gracefully(
     ]
     assert len(invalid_warnings) == 1
     assert invalid_warnings[0]["issue_id"] == "ISS-3"
+
+
+def _issue_create_response_body(
+    *, issue_id: str = "ISS-NEW", url: str = "https://linear.app/team/issue/ISS-NEW",
+    success: bool = True,
+) -> bytes:
+    return json.dumps(
+        {
+            "data": {
+                "issueCreate": {
+                    "success": success,
+                    "issue": {"id": issue_id, "url": url} if success else None,
+                }
+            }
+        }
+    ).encode("utf-8")
+
+
+def _create_payload(
+    *,
+    title: str = "Implement X",
+    description: str | None = None,
+    status: TaskStatus = TaskStatus.NEW,
+    task_type: TaskType | None = None,
+    input_payload: TaskInputPayload | None = None,
+    repo_url: str | None = None,
+    repo_ref: str | None = None,
+    workspace_key: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> TrackerTaskCreatePayload:
+    return TrackerTaskCreatePayload(
+        context=TaskContext(title=title, description=description),
+        status=status,
+        task_type=task_type,
+        input_payload=input_payload,
+        repo_url=repo_url,
+        repo_ref=repo_ref,
+        workspace_key=workspace_key,
+        metadata=metadata or {},
+    )
+
+
+def test_create_task_uses_explicit_state_id_without_calling_team_states(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "explicit-new-id"},
+    )
+    fake, calls = _scripted_http_requester(
+        [_issue_create_response_body(issue_id="ISS-100", url="https://linear.app/i/100")]
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    ref = tracker.create_task(_create_payload(title="Hello", description="Body"))
+
+    assert ref.external_id == "ISS-100"
+    assert ref.url == "https://linear.app/i/100"
+    assert len(calls) == 1
+    input_vars = calls[0]["variables"]["input"]
+    assert input_vars["teamId"] == "team-1"
+    assert input_vars["title"] == "Hello"
+    assert input_vars["description"] == "Body"
+    assert input_vars["stateId"] == "explicit-new-id"
+    assert "labelIds" not in input_vars
+    assert "parentId" not in input_vars
+
+
+def test_create_task_omits_description_when_none_and_no_block_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "explicit-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(_create_payload(description=None))
+
+    input_vars = calls[0]["variables"]["input"]
+    assert "description" not in input_vars
+
+
+def test_create_task_includes_label_ids_when_task_type_mapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+        task_type_to_label_id={TaskType.PR_FEEDBACK: "label-prf"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(_create_payload(task_type=TaskType.PR_FEEDBACK))
+
+    assert calls[0]["variables"]["input"]["labelIds"] == ["label-prf"]
+
+
+def test_create_task_skips_label_ids_when_task_type_has_no_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(_create_payload(task_type=TaskType.EXECUTE))
+
+    assert "labelIds" not in calls[0]["variables"]["input"]
+
+
+def test_create_task_uses_metadata_team_id_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(
+        _create_payload(metadata={"linear_team_id": "team-override"})
+    )
+
+    assert calls[0]["variables"]["input"]["teamId"] == "team-override"
+
+
+def test_create_task_falls_back_to_team_states_when_no_explicit_state_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    states_body = _states_response_body(
+        [
+            {"id": "unstarted-late", "name": "Backlog Top", "type": "unstarted",
+             "position": 200.0},
+            {"id": "unstarted-early", "name": "Todo", "type": "unstarted",
+             "position": 50.0},
+        ]
+    )
+    fake, calls = _scripted_http_requester(
+        [states_body, _issue_create_response_body(issue_id="ISS-FB")]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    ref = tracker.create_task(_create_payload(description="Body"))
+
+    assert ref.external_id == "ISS-FB"
+    # first call resolves states, second is the mutation
+    assert len(calls) == 2
+    assert calls[1]["variables"]["input"]["stateId"] == "unstarted-early"
+
+
+def test_create_task_injects_input_block_with_repo_and_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    payload = _create_payload(
+        description="Body text",
+        input_payload=TaskInputPayload(
+            instructions="run", base_branch="main", branch_name="feat/x"
+        ),
+        repo_url="https://example.test/repo",
+        repo_ref="main",
+        workspace_key="ws-1",
+    )
+
+    tracker.create_task(payload)
+
+    sent_description = calls[0]["variables"]["input"]["description"]
+    assert sent_description.startswith("Body text")
+    assert INPUT_BLOCK_OPEN in sent_description
+    cleaned, parsed = _extract_input_block(sent_description)
+    assert cleaned == "Body text"
+    assert parsed == {
+        "repo_url": "https://example.test/repo",
+        "repo_ref": "main",
+        "workspace_key": "ws-1",
+        "input": {
+            "instructions": "run",
+            "base_branch": "main",
+            "branch_name": "feat/x",
+        },
+    }
+
+
+def test_create_task_injects_block_when_description_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(
+        _create_payload(description=None, repo_url="https://example.test/repo")
+    )
+
+    sent_description = calls[0]["variables"]["input"]["description"]
+    cleaned, parsed = _extract_input_block(sent_description)
+    assert cleaned == ""
+    assert parsed == {"repo_url": "https://example.test/repo"}
+
+
+def test_create_task_warns_when_description_exceeds_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    caplog.set_level("WARNING")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+        description_warn_threshold=50_000,
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    long_description = "x" * 60_000
+    tracker.create_task(
+        _create_payload(
+            title="Long one",
+            description=long_description,
+            repo_url="https://example.test/repo",
+        )
+    )
+
+    # mutation must still be sent (warning is non-blocking)
+    assert len(calls) == 1
+    sent_description = calls[0]["variables"]["input"]["description"]
+    assert len(sent_description) > 60_000
+
+    warnings = [
+        r.msg
+        for r in caplog.records
+        if isinstance(r.msg, dict)
+        and r.msg.get("event") == "linear_description_warn_threshold_exceeded"
+    ]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning["title"] == "Long one"
+    assert warning["threshold"] == 50_000
+    assert warning["description_length"] == len(sent_description)
+    assert warning["block_length"] > 0
+
+
+def test_create_task_warns_for_long_description_without_block(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    caplog.set_level("WARNING")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+        description_warn_threshold=50_000,
+    )
+    fake, _ = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(_create_payload(description="x" * 60_000))
+
+    warnings = [
+        r.msg
+        for r in caplog.records
+        if isinstance(r.msg, dict)
+        and r.msg.get("event") == "linear_description_warn_threshold_exceeded"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0]["block_length"] == 0
+
+
+def test_create_task_does_not_warn_below_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    caplog.set_level("WARNING")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+        description_warn_threshold=50_000,
+    )
+    fake, _ = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(
+        _create_payload(description="short", repo_url="https://example.test/repo")
+    )
+
+    warnings = [
+        r.msg
+        for r in caplog.records
+        if isinstance(r.msg, dict)
+        and r.msg.get("event") == "linear_description_warn_threshold_exceeded"
+    ]
+    assert warnings == []
+
+
+def test_create_subtask_includes_parent_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body(issue_id="SUB-1")])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    payload = TrackerSubtaskCreatePayload(
+        context=TaskContext(title="Sub", description="Body"),
+        status=TaskStatus.NEW,
+        parent_external_id="ISS-PARENT",
+    )
+
+    ref = tracker.create_subtask(payload)
+
+    assert ref.external_id == "SUB-1"
+    input_vars = calls[0]["variables"]["input"]
+    assert input_vars["parentId"] == "ISS-PARENT"
+    assert input_vars["title"] == "Sub"
+    assert input_vars["stateId"] == "state-new"
+
+
+def test_create_task_raises_when_response_success_is_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, _ = _scripted_http_requester([_issue_create_response_body(success=False)])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.create_task(_create_payload(description="Body"))
+
+    assert "success=false" in str(exc_info.value)
+
+
+def test_create_task_raises_when_issue_payload_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {"data": {"issueCreate": {"success": True, "issue": None}}}
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker.create_task(_create_payload(description="Body"))
+
+    assert "issue" in str(exc_info.value)
