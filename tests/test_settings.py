@@ -118,7 +118,10 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("LINEAR_STATE_ID_DONE", "state-done")
     monkeypatch.setenv("LINEAR_STATE_ID_FAILED", "state-fail")
     monkeypatch.setenv("LINEAR_FETCH_STATE_TYPES", " triage, started, , ")
-    monkeypatch.setenv("LINEAR_TASK_TYPE_LABEL_MAPPING", '{"bug":"label-bug", "feature":"label-feat"}')
+    monkeypatch.setenv(
+        "LINEAR_TASK_TYPE_LABEL_MAPPING",
+        '{"bug":"label-bug", "feature":"label-feat"}',
+    )
     monkeypatch.setenv("LINEAR_MAX_PAGES", "10")
     monkeypatch.setenv("LINEAR_DESCRIPTION_WARN_THRESHOLD", "10000")
 
