@@ -7,6 +7,7 @@ This directory holds durable project knowledge for the Heavy Lifting orchestrato
 - `vision/` describes why the system exists, what outcomes it should deliver, and how the product should evolve.
 - `contracts/` defines durable interface and payload contracts between orchestrator stages.
 - `process/` documents repository workflows that should stay stable across individual tasks and contributors.
+- `integrations/` documents external systems wired in as orchestrator adapters (trackers, SCMs, agent runners).
 
 ## How to use the docs
 
@@ -18,6 +19,7 @@ This directory holds durable project knowledge for the Heavy Lifting orchestrato
 - Read `contracts/event-ingestion.md` when working on tracker comments, PR feedback ingestion, or monitor responsibilities.
 - Read `vision/roadmap.md` to place the current MVP in the larger delivery plan.
 - Read `process/worklog.md` before starting implementation work so local execution notes follow the expected shape.
+- Read `integrations/linear.md` when configuring `TRACKER_ADAPTER=linear` or changing how the orchestrator talks to Linear.
 
 ## Maintenance rules
 
