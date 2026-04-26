@@ -253,53 +253,65 @@ class _GraphqlClient:
         try:
             response = self._http_requester(request, float(self._timeout_seconds))
         except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                raise LinearRateLimitError(
-                    f"Linear GraphQL rate-limited (HTTP 429) at {self._api_url}"
-                ) from None
-            raise RuntimeError(
-                f"Linear GraphQL HTTP {exc.code} at {self._api_url}"
-            ) from None
+            # HTTPError IS a response — Linear may return RATELIMITED in the body
+            # even on HTTP 400, so read the body before deciding which class
+            # of error to raise.
+            response = exc
         except urllib.error.URLError as exc:
             raise RuntimeError(
                 f"Linear GraphQL transport error at {self._api_url}: {exc.reason}"
             ) from None
 
         try:
-            raw = response.read()
+            raw = response.read() or b""
+        except Exception:
+            raw = b""
         finally:
             close = getattr(response, "close", None)
             if callable(close):
-                close()
+                try:
+                    close()
+                except Exception:
+                    pass
 
-        status = getattr(response, "status", 200)
-        if status >= 400:
-            if status == 429:
-                raise LinearRateLimitError(
-                    f"Linear GraphQL rate-limited (HTTP 429) at {self._api_url}"
-                )
-            raise RuntimeError(f"Linear GraphQL HTTP {status} at {self._api_url}")
+        status_attr = getattr(response, "status", None)
+        if not isinstance(status_attr, int):
+            status_attr = getattr(response, "code", 200)
+        status: int = status_attr if isinstance(status_attr, int) else 200
 
         try:
-            payload = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"Linear GraphQL invalid JSON response at {self._api_url}: {exc}"
-            ) from None
+            payload: Any = json.loads(raw.decode("utf-8")) if raw else None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = None
 
-        errors = payload.get("errors") if isinstance(payload, dict) else None
-        if errors:
-            for error in errors:
-                if not isinstance(error, dict):
-                    continue
-                extensions = error.get("extensions")
-                if isinstance(extensions, dict) and extensions.get("code") == "RATELIMITED":
-                    raise LinearRateLimitError(
-                        f"Linear GraphQL rate-limited (RATELIMITED) at {self._api_url}"
-                    )
+        errors = (
+            payload.get("errors")
+            if isinstance(payload, dict)
+            else None
+        )
+
+        if isinstance(errors, list) and self._has_ratelimited(errors):
+            raise LinearRateLimitError(
+                f"Linear GraphQL rate-limited (RATELIMITED) at {self._api_url}"
+            )
+
+        if status == 429:
+            raise LinearRateLimitError(
+                f"Linear GraphQL rate-limited (HTTP 429) at {self._api_url}"
+            )
+
+        if status >= 400:
+            raise RuntimeError(f"Linear GraphQL HTTP {status} at {self._api_url}")
+
+        if isinstance(errors, list) and errors:
             raise RuntimeError(
                 f"Linear GraphQL errors at {self._api_url}: "
                 f"{self._summarize_errors(errors)}"
+            )
+
+        if payload is None:
+            raise RuntimeError(
+                f"Linear GraphQL invalid JSON response at {self._api_url}"
             )
 
         data = payload.get("data") if isinstance(payload, dict) else None
@@ -312,6 +324,16 @@ class _GraphqlClient:
                 f"Linear GraphQL response data is not an object at {self._api_url}"
             )
         return data
+
+    @staticmethod
+    def _has_ratelimited(errors: list[Any]) -> bool:
+        for error in errors:
+            if not isinstance(error, dict):
+                continue
+            extensions = error.get("extensions")
+            if isinstance(extensions, dict) and extensions.get("code") == "RATELIMITED":
+                return True
+        return False
 
     @staticmethod
     def _summarize_errors(errors: list[Any]) -> str:

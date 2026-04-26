@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -1643,3 +1645,211 @@ def test_attach_links_raises_with_url_when_attachment_create_fails(
     message = str(exc_info.value)
     assert "https://example.test/bad" in message
     assert "success=false" in message
+
+
+def _make_http_error(
+    *, code: int, body: bytes = b"", url: str = "https://api.linear.app/graphql"
+) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url, code, "rate-limited" if code == 429 else "err", {}, io.BytesIO(body)  # type: ignore[arg-type]
+    )
+
+
+def test_linear_rate_limit_error_is_runtime_error_subclass() -> None:
+    # Worker 1 catches generic Exception and re-raises; downstream consumers
+    # may also rely on `except RuntimeError`. Subclass invariant guarantees
+    # both still pick up rate-limit errors.
+    assert issubclass(LinearRateLimitError, RuntimeError)
+
+
+def test_graphql_client_rate_limit_on_urllib_http_error_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+
+    def http_requester(req: urllib.request.Request, _t: float) -> Any:
+        raise _make_http_error(code=429)
+
+    client = _GraphqlClient(
+        api_url="https://api.linear.app/graphql",
+        token_env_var="LINEAR_API_KEY_TEST",
+        timeout_seconds=30,
+        http_requester=http_requester,
+    )
+
+    with pytest.raises(LinearRateLimitError) as exc_info:
+        client.execute("q", {})
+
+    assert "429" in str(exc_info.value)
+
+
+def test_graphql_client_rate_limit_on_http_error_400_with_ratelimited_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Linear may surface RATELIMITED as HTTP 400 with structured GraphQL
+    # errors in the body. Adapter must treat that as rate-limit, not a generic
+    # 400 RuntimeError.
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {
+            "errors": [
+                {
+                    "message": "rate limit exceeded",
+                    "extensions": {"code": "RATELIMITED"},
+                }
+            ]
+        }
+    ).encode("utf-8")
+
+    def http_requester(req: urllib.request.Request, _t: float) -> Any:
+        raise _make_http_error(code=400, body=body)
+
+    client = _GraphqlClient(
+        api_url="https://api.linear.app/graphql",
+        token_env_var="LINEAR_API_KEY_TEST",
+        timeout_seconds=30,
+        http_requester=http_requester,
+    )
+
+    with pytest.raises(LinearRateLimitError) as exc_info:
+        client.execute("q", {})
+
+    assert "RATELIMITED" in str(exc_info.value)
+
+
+def test_graphql_client_runtime_error_on_http_error_500_without_ratelimited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {"errors": [{"message": "internal", "extensions": {"code": "INTERNAL"}}]}
+    ).encode("utf-8")
+
+    def http_requester(req: urllib.request.Request, _t: float) -> Any:
+        raise _make_http_error(code=500, body=body)
+
+    client = _GraphqlClient(
+        api_url="https://api.linear.app/graphql",
+        token_env_var="LINEAR_API_KEY_TEST",
+        timeout_seconds=30,
+        http_requester=http_requester,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client.execute("q", {})
+
+    assert not isinstance(exc_info.value, LinearRateLimitError)
+    assert "500" in str(exc_info.value)
+
+
+def test_graphql_client_url_error_is_runtime_error_not_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+
+    def http_requester(req: urllib.request.Request, _t: float) -> Any:
+        raise urllib.error.URLError("connection timed out")
+
+    client = _GraphqlClient(
+        api_url="https://api.linear.app/graphql",
+        token_env_var="LINEAR_API_KEY_TEST",
+        timeout_seconds=30,
+        http_requester=http_requester,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client.execute("q", {})
+
+    assert not isinstance(exc_info.value, LinearRateLimitError)
+    assert "transport" in str(exc_info.value)
+    assert "connection timed out" in str(exc_info.value)
+
+
+def test_graphql_client_rate_limit_takes_priority_over_other_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {
+            "errors": [
+                {"message": "field error", "extensions": {"code": "INVALID_INPUT"}},
+                {"message": "rate limit", "extensions": {"code": "RATELIMITED"}},
+            ]
+        }
+    ).encode("utf-8")
+    client = _GraphqlClient(
+        api_url="https://api.linear.app/graphql",
+        token_env_var="LINEAR_API_KEY_TEST",
+        timeout_seconds=30,
+        http_requester=lambda req, t: _FakeResponse(body),
+    )
+
+    with pytest.raises(LinearRateLimitError):
+        client.execute("q", {})
+
+
+def test_graphql_client_rate_limit_message_contains_endpoint_and_no_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "lin_api_z9y8x7w6v5u4t3s2"
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", secret)
+    body = json.dumps(
+        {"errors": [{"extensions": {"code": "RATELIMITED"}}]}
+    ).encode("utf-8")
+    endpoint = "https://api.linear.app/graphql"
+    client = _GraphqlClient(
+        api_url=endpoint,
+        token_env_var="LINEAR_API_KEY_TEST",
+        timeout_seconds=30,
+        http_requester=lambda req, t: _FakeResponse(body),
+    )
+
+    with pytest.raises(LinearRateLimitError) as exc_info:
+        client.execute("q", {})
+
+    message = str(exc_info.value)
+    assert endpoint in message
+    assert secret not in message
+
+
+def test_fetch_tasks_propagates_linear_rate_limit_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Worker 1 polling path: Linear answers the very first issues query with
+    # a RATELIMITED extension code. fetch_tasks must surface
+    # LinearRateLimitError so tracker_intake can log it and re-raise.
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {"errors": [{"extensions": {"code": "RATELIMITED"}}]}
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(LinearRateLimitError):
+        tracker.fetch_tasks(
+            TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10)
+        )
+
+
+def test_update_status_propagates_linear_rate_limit_error_on_http_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Worker 3 deliver path: rate-limit on the issueUpdate mutation must
+    # propagate as LinearRateLimitError so the orchestrator can decide to
+    # retry on the next cycle instead of silently swallowing the failure.
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.DONE: "state-done"},
+    )
+
+    def http_requester(req: urllib.request.Request, _t: float) -> Any:
+        raise _make_http_error(code=429)
+
+    tracker = LinearTracker(config, http_requester=http_requester)
+
+    with pytest.raises(LinearRateLimitError):
+        tracker.update_status(
+            TrackerStatusUpdatePayload(
+                external_task_id="ISS-1", status=TaskStatus.DONE
+            )
+        )
