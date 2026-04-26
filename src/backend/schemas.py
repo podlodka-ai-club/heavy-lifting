@@ -153,7 +153,7 @@ class TrackerLinksAttachPayload(SchemaModel):
 
 
 class ScmWorkspaceEnsurePayload(SchemaModel):
-    repo_url: str
+    repo_url: str | None = None
     workspace_key: str
     repo_ref: str | None = None
     metadata: JsonObject = Field(default_factory=dict)

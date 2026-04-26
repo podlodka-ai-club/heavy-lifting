@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from flask import Flask
 
+from backend.adapters.github_scm import GitHubScm, build_github_scm_config
 from backend.adapters.linear_tracker import LinearTracker, LinearTrackerConfig
 from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
@@ -97,6 +99,19 @@ def _build_mock_scm(_: Settings) -> ScmProtocol:
     return MockScm()
 
 
+def _build_github_scm(settings: Settings) -> ScmProtocol:
+    config = build_github_scm_config(
+        api_base_url=settings.github_api_base_url,
+        token_env_var=settings.github_token_env_var,
+        user_name=settings.github_user_name,
+        user_email=settings.github_user_email,
+        default_remote=settings.github_default_remote,
+        workspace_root=Path(settings.workspace_root),
+        default_repo_url=settings.github_default_repo_url,
+    )
+    return GitHubScm(config)
+
+
 def _build_local_agent_runner(_: Settings) -> AgentRunnerProtocol:
     return LocalAgentRunner()
 
@@ -128,7 +143,7 @@ DEFAULT_ADAPTER_REGISTRY = AdapterRegistry(
         "mock": _build_mock_tracker,
         "linear": _build_linear_tracker,
     },
-    scm_factories={"mock": _build_mock_scm},
+    scm_factories={"mock": _build_mock_scm, "github": _build_github_scm},
     agent_runner_factories={
         "local": _build_local_agent_runner,
         "cli": _build_cli_agent_runner,

@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 
+from backend.adapters.github_scm import GitHubScm
 from backend.adapters.linear_tracker import LinearTracker
 from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
@@ -204,6 +205,25 @@ def test_create_runtime_container_skips_unknown_task_type_label_mapping(monkeypa
     assert runtime.tracker._config.task_type_to_label_id == {
         TaskType.FETCH: "lbl-fetch",
     }
+
+
+def test_create_runtime_container_builds_github_scm_from_settings(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(
+        get_settings(),
+        scm_adapter="github",
+        github_default_repo_url="https://github.com/acme/widgets",
+        workspace_root="/tmp/heavy",
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.scm, GitHubScm)
+    assert runtime.scm._config.default_repo_url == "https://github.com/acme/widgets"
+    assert str(runtime.scm._config.workspace_root) in ("/tmp/heavy", "\\tmp\\heavy")
 
 
 def test_create_runtime_container_rejects_unknown_agent_runner(monkeypatch) -> None:

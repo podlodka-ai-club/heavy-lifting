@@ -556,6 +556,191 @@ def test_tracker_intake_paginates_pr_feedback_without_relying_on_item_order(
         }
 
 
+def test_tracker_intake_query_includes_repo_context_for_execute_task(session_factory) -> None:
+    tracker = MockTracker()
+    pull_request_metadata = ScmPullRequestMetadata(
+        execute_task_external_id="tracker-task-99",
+        tracker_name="mock",
+        workspace_key="repo-99",
+        repo_url="https://example.test/repo.git",
+    )
+    scm = NonAscendingPaginatedScm(
+        pages=[
+            ScmReadPrFeedbackResult(
+                items=[
+                    ScmPullRequestFeedback(
+                        pr_external_id="pr-99",
+                        comment_id="comment-1",
+                        body="hi",
+                        pr_url="https://example.test/repo/pull/99",
+                        pr_metadata=pull_request_metadata,
+                    )
+                ],
+                latest_cursor="comment-1",
+            ),
+        ]
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="tracker-task-99",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-99",
+                context={"title": "root"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="tracker-task-99",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-99",
+                branch_name="task99/branch",
+                pr_external_id="pr-99",
+                pr_url="https://example.test/repo/pull/99",
+                context={"title": "root", "metadata": {}},
+            )
+        )
+
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    worker.poll_pr_feedback_once()
+
+    assert len(scm.queries) >= 1
+    first_query = scm.queries[0]
+    assert first_query.repo_url == "https://example.test/repo.git"
+    assert first_query.workspace_key == "repo-99"
+    assert first_query.branch_name == "task99/branch"
+
+
+def test_maybe_enrich_pr_metadata_rebuilds_sentinel_from_execute_task(
+    session_factory,
+) -> None:
+    sentinel_metadata = ScmPullRequestMetadata(
+        execute_task_external_id="",
+        workspace_key=None,
+        repo_url=None,
+        metadata={"_hl_unresolved": True},
+    )
+    feedback_item = ScmPullRequestFeedback(
+        pr_external_id="pr-77",
+        comment_id="issue-1",
+        body="please fix",
+        pr_url="https://example.test/repo/pull/77",
+        pr_metadata=sentinel_metadata,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="linear",
+                external_task_id="LIN-77",
+                repo_url="https://github.com/acme/widgets",
+                repo_ref="main",
+                workspace_key="repo-77",
+                context={"title": "root"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="linear",
+                external_task_id="LIN-77",
+                external_parent_id="LIN-77",
+                repo_url="https://github.com/acme/widgets",
+                repo_ref="main",
+                workspace_key="repo-77",
+                branch_name="task77/run",
+                pr_external_id="pr-77",
+                pr_url="https://example.test/repo/pull/77",
+                context={"title": "root", "metadata": {}},
+            )
+        )
+
+        worker = TrackerIntakeWorker(
+            tracker=MockTracker(),
+            scm=MockScm(),
+            tracker_name="linear",
+            session_factory=session_factory,
+            poll_interval=1,
+            pr_poll_interval=1,
+        )
+        enriched = worker._maybe_enrich_pr_metadata(
+            feedback_item=feedback_item, execute_task=execute_task
+        )
+
+    assert enriched.pr_metadata.execute_task_external_id == "LIN-77"
+    assert enriched.pr_metadata.repo_url == "https://github.com/acme/widgets"
+    assert enriched.pr_metadata.workspace_key == "repo-77"
+    assert enriched.pr_metadata.tracker_name == "linear"
+    assert enriched.pr_metadata.metadata == {}
+    # Original feedback_item must remain untouched.
+    assert feedback_item.pr_metadata.metadata == {"_hl_unresolved": True}
+
+
+def test_maybe_enrich_pr_metadata_passes_through_resolved_metadata(
+    session_factory,
+) -> None:
+    valid_metadata = ScmPullRequestMetadata(
+        execute_task_external_id="EXTERNAL-ABC",
+        tracker_name="github",
+        workspace_key="repo-abc",
+        repo_url="https://github.com/acme/widgets",
+    )
+    feedback_item = ScmPullRequestFeedback(
+        pr_external_id="pr-78",
+        comment_id="issue-2",
+        body="ok",
+        pr_url="https://example.test/repo/pull/78",
+        pr_metadata=valid_metadata,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                tracker_name="linear",
+                external_task_id="LIN-78",
+                repo_url="https://github.com/acme/widgets",
+                repo_ref="main",
+                workspace_key="repo-78",
+            )
+        )
+        worker = TrackerIntakeWorker(
+            tracker=MockTracker(),
+            scm=MockScm(),
+            tracker_name="linear",
+            session_factory=session_factory,
+            poll_interval=1,
+            pr_poll_interval=1,
+        )
+        result = worker._maybe_enrich_pr_metadata(
+            feedback_item=feedback_item, execute_task=execute_task
+        )
+
+    assert result is feedback_item
+    assert result.pr_metadata.execute_task_external_id == "EXTERNAL-ABC"
+    assert result.pr_metadata.tracker_name == "github"
+
+
 def test_build_tracker_intake_worker_uses_runtime_settings(session_factory) -> None:
     runtime = RuntimeContainer(
         settings=replace(

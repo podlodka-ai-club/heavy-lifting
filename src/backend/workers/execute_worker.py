@@ -32,7 +32,7 @@ from backend.schemas import (
     TokenUsagePayload,
 )
 from backend.services.context_builder import ContextBuilder, parse_task_result_payload
-from backend.settings import get_settings
+from backend.settings import Settings, get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
 
@@ -61,6 +61,7 @@ class ExecuteWorker:
     session_factory: sessionmaker[Session]
     poll_interval: int = 30
     context_builder: ContextBuilder = field(default_factory=ContextBuilder)
+    settings: Settings = field(default_factory=get_settings)
 
     def poll_once(self) -> ExecuteWorkerReport:
         report = ExecuteWorkerReport()
@@ -95,7 +96,9 @@ class ExecuteWorker:
 
             try:
                 task_chain = repository.load_task_chain(task.root_id or task.id)
-                prepared_execution = self._prepare_execution(task=task, task_chain=task_chain)
+                prepared_execution = self._prepare_execution(
+                    repository=repository, task=task, task_chain=task_chain
+                )
                 run_result = self._execute_prepared_execution(
                     task=task,
                     prepared_execution=prepared_execution,
@@ -184,10 +187,22 @@ class ExecuteWorker:
                     return ExecuteWorkerReport(failed_execute_tasks=1)
                 return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
 
-    def _prepare_execution(self, *, task: Task, task_chain: list[Task]) -> PreparedExecution:
+    def _prepare_execution(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_chain: list[Task],
+    ) -> PreparedExecution:
         task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
         skip_scm_artifacts = self._should_skip_scm_artifacts(task_context=task_context)
         workspace = self._ensure_workspace(task_context=task_context)
+        repository.update_task_workspace_context(
+            task.id,
+            repo_url=workspace.repo_url,
+            repo_ref=workspace.repo_ref,
+            workspace_key=workspace.workspace_key,
+        )
         branch_name = None
         if not skip_scm_artifacts:
             branch_name = self._sync_branch(
@@ -248,16 +263,13 @@ class ExecuteWorker:
         return result
 
     def _ensure_workspace(self, *, task_context: EffectiveTaskContext) -> ScmWorkspace:
-        repo_url = task_context.repo_url
         workspace_key = task_context.workspace_key
-        if not repo_url:
-            raise ValueError("Worker 2 requires repo_url for SCM workspace sync")
         if not workspace_key:
             raise ValueError("Worker 2 requires workspace_key for SCM workspace sync")
 
         return self.scm.ensure_workspace(
             ScmWorkspaceEnsurePayload(
-                repo_url=repo_url,
+                repo_url=task_context.repo_url,
                 workspace_key=workspace_key,
                 repo_ref=task_context.repo_ref,
                 metadata={
@@ -319,7 +331,9 @@ class ExecuteWorker:
                     body=self._build_pr_body(
                         task_context=task_context, agent_payload=agent_payload
                     ),
-                    pr_metadata=self._build_pr_metadata(task_context),
+                    pr_metadata=self._build_pr_metadata(
+                        task_context, workspace=workspace
+                    ),
                     metadata={
                         "task_id": task.id,
                         "flow_type": task.task_type.value,
@@ -690,10 +704,15 @@ class ExecuteWorker:
             or f"task-{task.id}"
         )
         slug = _slugify(tracker_identifier)
-        return f"execute/{slug}"
+        return f"{self.settings.scm_branch_prefix}{slug}"
 
     def _resolve_base_branch(self, task_context: EffectiveTaskContext) -> str:
-        return task_context.base_branch or task_context.repo_ref or "main"
+        return (
+            task_context.base_branch
+            or task_context.repo_ref
+            or self.settings.scm_default_base_branch
+            or "main"
+        )
 
     def _resolve_commit_message(self, *, task_context: EffectiveTaskContext) -> str:
         if task_context.commit_message_hint:
@@ -730,7 +749,12 @@ class ExecuteWorker:
             parts.append(agent_payload.details)
         return "\n\n".join(parts)
 
-    def _build_pr_metadata(self, task_context: EffectiveTaskContext) -> ScmPullRequestMetadata:
+    def _build_pr_metadata(
+        self,
+        task_context: EffectiveTaskContext,
+        *,
+        workspace: ScmWorkspace,
+    ) -> ScmPullRequestMetadata:
         execute_task = (
             task_context.execute_task.task if task_context.execute_task is not None else None
         )
@@ -745,8 +769,8 @@ class ExecuteWorker:
         return ScmPullRequestMetadata(
             execute_task_external_id=execute_task_external_id,
             tracker_name=task_context.current_task.task.tracker_name,
-            workspace_key=task_context.workspace_key,
-            repo_url=task_context.repo_url,
+            workspace_key=workspace.workspace_key,
+            repo_url=workspace.repo_url,
             metadata={
                 "root_task_id": task_context.root_task.task.id,
                 "current_task_id": task_context.current_task.task.id,
@@ -758,13 +782,16 @@ def build_execute_worker(
     *,
     runtime: RuntimeContainer | None = None,
     session_factory: sessionmaker[Session] | None = None,
+    settings: Settings | None = None,
 ) -> ExecuteWorker:
     active_runtime = runtime or create_runtime_container()
+    active_settings = settings or active_runtime.settings
     return ExecuteWorker(
         scm=active_runtime.scm,
         agent_runner=active_runtime.agent_runner,
         session_factory=session_factory or get_session_factory(),
-        poll_interval=active_runtime.settings.tracker_poll_interval,
+        poll_interval=active_settings.tracker_poll_interval,
+        settings=active_settings,
     )
 
 

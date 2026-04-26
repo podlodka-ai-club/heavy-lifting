@@ -39,6 +39,14 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "LINEAR_TASK_TYPE_LABEL_MAPPING",
         "LINEAR_MAX_PAGES",
         "LINEAR_DESCRIPTION_WARN_THRESHOLD",
+        "GITHUB_API_BASE_URL",
+        "GITHUB_TOKEN_ENV_VAR",
+        "GITHUB_USER_NAME",
+        "GITHUB_USER_EMAIL",
+        "GITHUB_DEFAULT_REMOTE",
+        "GITHUB_DEFAULT_REPO_URL",
+        "SCM_DEFAULT_BASE_BRANCH",
+        "SCM_BRANCH_PREFIX",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -83,6 +91,14 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.linear_task_type_label_mapping == {}
     assert settings.linear_max_pages == 4
     assert settings.linear_description_warn_threshold == 50000
+    assert settings.github_api_base_url == "https://api.github.com"
+    assert settings.github_token_env_var == "GITHUB_TOKEN"
+    assert settings.github_user_name is None
+    assert settings.github_user_email is None
+    assert settings.github_default_remote == "origin"
+    assert settings.github_default_repo_url is None
+    assert settings.scm_default_base_branch is None
+    assert settings.scm_branch_prefix == "execute/"
 
 
 def test_get_settings_reads_env_overrides(monkeypatch) -> None:
@@ -124,6 +140,14 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     )
     monkeypatch.setenv("LINEAR_MAX_PAGES", "10")
     monkeypatch.setenv("LINEAR_DESCRIPTION_WARN_THRESHOLD", "10000")
+    monkeypatch.setenv("GITHUB_API_BASE_URL", "https://ghe.example.test/api/v3")
+    monkeypatch.setenv("GITHUB_TOKEN_ENV_VAR", "MY_GH_TOKEN")
+    monkeypatch.setenv("GITHUB_USER_NAME", "heavy-lifting-bot")
+    monkeypatch.setenv("GITHUB_USER_EMAIL", "bot@example.test")
+    monkeypatch.setenv("GITHUB_DEFAULT_REMOTE", "upstream")
+    monkeypatch.setenv("GITHUB_DEFAULT_REPO_URL", "https://github.com/acme/widgets")
+    monkeypatch.setenv("SCM_DEFAULT_BASE_BRANCH", "develop")
+    monkeypatch.setenv("SCM_BRANCH_PREFIX", "hl/")
 
     get_settings.cache_clear()
     settings = get_settings()
@@ -164,6 +188,14 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.linear_task_type_label_mapping == {"bug": "label-bug", "feature": "label-feat"}
     assert settings.linear_max_pages == 10
     assert settings.linear_description_warn_threshold == 10000
+    assert settings.github_api_base_url == "https://ghe.example.test/api/v3"
+    assert settings.github_token_env_var == "MY_GH_TOKEN"
+    assert settings.github_user_name == "heavy-lifting-bot"
+    assert settings.github_user_email == "bot@example.test"
+    assert settings.github_default_remote == "upstream"
+    assert settings.github_default_repo_url == "https://github.com/acme/widgets"
+    assert settings.scm_default_base_branch == "develop"
+    assert settings.scm_branch_prefix == "hl/"
 
 
 def test_get_settings_prefers_explicit_database_url(monkeypatch) -> None:

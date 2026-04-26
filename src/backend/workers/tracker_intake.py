@@ -15,6 +15,7 @@ from backend.repositories.task_repository import TaskCreateParams, TaskRepositor
 from backend.schemas import (
     SchemaModel,
     ScmPullRequestFeedback,
+    ScmPullRequestMetadata,
     ScmReadPrFeedbackQuery,
     TaskInputPayload,
     TrackerFetchTasksQuery,
@@ -61,6 +62,7 @@ class TrackerIntakeWorker:
     fetch_statuses: Sequence[TaskStatus] = (TaskStatus.NEW,)
 
     _PR_FEEDBACK_CURSOR_METADATA_KEY = "scm_pr_feedback_cursor"
+    _PR_FEEDBACK_UNRESOLVED_KEY = "_hl_unresolved"
 
     def poll_once(self) -> TrackerIntakeReport:
         logger = _worker_logger(tracker_name=self.tracker_name)
@@ -309,21 +311,24 @@ class TrackerIntakeWorker:
             )
             return PrFeedbackIntakeOutcome(skipped_feedback_item=True)
 
+        enriched_item = self._maybe_enrich_pr_metadata(
+            feedback_item=feedback_item, execute_task=execute_task
+        )
         feedback_task = repository.create_task(
             TaskCreateParams(
                 task_type=TaskType.PR_FEEDBACK,
                 parent_id=execute_task.id,
                 status=TaskStatus.NEW,
                 tracker_name=execute_task.tracker_name,
-                external_task_id=feedback_item.comment_id,
-                external_parent_id=feedback_item.pr_external_id,
+                external_task_id=enriched_item.comment_id,
+                external_parent_id=enriched_item.pr_external_id,
                 repo_url=execute_task.repo_url,
                 repo_ref=execute_task.repo_ref,
                 workspace_key=execute_task.workspace_key,
                 branch_name=execute_task.branch_name,
-                pr_external_id=feedback_item.pr_external_id,
-                pr_url=feedback_item.pr_url or execute_task.pr_url,
-                input_payload=TaskInputPayload(pr_feedback=feedback_item).model_dump(mode="python"),
+                pr_external_id=enriched_item.pr_external_id,
+                pr_url=enriched_item.pr_url or execute_task.pr_url,
+                input_payload=TaskInputPayload(pr_feedback=enriched_item).model_dump(mode="python"),
             )
         )
         logger.info(
@@ -335,6 +340,24 @@ class TrackerIntakeWorker:
             workspace_key=feedback_task.workspace_key,
         )
         return PrFeedbackIntakeOutcome(created_pr_feedback_task=True)
+
+    def _maybe_enrich_pr_metadata(
+        self,
+        *,
+        feedback_item: ScmPullRequestFeedback,
+        execute_task,
+    ) -> ScmPullRequestFeedback:
+        if not feedback_item.pr_metadata.metadata.get(self._PR_FEEDBACK_UNRESOLVED_KEY):
+            return feedback_item
+        enriched_metadata = ScmPullRequestMetadata(
+            execute_task_external_id=execute_task.external_task_id
+            or execute_task.external_parent_id
+            or str(execute_task.id),
+            tracker_name=execute_task.tracker_name,
+            workspace_key=execute_task.workspace_key,
+            repo_url=execute_task.repo_url,
+        )
+        return feedback_item.model_copy(update={"pr_metadata": enriched_metadata})
 
     def _poll_execute_pr_feedback(
         self,
@@ -358,6 +381,9 @@ class TrackerIntakeWorker:
             feedback_page = self.scm.read_pr_feedback(
                 ScmReadPrFeedbackQuery(
                     pr_external_id=execute_task.pr_external_id,
+                    repo_url=execute_task.repo_url,
+                    workspace_key=execute_task.workspace_key,
+                    branch_name=execute_task.branch_name,
                     since_cursor=since_cursor,
                     page_cursor=page_cursor,
                     limit=self.feedback_limit,

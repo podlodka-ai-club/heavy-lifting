@@ -86,6 +86,42 @@ Normalization removes source-specific naming differences before deduplication an
 
 If an SCM platform emits several representations of the same review action, the orchestrator should normalize them into one canonical event before deduplication.
 
+#### GitHub adapter mapping
+
+The `SCM_ADAPTER=github` adapter merges three GitHub endpoints when answering `read_pr_feedback`:
+
+| Source | Endpoint | `comment_id` | `metadata.event_kind` |
+| --- | --- | --- | --- |
+| issue | `GET /repos/{o}/{r}/issues/{n}/comments` | `issue-<id>` | `pr_comment` |
+| review_comment | `GET /repos/{o}/{r}/pulls/{n}/comments` | `review_comment-<id>` | `pr_comment` |
+| review (`APPROVED`) | `GET /repos/{o}/{r}/pulls/{n}/reviews` | `review-<id>` | `pr_review_approved` |
+| review (`CHANGES_REQUESTED`) | same | `review-<id>` | `pr_review_requested_changes` |
+| review (`COMMENTED`) | same | `review-<id>` | `pr_comment` |
+
+Empty review bodies are normalized to `(approved without comment)` or `(changes requested without comment)` so `PrFeedbackPayload.body` stays non-empty. The original GitHub `state` is preserved in `metadata.review_state`.
+
+#### Composite cursors and skip-free pagination
+
+Each feedback item carries a composite cursor `<iso_updated_at>|<source>|<numeric_id>`. Sorting and `since_cursor` filtering use the tuple `(updated_at, source, numeric_id)`, so equal-timestamp comments are neither dropped nor duplicated.
+
+`next_page_cursor` is encoded as `issue@<page>@<offset>:review_comment@<page>@<offset>:review@<page>@<offset>`, where `<page>` is GitHub's 1-based pagination index, `<offset>` is the count of items already returned from that page, and `*` marks an exhausted source. A repeated call with the same `next_page_cursor` is idempotent — leftover items are returned, none are skipped, none are duplicated.
+
+`reviews` does not support a `since` query parameter; the adapter applies `since_cursor` filtering client-side. On large PRs (hundreds of reviews) this is an O(n) scan — known limitation.
+
+#### `pr_metadata` recovery
+
+`ScmReadPrFeedbackQuery` carries `repo_url`, `workspace_key`, and `branch_name` from the owning execute task so the adapter can target the right repo even before workspace caches warm up. The adapter restores `ScmPullRequestMetadata` from a base64url footer that `create_pull_request` embeds at the bottom of the PR body:
+
+```
+<!-- heavy-lifting:pr-metadata:v1 <BASE64URL_NO_PADDING(json)> -->
+```
+
+If the footer is missing (legacy PR, edited body, fork mismatch), each feedback item is returned with sentinel `pr_metadata.metadata = {"_hl_unresolved": true}`. `tracker_intake._ingest_pr_feedback` then rebuilds `pr_metadata` from the matching execute task before persisting the child PR_FEEDBACK task. Long-term we should persist `pr_metadata` directly on `tasks` so this fallback is unnecessary.
+
+#### Durable `repo_url` after workspace sync
+
+After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. Subsequent polling cycles and child tasks see the resolved URL as durable.
+
 ## Deduplication Rules
 
 Event ingestion must be idempotent. Repeated polling must not create duplicate follow-up tasks.

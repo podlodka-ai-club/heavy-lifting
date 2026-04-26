@@ -215,6 +215,28 @@ class TaskRepository:
         )
         return self._session.execute(statement).scalars().first()
 
+    def update_task_workspace_context(
+        self,
+        task_id: int,
+        *,
+        repo_url: str | None = None,
+        repo_ref: str | None = None,
+        workspace_key: str | None = None,
+    ) -> Task:
+        task = self._session.get(Task, task_id)
+        if task is None:
+            raise ValueError(f"Task {task_id} does not exist")
+
+        if repo_url is not None:
+            task.repo_url = repo_url
+        if repo_ref is not None:
+            task.repo_ref = repo_ref
+        if workspace_key is not None:
+            task.workspace_key = workspace_key
+
+        self._session.flush()
+        return task
+
     def record_token_usage(self, *, task_id: int, usage: TokenUsageCreateParams) -> TokenUsage:
         entry = TokenUsage(
             task_id=task_id,

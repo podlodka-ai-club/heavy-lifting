@@ -31,15 +31,19 @@ class MockScm:
         self._feedback_sequence = 0
 
     def ensure_workspace(self, payload: ScmWorkspaceEnsurePayload) -> ScmWorkspace:
+        if payload.repo_url is None:
+            raise ValueError("MockScm requires repo_url")
         stored_payload = payload.model_copy(deep=True)
+        repo_url = stored_payload.repo_url
+        assert repo_url is not None  # narrowed above; re-asserted for type checker
         workspace = self._workspaces.get(stored_payload.workspace_key)
-        local_path = self._resolve_local_workspace_path(stored_payload.repo_url)
+        local_path = self._resolve_local_workspace_path(repo_url)
         if local_path is None:
             local_path = f"/tmp/mock-scm/{stored_payload.workspace_key}"
 
         if workspace is None:
             workspace = ScmWorkspace(
-                repo_url=stored_payload.repo_url,
+                repo_url=repo_url,
                 workspace_key=stored_payload.workspace_key,
                 repo_ref=stored_payload.repo_ref,
                 local_path=local_path,
@@ -47,7 +51,7 @@ class MockScm:
             )
             self._workspaces[stored_payload.workspace_key] = workspace
         else:
-            workspace.repo_url = stored_payload.repo_url
+            workspace.repo_url = repo_url
             workspace.repo_ref = stored_payload.repo_ref
             workspace.local_path = local_path
             if stored_payload.metadata:

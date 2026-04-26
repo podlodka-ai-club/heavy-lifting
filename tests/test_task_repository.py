@@ -214,6 +214,59 @@ def test_find_child_task_helpers_support_dedupe_and_cursor_lookups(session_facto
         assert last_task.id == latest_feedback.id
 
 
+def test_update_task_workspace_context_overwrites_only_provided_fields(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                repo_url="https://example.test/old.git",
+                repo_ref="main",
+                workspace_key="repo-1",
+            )
+        )
+
+        repository.update_task_workspace_context(
+            task.id,
+            repo_url="https://example.test/new.git",
+        )
+
+        refreshed = session.get(Task, task.id)
+        assert refreshed is not None
+        assert refreshed.repo_url == "https://example.test/new.git"
+        assert refreshed.repo_ref == "main"
+        assert refreshed.workspace_key == "repo-1"
+
+
+def test_update_task_workspace_context_preserves_existing_when_none_passed(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                repo_url="https://example.test/old.git",
+                repo_ref="main",
+                workspace_key="repo-1",
+            )
+        )
+
+        repository.update_task_workspace_context(task.id)
+
+        refreshed = session.get(Task, task.id)
+        assert refreshed is not None
+        assert refreshed.repo_url == "https://example.test/old.git"
+        assert refreshed.repo_ref == "main"
+        assert refreshed.workspace_key == "repo-1"
+
+
+def test_update_task_workspace_context_raises_for_unknown_task(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+
+        with pytest.raises(ValueError, match="Task 999 does not exist"):
+            repository.update_task_workspace_context(999, repo_url="x")
+
+
 def test_record_token_usage_persists_entry_for_task(session_factory) -> None:
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)

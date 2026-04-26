@@ -224,6 +224,38 @@ Behaviour:
 The block is human-readable JSON on purpose: an operator inspecting an
 issue in Linear can paste it into a JSON editor without bespoke tooling.
 
+### Single-repo vs multi-repo deployment
+
+`repo_url`, `repo_ref`, and `workspace_key` inside the service block are
+**all optional**. The SCM adapter selected by `SCM_ADAPTER` decides how
+to fill in any missing values:
+
+- **Single-repo** (one tracker team writes into one GitHub repo). Set
+  `GITHUB_DEFAULT_REPO_URL` in the deployment env. Linear issues can
+  carry just `instructions`:
+  ```
+  <!-- heavy-lifting:input -->
+  {
+    "input": {
+      "instructions": "Сделать что-то полезное"
+    }
+  }
+  <!-- /heavy-lifting:input -->
+  ```
+  The GitHub adapter resolves `repo_url` from
+  `GITHUB_DEFAULT_REPO_URL`, `base_branch` from
+  `SCM_DEFAULT_BASE_BRANCH` (fallback `main`), and the auto-generated
+  branch name from `SCM_BRANCH_PREFIX` plus the tracker identifier. The
+  resolved `repo_url` is written back to the orchestrator's `tasks` row
+  after `ensure_workspace`, so it becomes durable for future polling.
+- **Multi-repo** (one tracker team writes into several repos). Each
+  Linear issue must carry its own `repo_url`. Per-issue values override
+  any deployment defaults, so a deployment can mix both modes.
+
+`MockScm` (the default for tests and demos) does not consume
+`GITHUB_DEFAULT_REPO_URL`; it requires `repo_url` in the payload and
+raises `ValueError("MockScm requires repo_url")` otherwise.
+
 ## Pagination And Sorting
 
 `fetch_tasks` issues `query LinearFetchIssues(...)` with

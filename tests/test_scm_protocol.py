@@ -1,3 +1,5 @@
+import pytest
+
 from backend.adapters.mock_scm import MockScm
 from backend.protocols.scm import ScmProtocol
 from backend.schemas import (
@@ -272,6 +274,17 @@ def test_mock_scm_uses_existing_local_directory_as_workspace_path(tmp_path) -> N
     )
 
     assert workspace.local_path == str(repo_dir.resolve())
+
+
+def test_mock_scm_requires_repo_url(tmp_path) -> None:
+    scm = MockScm()
+
+    with pytest.raises(ValueError, match="MockScm requires repo_url"):
+        scm.ensure_workspace(
+            ScmWorkspaceEnsurePayload(
+                workspace_key="repo-no-url",
+            )
+        )
 
 
 def test_mock_scm_uses_existing_file_uri_as_workspace_path(tmp_path) -> None:

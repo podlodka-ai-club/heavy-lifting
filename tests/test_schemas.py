@@ -263,6 +263,8 @@ def test_scm_payloads_apply_mvp_defaults() -> None:
         "repo_ref": None,
         "metadata": {},
     }
+    workspace_without_repo = ScmWorkspaceEnsurePayload(workspace_key="repo-1")
+    assert workspace_without_repo.repo_url is None
     assert commit.model_dump(mode="json") == {
         "workspace_key": "repo-1",
         "branch_name": "task18/scm-boundary",
