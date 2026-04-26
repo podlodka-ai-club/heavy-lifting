@@ -17,6 +17,7 @@ from backend.adapters.linear_tracker import (
     _inject_input_block,
 )
 from backend.protocols.tracker import TrackerProtocol
+from backend.task_constants import TaskStatus
 
 
 def _make_config(**overrides: Any) -> LinearTrackerConfig:
@@ -351,3 +352,178 @@ def test_graphql_client_does_not_leak_token_into_exceptions(
         client.execute("q", {})
 
     assert secret not in str(exc_info.value)
+
+
+def _states_response_body(nodes: list[dict[str, Any]]) -> bytes:
+    return json.dumps({"data": {"team": {"states": {"nodes": nodes}}}}).encode("utf-8")
+
+
+def _counting_http_requester(
+    body: bytes,
+) -> tuple[Any, list[urllib.request.Request]]:
+    calls: list[urllib.request.Request] = []
+
+    def fake(req: urllib.request.Request, _timeout: float) -> Any:
+        calls.append(req)
+        return _FakeResponse(body)
+
+    return fake, calls
+
+
+def test_status_to_state_id_uses_explicit_mapping_without_calling_api() -> None:
+    config = _make_config(
+        explicit_status_to_state_id={
+            TaskStatus.PROCESSING: "explicit-proc-id",
+            TaskStatus.DONE: "explicit-done-id",
+        },
+    )
+    tracker = LinearTracker(config, http_requester=_never_called)
+
+    assert tracker._status_to_state_id(TaskStatus.PROCESSING) == "explicit-proc-id"
+    assert tracker._status_to_state_id(TaskStatus.DONE) == "explicit-done-id"
+
+
+def test_status_to_state_id_falls_back_to_min_position_within_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = _states_response_body(
+        [
+            {"id": "started-late", "name": "Doing", "type": "started", "position": 200.0},
+            {"id": "started-early", "name": "In Progress", "type": "started", "position": 100.0},
+            {"id": "unstarted-1", "name": "Todo", "type": "unstarted", "position": 50.0},
+        ]
+    )
+    fake, _ = _counting_http_requester(body)
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    assert tracker._status_to_state_id(TaskStatus.PROCESSING) == "started-early"
+
+
+def test_status_to_state_id_for_new_prefers_unstarted_over_backlog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = _states_response_body(
+        [
+            {"id": "backlog-1", "name": "Backlog", "type": "backlog", "position": 10.0},
+            {"id": "unstarted-1", "name": "Todo", "type": "unstarted", "position": 30.0},
+        ]
+    )
+    fake, _ = _counting_http_requester(body)
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    assert tracker._status_to_state_id(TaskStatus.NEW) == "unstarted-1"
+
+
+def test_status_to_state_id_for_new_falls_back_to_backlog_when_no_unstarted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = _states_response_body(
+        [
+            {"id": "backlog-low", "name": "Icebox", "type": "backlog", "position": 100.0},
+            {"id": "backlog-high", "name": "Backlog", "type": "backlog", "position": 50.0},
+        ]
+    )
+    fake, _ = _counting_http_requester(body)
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    assert tracker._status_to_state_id(TaskStatus.NEW) == "backlog-high"
+
+
+def test_status_to_state_id_raises_when_no_explicit_and_no_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = _states_response_body(
+        [
+            {"id": "started-1", "name": "Doing", "type": "started", "position": 10.0},
+        ]
+    )
+    fake, _ = _counting_http_requester(body)
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker._status_to_state_id(TaskStatus.DONE)
+
+    message = str(exc_info.value)
+    assert "LINEAR_STATE_ID_DONE" in message
+    assert "TaskStatus.DONE" in message
+
+
+def test_resolve_workflow_states_is_cached_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = _states_response_body(
+        [
+            {"id": "started-1", "name": "Doing", "type": "started", "position": 10.0},
+            {"id": "completed-1", "name": "Done", "type": "completed", "position": 20.0},
+        ]
+    )
+    fake, calls = _counting_http_requester(body)
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    assert tracker._status_to_state_id(TaskStatus.PROCESSING) == "started-1"
+    assert tracker._status_to_state_id(TaskStatus.DONE) == "completed-1"
+    # second resolve must hit cache, not the API
+    assert tracker._status_to_state_id(TaskStatus.PROCESSING) == "started-1"
+
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("state_type", "expected"),
+    [
+        ("triage", TaskStatus.NEW),
+        ("backlog", TaskStatus.NEW),
+        ("unstarted", TaskStatus.NEW),
+        ("started", TaskStatus.PROCESSING),
+        ("completed", TaskStatus.DONE),
+        ("canceled", TaskStatus.FAILED),
+    ],
+)
+def test_state_to_task_status_maps_known_types(
+    state_type: str, expected: TaskStatus
+) -> None:
+    assert LinearTracker._state_to_task_status(state_type) is expected
+
+
+@pytest.mark.parametrize("state_type", [None, "", "weird-custom-type"])
+def test_state_to_task_status_returns_none_for_missing_or_unknown(
+    state_type: str | None,
+) -> None:
+    assert LinearTracker._state_to_task_status(state_type) is None
+
+
+def test_resolve_workflow_states_raises_when_team_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps({"data": {"team": None}}).encode("utf-8")
+    fake, _ = _counting_http_requester(body)
+    tracker = LinearTracker(_make_config(team_id="missing-team"), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker._status_to_state_id(TaskStatus.PROCESSING)
+
+    assert "missing-team" in str(exc_info.value)
+
+
+def test_resolve_workflow_states_raises_when_state_position_not_numeric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = _states_response_body(
+        [
+            {"id": "s1", "name": "Doing", "type": "started", "position": "not-a-number"},
+        ]
+    )
+    fake, _ = _counting_http_requester(body)
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        tracker._status_to_state_id(TaskStatus.PROCESSING)
+
+    assert "position" in str(exc_info.value)

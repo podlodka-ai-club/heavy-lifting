@@ -29,6 +29,44 @@ INPUT_BLOCK_CLOSE = "<!-- /heavy-lifting:input -->"
 
 _logger = get_logger(component="linear_tracker")
 
+_WORKFLOW_STATES_QUERY = """
+query LinearTeamStates($id: String!) {
+  team(id: $id) {
+    states {
+      nodes {
+        id
+        name
+        type
+        position
+      }
+    }
+  }
+}
+""".strip()
+
+_STATE_TYPE_TO_TASK_STATUS: Mapping[str, TaskStatus] = {
+    "triage": TaskStatus.NEW,
+    "backlog": TaskStatus.NEW,
+    "unstarted": TaskStatus.NEW,
+    "started": TaskStatus.PROCESSING,
+    "completed": TaskStatus.DONE,
+    "canceled": TaskStatus.FAILED,
+}
+
+_TASK_STATUS_TO_FALLBACK_TYPES: Mapping[TaskStatus, tuple[str, ...]] = {
+    TaskStatus.NEW: ("unstarted", "backlog"),
+    TaskStatus.PROCESSING: ("started",),
+    TaskStatus.DONE: ("completed",),
+    TaskStatus.FAILED: ("canceled",),
+}
+
+_TASK_STATUS_TO_ENV_HINT: Mapping[TaskStatus, str] = {
+    TaskStatus.NEW: "LINEAR_STATE_ID_NEW",
+    TaskStatus.PROCESSING: "LINEAR_STATE_ID_PROCESSING",
+    TaskStatus.DONE: "LINEAR_STATE_ID_DONE",
+    TaskStatus.FAILED: "LINEAR_STATE_ID_FAILED",
+}
+
 
 class LinearRateLimitError(RuntimeError):
     pass
@@ -209,6 +247,14 @@ class _GraphqlClient:
         return "; ".join(messages) or "<no message>"
 
 
+@dataclass(frozen=True, slots=True)
+class _WorkflowState:
+    id: str
+    name: str
+    type: str
+    position: float
+
+
 class LinearTracker:
     def __init__(
         self,
@@ -223,12 +269,97 @@ class LinearTracker:
             timeout_seconds=config.timeout_seconds,
             http_requester=http_requester or _default_http_requester,
         )
+        self._workflow_states_by_type: dict[str, list[_WorkflowState]] | None = None
 
     def __repr__(self) -> str:
         return (
             f"LinearTracker(api_url={self._config.api_url!r}, "
             f"team_id={self._config.team_id!r})"
         )
+
+    def _resolve_workflow_states(self) -> dict[str, list[_WorkflowState]]:
+        if self._workflow_states_by_type is not None:
+            return self._workflow_states_by_type
+
+        data = self._client.execute(
+            _WORKFLOW_STATES_QUERY, {"id": self._config.team_id}
+        )
+        team = data.get("team")
+        if not isinstance(team, dict):
+            raise RuntimeError(
+                f"Linear team {self._config.team_id!r} not found "
+                f"or response missing 'team'"
+            )
+        states_block = team.get("states")
+        if not isinstance(states_block, dict):
+            raise RuntimeError(
+                f"Linear team {self._config.team_id!r} response missing 'states'"
+            )
+        nodes = states_block.get("nodes")
+        if not isinstance(nodes, list):
+            raise RuntimeError(
+                f"Linear team {self._config.team_id!r} states.nodes is not a list"
+            )
+
+        by_type: dict[str, list[_WorkflowState]] = {}
+        for raw in nodes:
+            state = self._parse_workflow_state(raw)
+            by_type.setdefault(state.type, []).append(state)
+
+        for states in by_type.values():
+            states.sort(key=lambda s: s.position)
+
+        self._workflow_states_by_type = by_type
+        return by_type
+
+    @staticmethod
+    def _parse_workflow_state(raw: Any) -> _WorkflowState:
+        if not isinstance(raw, dict):
+            raise RuntimeError(
+                f"Linear workflow state entry is not an object: {raw!r}"
+            )
+        id_ = raw.get("id")
+        name = raw.get("name")
+        type_ = raw.get("type")
+        position = raw.get("position")
+        if (
+            not isinstance(id_, str)
+            or not isinstance(name, str)
+            or not isinstance(type_, str)
+        ):
+            raise RuntimeError(
+                f"Linear workflow state entry missing id/name/type: {raw!r}"
+            )
+        if not isinstance(position, (int, float)) or isinstance(position, bool):
+            raise RuntimeError(
+                f"Linear workflow state position is not numeric: {raw!r}"
+            )
+        return _WorkflowState(id=id_, name=name, type=type_, position=float(position))
+
+    def _status_to_state_id(self, status: TaskStatus) -> str:
+        explicit = self._config.explicit_status_to_state_id.get(status)
+        if explicit:
+            return explicit
+
+        states_by_type = self._resolve_workflow_states()
+        fallback_types = _TASK_STATUS_TO_FALLBACK_TYPES.get(status, ())
+        for state_type in fallback_types:
+            candidates = states_by_type.get(state_type)
+            if candidates:
+                return candidates[0].id
+
+        env_hint = _TASK_STATUS_TO_ENV_HINT.get(status, "LINEAR_STATE_ID_*")
+        raise RuntimeError(
+            f"Linear: no workflow state for TaskStatus.{status.name}; "
+            f"set {env_hint} env var or ensure team "
+            f"{self._config.team_id!r} has a state with type in {fallback_types!r}"
+        )
+
+    @staticmethod
+    def _state_to_task_status(state_type: str | None) -> TaskStatus | None:
+        if not state_type:
+            return None
+        return _STATE_TYPE_TO_TASK_STATUS.get(state_type)
 
     def fetch_tasks(self, query: TrackerFetchTasksQuery) -> list[TrackerTask]:
         raise NotImplementedError("fetch_tasks will be implemented in task04")
