@@ -14,6 +14,7 @@ from backend.adapters.github_scm import (
     GitHubResponse,
     GitHubScm,
     GitHubScmConfig,
+    _git_auth_args,
 )
 from backend.protocols.scm import ScmProtocol
 from backend.schemas import (
@@ -97,6 +98,26 @@ def _build_config(workspace_root: Path, *, default_repo_url: str | None = None) 
         workspace_root=workspace_root,
         default_repo_url=default_repo_url,
     )
+
+
+def test_git_auth_args_uses_basic_x_access_token_header() -> None:
+    token = "ghu_test_token"
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
+
+    args = _git_auth_args(token)
+
+    assert args == ["-c", f"http.extraHeader=Authorization: Basic {encoded}"]
+    assert (
+        base64.b64decode(
+            args[1].removeprefix("http.extraHeader=Authorization: Basic ")
+        ).decode("utf-8")
+        == f"x-access-token:{token}"
+    )
+
+
+def test_git_auth_args_returns_empty_list_without_token() -> None:
+    assert _git_auth_args(None) == []
+    assert _git_auth_args("") == []
 
 
 def test_github_scm_implements_scm_protocol(tmp_path) -> None:

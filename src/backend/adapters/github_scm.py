@@ -188,7 +188,8 @@ def _safe_workspace_path(workspace_root: Path, workspace_key: str) -> Path:
 def _git_auth_args(token: str | None) -> list[str]:
     if not token:
         return []
-    return ["-c", f"http.extraHeader=Authorization: Bearer {token}"]
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
+    return ["-c", f"http.extraHeader=Authorization: Basic {encoded}"]
 
 
 def _normalized_review_body(state: str | None, body: str | None) -> str:

@@ -69,11 +69,11 @@ comments) sees the resolved URL as if it had been there from the start.
 
 - The adapter never injects the token into the remote URL; it would leak
   through `git remote -v`. Instead it passes
-  `git -c http.extraHeader="Authorization: Bearer <token>"` for the
-  duration of `clone`/`fetch`/`push`. Switching to
-  `Basic x-access-token:<token>` (App installations) requires editing
-  `_git_auth_args` in `github_scm.py`; no caller change is needed.
-- HTTP requests carry the same token as `Authorization: Bearer <token>`.
+  `git -c http.extraHeader="Authorization: Basic <base64("x-access-token:<token>")>"`
+  for the duration of `clone`/`fetch`/`push`. This format works for
+  classic PATs, fine-grained PATs, and GitHub App installation tokens.
+- HTTP requests use a separate REST client path that keeps
+  `Authorization: Bearer <token>` unchanged.
 - `_sanitize_token` is applied to `git` stderr inside `_git_run`, so
   `RuntimeError("git command failed: ...")` cannot echo the token even
   if `git` itself prints it. HTTP responses do not contain the token —
