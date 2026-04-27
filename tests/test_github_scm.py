@@ -65,6 +65,27 @@ class FakeRunner:
         )
 
 
+class LeakyCalledProcessRunner:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], str | None]] = []
+
+    def run(
+        self, args: list[str], cwd: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append((args, cwd))
+        raise subprocess.CalledProcessError(
+            1,
+            [
+                "git",
+                "-c",
+                "http.extraHeader=Authorization: Basic c2VjcmV0",
+                "clone",
+                "https://github.com/acme/widgets",
+            ],
+            stderr="invalid credentials for secret",
+        )
+
+
 class FakeHttpClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, Any, Mapping[str, str] | None]] = []
@@ -831,11 +852,16 @@ def test_read_pr_feedback_requires_repo_context(tmp_path) -> None:
         scm.read_pr_feedback(ScmReadPrFeedbackQuery(pr_external_id="42"))
 
 
-def test_git_runner_failure_sanitizes_token_in_error(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("GITHUB_TOKEN_TEST", "supersecret")
-    runner = FakeRunner()
-    runner.add_failure(stderr="auth failed using token supersecret")
-    scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
+def test_git_runner_failure_does_not_expose_secret_in_cause_or_context(
+    monkeypatch,
+) -> None:
+    secret = "secret"
+    encoded_secret = base64.b64encode(secret.encode()).decode("ascii")
+    monkeypatch.setenv("GITHUB_TOKEN_TEST", secret)
+    runner = LeakyCalledProcessRunner()
+    scm = GitHubScm(
+        _build_config(Path.cwd()), runner=runner, http_client=FakeHttpClient()
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         scm.ensure_workspace(
@@ -846,5 +872,16 @@ def test_git_runner_failure_sanitizes_token_in_error(tmp_path, monkeypatch) -> N
             )
         )
 
-    assert "supersecret" not in str(exc_info.value)
-    assert "***" in str(exc_info.value)
+    raised = exc_info.value
+
+    assert str(raised) == "git command failed: invalid credentials for ***"
+    assert raised.__cause__ is None
+    assert raised.__context__ is None
+
+    for rendered in (
+        repr(raised),
+        repr(raised.__cause__),
+        repr(raised.__context__),
+    ):
+        assert secret not in rendered
+        assert encoded_secret not in rendered

@@ -695,7 +695,7 @@ class GitHubScm:
             stderr = (exc.stderr or "").strip()
             stdout = (exc.stdout or "").strip()
             sanitized = _sanitize_token(stderr or stdout, token)
-            raise RuntimeError(f"git command failed: {sanitized}") from exc
+        raise RuntimeError(f"git command failed: {sanitized}")
 
     def _resolve_default_branch(self, local_path: Path) -> str:
         result = self._git_run(

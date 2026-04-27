@@ -76,12 +76,16 @@ comments) sees the resolved URL as if it had been there from the start.
   `Authorization: Bearer <token>` unchanged.
 - `_sanitize_token` is applied to `git` stderr inside `_git_run`, so
   `RuntimeError("git command failed: ...")` cannot echo the token even
-  if `git` itself prints it. HTTP responses do not contain the token —
-  it lives only in the request `Authorization` header, never in the
-  URL — so `GitHubApiError` does not run a second pass of token
-  stripping. It exposes `status`, `method`, `url` (as constructed by
-  the adapter) and a `body_excerpt` truncated to the first 500
-  characters of the response body.
+  if `git` itself prints it. `_git_run` then raises a fresh
+  `RuntimeError` after leaving the `except` block, so the original
+  `CalledProcessError` with `exc.cmd` does not survive in `__cause__` or
+  `__context__` and cannot leak `http.extraHeader` through the
+  traceback. HTTP responses do not contain the token — it lives only in
+  the request `Authorization` header, never in the URL — so
+  `GitHubApiError` does not run a second pass of token stripping. It
+  exposes `status`, `method`, `url` (as constructed by the adapter) and
+  a `body_excerpt` truncated to the first 500 characters of the response
+  body.
 
 ## Workspace Path Safety
 
