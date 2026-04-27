@@ -74,9 +74,14 @@ comments) sees the resolved URL as if it had been there from the start.
   `Basic x-access-token:<token>` (App installations) requires editing
   `_git_auth_args` in `github_scm.py`; no caller change is needed.
 - HTTP requests carry the same token as `Authorization: Bearer <token>`.
-- All exception messages and log fields strip the token via
-  `_sanitize_token`. `GitHubApiError` exposes the URL without query
-  parameters and a body excerpt capped at ~500 characters.
+- `_sanitize_token` is applied to `git` stderr inside `_git_run`, so
+  `RuntimeError("git command failed: ...")` cannot echo the token even
+  if `git` itself prints it. HTTP responses do not contain the token —
+  it lives only in the request `Authorization` header, never in the
+  URL — so `GitHubApiError` does not run a second pass of token
+  stripping. It exposes `status`, `method`, `url` (as constructed by
+  the adapter) and a `body_excerpt` truncated to the first 500
+  characters of the response body.
 
 ## Workspace Path Safety
 
@@ -103,8 +108,10 @@ newlines, NUL bytes, and the `-->` sequence inside metadata cannot
 break the marker. The version tag (`:v1`) reserves room for future
 schema changes.
 
-`read_pr_feedback` calls `GET /repos/{owner}/{repo}/pulls/{number}` once
-per invocation, finds the footer with a strict regex, and decodes it.
+`read_pr_feedback` calls `GET /repos/{owner}/{repo}/pulls/{number}` at
+most once per invocation (skipped when no feedback items are returned
+by the three list endpoints below), finds the footer with a strict
+regex, and decodes it.
 If the footer is absent (legacy PR, edited body, fork mismatch), the
 adapter returns each feedback item with sentinel metadata
 `{"_hl_unresolved": true}`. `tracker_intake._ingest_pr_feedback` then
@@ -120,7 +127,7 @@ before persisting the feedback as a child task.
 | --- | --- | --- |
 | `pr_comment` (issue) | `GET /repos/{o}/{r}/issues/{n}/comments` | General PR conversation. |
 | `pr_comment` (review_comment) | `GET /repos/{o}/{r}/pulls/{n}/comments` | Inline diff comments. `path`/`line`/`side`/`commit_sha` populated. |
-| `pr_review_approved` / `pr_review_requested_changes` / `pr_comment` | `GET /repos/{o}/{r}/pulls/{n}/reviews` | Review verdict. Empty review bodies are normalized to `(approved without comment)` / `(changes requested without comment)` so `PrFeedbackPayload.body` stays non-empty. |
+| `pr_review_approved` / `pr_review_requested_changes` / `pr_comment` | `GET /repos/{o}/{r}/pulls/{n}/reviews` | Review verdict. `commit_sha` populated. Empty review bodies are normalized to `(approved without comment)` for `APPROVED`, `(changes requested without comment)` for `CHANGES_REQUESTED`, and `(review without comment)` for `COMMENTED` or any other state, so `PrFeedbackPayload.body` stays non-empty. |
 
 `comment_id` is namespaced as `<source>-<numeric_id>` so collisions
 across endpoints are impossible.

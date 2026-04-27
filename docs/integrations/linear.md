@@ -39,11 +39,11 @@ by `src/backend/settings.py`. The complete list:
 | Variable | Default | Required | Purpose |
 | --- | --- | --- | --- |
 | `LINEAR_API_URL` | `https://api.linear.app/graphql` | no | GraphQL endpoint. Override only for self-hosted proxies. |
-| `LINEAR_TOKEN_ENV_VAR` | `LINEAR_API_KEY` | yes | **Name** of the env var that holds the personal API key. The value is read lazily at every GraphQL call, never at startup. |
+| `LINEAR_TOKEN_ENV_VAR` | `LINEAR_API_KEY` | no | **Name** of the env var that holds the personal API key. The value is read lazily at every GraphQL call, never at startup. Override only if your secrets store exposes the key under a different name. The override must be a non-empty string — explicitly setting it to an empty string makes `_build_linear_tracker` raise `ValueError("LINEAR_TOKEN_ENV_VAR must be set when tracker_adapter='linear'")` at runtime container build. (`_build_github_scm` has no equivalent check; `GITHUB_TOKEN_ENV_VAR` falls through to its default in the same situation.) |
 | `LINEAR_API_KEY` (or whatever `LINEAR_TOKEN_ENV_VAR` points to) | - | yes (at runtime) | The personal API key itself, format `lin_api_…`. Generated in Linear → Settings → Account → Security & access → API keys. |
 | `LINEAR_TEAM_ID` | - | yes | UUID of the team the adapter writes to. Validated when the runtime container is built. |
 | `LINEAR_REQUEST_TIMEOUT_SECONDS` | `30` | no | Per-request HTTP timeout. |
-| `LINEAR_FETCH_LABEL_ID` | - | no | Extra label filter applied to `fetch_tasks`. Only issues carrying this label will be ingested. |
+| `LINEAR_FETCH_LABEL_ID` | - | no | Extra label filter applied to `fetch_tasks`. AND-ed with `LINEAR_TASK_TYPE_LABEL_MAPPING[task_type]` when both are set: an issue must carry **both** labels to be ingested. See "Pagination And Sorting" for the resulting filter shape. |
 | `LINEAR_STATE_ID_NEW` | - | recommended | Workflow state UUID written when creating an issue with `TaskStatus.NEW`. If empty, the adapter falls back to the lowest-position state of type `unstarted` (or `backlog`). |
 | `LINEAR_STATE_ID_PROCESSING` | - | recommended | Same, for `TaskStatus.PROCESSING` (fallback type: `started`). |
 | `LINEAR_STATE_ID_DONE` | - | recommended | Same, for `TaskStatus.DONE` (fallback type: `completed`). |
@@ -207,8 +207,10 @@ Behaviour:
   `json.loads`. `repo_url`, `repo_ref`, `workspace_key` are mapped to the
   identically named `TrackerTask` fields. The `input` object is fed to
   `TaskInputPayload.model_validate(...)` (Pydantic, `extra="forbid"`).
-  Any parse error logs `linear_input_block_invalid_json` /
-  `linear_input_payload_invalid` and leaves the corresponding
+  Any parse error logs one of `linear_input_block_invalid_json`
+  (malformed JSON), `linear_input_block_not_object` (parsed value is not
+  a JSON object), or `linear_input_payload_invalid` (object failed
+  `TaskInputPayload` validation), and leaves the corresponding
   `TrackerTask` fields as `None` — the issue is still ingested.
 - **On write (`create_task`, `create_subtask`):** the adapter serialises
   any of `repo_url`, `repo_ref`, `workspace_key`, `input_payload` that
@@ -255,6 +257,34 @@ to fill in any missing values:
 `MockScm` (the default for tests and demos) does not consume
 `GITHUB_DEFAULT_REPO_URL`; it requires `repo_url` in the payload and
 raises `ValueError("MockScm requires repo_url")` otherwise.
+
+## Per-Task Metadata Overrides
+
+`create_task` and `create_subtask` accept a `TrackerTaskCreatePayload`
+whose `metadata` mapping carries Linear-specific routing hints that
+do **not** travel through the issue `description` service block.
+The adapter currently honours one such hint:
+
+| `metadata` key | Effect |
+| --- | --- |
+| `linear_team_id` | Overrides `LINEAR_TEAM_ID` for this single mutation. The value must be a non-empty string UUID; missing or non-string values fall back to the configured team. |
+
+This is intended for multi-team deployments where one Heavy Lifting
+runtime writes into several Linear teams: the orchestrator picks the
+target team per issue and passes the UUID through `metadata`, while
+the global `LINEAR_TEAM_ID` stays as the default. The override is
+applied per mutation (`create_task` / `create_subtask`); reads via
+`fetch_tasks` use a state/label-based `IssueFilter` and are not
+re-scoped by this hint.
+
+Unknown `metadata` keys are ignored silently so that future
+additions on the orchestrator side do not break older adapter
+builds.
+
+`fetch_tasks` also writes the configured `LINEAR_TEAM_ID` into
+`TrackerTask.metadata["linear_team_id"]` for every ingested issue,
+so downstream stages can keep the team association without
+re-querying the GraphQL API.
 
 ## Pagination And Sorting
 
