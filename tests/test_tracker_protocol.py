@@ -3,6 +3,7 @@ from backend.protocols.tracker import TrackerProtocol
 from backend.schemas import (
     TaskContext,
     TrackerCommentCreatePayload,
+    TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerStatusUpdatePayload,
@@ -164,3 +165,83 @@ def test_mock_tracker_attach_links_copies_payload_before_storing() -> None:
     stored_task = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
 
     assert stored_task.context.references[0].label == "PR"
+
+
+def test_mock_tracker_filters_eligible_estimated_tasks_via_explicit_query() -> None:
+    tracker = MockTracker()
+    eligible_parent = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Eligible estimated task"),
+            status=TaskStatus.DONE,
+            metadata={
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
+            },
+        )
+    )
+    tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Too large estimated task"),
+            status=TaskStatus.DONE,
+            metadata={
+                "estimate": {"story_points": 8, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
+            },
+        )
+    )
+    child_parent = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Parent with child"),
+            status=TaskStatus.DONE,
+            metadata={
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
+            },
+        )
+    )
+    tracker.create_subtask(
+        TrackerSubtaskCreatePayload(
+            parent_external_id=child_parent.external_id,
+            context=TaskContext(title="Child task should be excluded"),
+            status=TaskStatus.NEW,
+            metadata={
+                "estimate": {"story_points": 1, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
+            },
+        )
+    )
+    tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Cannot take in work"),
+            status=TaskStatus.DONE,
+            metadata={
+                "estimate": {"story_points": 1, "can_take_in_work": False},
+                "selection": {"taken_in_work": False},
+            },
+        )
+    )
+    tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Already taken in work"),
+            status=TaskStatus.DONE,
+            metadata={
+                "estimate": {"story_points": 1, "can_take_in_work": True},
+                "selection": {"taken_in_work": True},
+            },
+        )
+    )
+
+    tasks = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(
+            statuses=[TaskStatus.DONE],
+            estimated_selection=TrackerEstimatedSelectionQuery(
+                max_story_points=3,
+                can_take_in_work=True,
+                taken_in_work=False,
+                only_parent_tasks=True,
+            ),
+            limit=10,
+        )
+    )
+
+    assert [task.external_id for task in tasks] == [eligible_parent.external_id]

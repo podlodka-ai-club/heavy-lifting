@@ -23,6 +23,7 @@ from backend.schemas import (
     TrackerTaskCreatePayload,
 )
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
+from backend.services.mock_task_selection import MockTaskSelectionService
 from backend.settings import get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.workers.deliver_worker import DeliverWorker
@@ -794,6 +795,92 @@ def test_orchestration_flow_routes_estimate_only_to_delivery_without_scm_side_ef
         "2 story points\nReason: adding CLI command logging is a small isolated change."
     )
     assert tracker._tasks[tracker_task.external_id].context.references == []
+
+
+def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session_factory) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    estimated_parent = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Implement selected backlog task",
+                description="Previously estimated small task.",
+                acceptance_criteria=["Open a PR and deliver result to tracker"],
+            ),
+            input_payload=TaskInputPayload(
+                instructions="Implement the selected backlog task.",
+                base_branch="main",
+                branch_name="task120/selected-from-estimate",
+                commit_message_hint="task120 selected backlog task",
+            ),
+            status=TaskStatus.DONE,
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-120",
+            metadata={
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
+            },
+        )
+    )
+    selected = MockTaskSelectionService(tracker=tracker).select_small_estimated_task(
+        max_story_points=3
+    )
+    assert selected is not None
+
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=LocalAgentRunner(),
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    intake_report = intake_worker.poll_once()
+    execute_report = execute_worker.poll_once()
+    deliver_report = deliver_worker.poll_once()
+
+    assert intake_report.created_fetch_tasks == 1
+    assert intake_report.created_execute_tasks == 1
+    assert execute_report.processed_execute_tasks == 1
+    assert deliver_report.processed_deliver_tasks == 1
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=selected.created_task.external_id,
+        )
+
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        deliver_task = repository.find_child_task(
+            parent_id=execute_task.id, task_type=TaskType.DELIVER
+        )
+        assert deliver_task is not None
+        assert fetch_task.external_parent_id == estimated_parent.external_id
+        assert execute_task.external_parent_id == selected.created_task.external_id
+        assert execute_task.status == TaskStatus.DONE
+        assert execute_task.branch_name == "task120/selected-from-estimate"
+        assert deliver_task.status == TaskStatus.DONE
+
+    selected_tracker_task = tracker._tasks[selected.created_task.external_id]
+    assert selected_tracker_task.status == TaskStatus.DONE
+    assert (
+        tracker._tasks[estimated_parent.external_id].metadata["selection"]["taken_in_work"] is True
+    )
+    assert len(tracker._comments[selected.created_task.external_id]) == 1
+    assert tracker._comments.get(estimated_parent.external_id, []) == []
 
 
 def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_factory) -> None:

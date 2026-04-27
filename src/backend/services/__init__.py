@@ -8,6 +8,7 @@ from backend.services.context_builder import (
     parse_task_input_payload,
     parse_task_result_payload,
 )
+from backend.services.mock_task_selection import MockTaskSelectionResult, MockTaskSelectionService
 from backend.services.token_costs import (
     DEFAULT_TOKEN_PRICES,
     TokenCostService,
@@ -26,6 +27,8 @@ __all__ = [
     "EffectiveTaskContext",
     "FeedbackHistoryEntry",
     "LocalAgentRunner",
+    "MockTaskSelectionResult",
+    "MockTaskSelectionService",
     "TaskChainEntry",
     "TokenCostService",
     "TokenPrice",

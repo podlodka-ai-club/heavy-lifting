@@ -31,6 +31,14 @@ The payload contract complements the task record:
 
 Repository coordinates such as `repo_url`, `repo_ref`, and `workspace_key` remain task-record fields and may be copied into payload metadata only when prompt assembly needs them.
 
+For the current mock-only estimate-selection flow, the tracker task metadata may also carry:
+
+- `metadata.estimate.story_points`
+- `metadata.estimate.can_take_in_work`
+- `metadata.selection.taken_in_work`
+
+Those fields are tracker-side selection hints only. They do not replace the worker handoff contract and are used only to decide whether the orchestrator should create a new executable tracker subtask.
+
 ## Context V1
 
 `context` is stable across the life of a business task thread unless new durable source facts arrive.
@@ -194,6 +202,8 @@ That rule applies to:
 - A new tracker task enters the system with `input_payload.action = triage`.
 - Triage classifies the business task, estimates whether it can be taken into work, and decides the next executable path.
 - Triage runs as an `execute` task and may either finish with delivery-only output or route to a follow-up `execute` task for research or implementation.
+
+For the mock-only backlog-selection branch, the system may first choose one already estimated parent task and create a tracker subtask that carries the original context, repository coordinates, and executable `input_payload`. That subtask then enters the same `fetch -> execute -> deliver` pipeline as any other tracker intake.
 
 ### Research
 

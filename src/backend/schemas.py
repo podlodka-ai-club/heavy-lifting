@@ -115,9 +115,17 @@ class TrackerTask(SchemaModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+class TrackerEstimatedSelectionQuery(SchemaModel):
+    max_story_points: int | None = Field(default=None, ge=0)
+    can_take_in_work: bool | None = None
+    taken_in_work: bool | None = None
+    only_parent_tasks: bool = False
+
+
 class TrackerFetchTasksQuery(SchemaModel):
     statuses: list[TaskStatus] = Field(default_factory=lambda: [TaskStatus.NEW])
     task_type: TaskType | None = None
+    estimated_selection: TrackerEstimatedSelectionQuery | None = None
     limit: int = Field(default=100, ge=1, le=1000)
 
 
@@ -283,6 +291,7 @@ __all__ = [
     "ScmWorkspaceEnsurePayload",
     "TrackerCommentCreatePayload",
     "TrackerCommentReference",
+    "TrackerEstimatedSelectionQuery",
     "TrackerFetchTasksQuery",
     "TrackerLinksAttachPayload",
     "TrackerStatusUpdatePayload",
