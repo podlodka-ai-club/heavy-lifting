@@ -303,7 +303,9 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
         "stdout_preview_source": "text_events",
         "stdout_event_count": 4,
         "stdout_event_types": ["step_start", "text", "text", "step_finish"],
+        "stdout_error_event": {"status": "not_found"},
         "stderr_preview": None,
+        "stderr_analysis": {"status": "empty", "error_like": False},
         "usage": {
             "status": "parsed",
             "model": "gpt-5.4",
@@ -343,7 +345,7 @@ def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None
             args=command,
             returncode=17,
             stdout='{"type":"text","part":{"type":"text","text":"Model request failed."}}\n',
-            stderr="Model request failed.",
+            stderr="failed to complete model request.",
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -358,7 +360,8 @@ def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None
 
     assert result.payload.summary == "CLI agent run failed with exit code 17."
     assert (
-        result.payload.details == "stdout:\nModel request failed.\nstderr:\nModel request failed."
+        result.payload.details
+        == "stdout:\nModel request failed.\nstderr:\nfailed to complete model request."
     )
     assert result.summary_metadata["exit_code"] == 17
     assert result.summary_metadata["stdout_preview"] == "Model request failed."
@@ -367,7 +370,13 @@ def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None
         "status": "missing",
         "reason": "step_finish_not_found",
     }
-    assert result.summary_metadata["stderr_preview"] == "Model request failed."
+    assert result.summary_metadata["stderr_preview"] == "failed to complete model request."
+    assert result.summary_metadata["stdout_error_event"] == {"status": "not_found"}
+    assert result.summary_metadata["stderr_analysis"] == {
+        "status": "error_like",
+        "error_like": True,
+        "reason": "failed_prefix",
+    }
     assert result.summary_metadata["runner_metadata"] == {
         "subcommand": "run",
         "profile": None,
@@ -404,9 +413,192 @@ def test_cli_agent_runner_falls_back_when_usage_is_missing(monkeypatch, tmp_path
 
     assert result.payload.details == "stdout:\nNo usage payload returned."
     assert result.payload.token_usage == []
+    assert result.summary_metadata["execution_status"] == "succeeded"
     assert result.summary_metadata["usage"] == {
         "status": "missing",
         "reason": "step_finish_not_found",
+    }
+
+
+def test_cli_agent_runner_fails_on_stdout_error_event_with_zero_exit(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=(
+                '{"type":"text","part":{"type":"text","text":"Starting run."}}\n'
+                '{"type":"error","part":{"type":"error","text":"Invalid model: openai/oops"}}\n'
+                '{"type":"step_finish","part":{"type":"step-finish","tokens":{"input":8,'
+                '"output":3,"cache":{"read":1}},"cost":"0.0004"}}\n'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.summary == "CLI agent run failed: Invalid model: openai/oops"
+    assert result.payload.details == "stdout:\nStarting run.\nInvalid model: openai/oops"
+    assert [entry.model_dump() for entry in result.payload.token_usage] == [
+        {
+            "model": "unknown",
+            "provider": "unknown",
+            "input_tokens": 8,
+            "output_tokens": 3,
+            "cached_tokens": 1,
+            "estimated": False,
+            "cost_usd": Decimal("0.0004"),
+        }
+    ]
+    assert result.summary_metadata["execution_status"] == "failed"
+    assert result.summary_metadata["failure_message"] == (
+        "CLI agent run failed: Invalid model: openai/oops"
+    )
+    assert result.summary_metadata["stdout_error_event"] == {
+        "status": "detected",
+        "message": "Invalid model: openai/oops",
+        "event_type": "error",
+    }
+    assert result.summary_metadata["stderr_analysis"] == {
+        "status": "empty",
+        "error_like": False,
+    }
+
+
+def test_cli_agent_runner_fails_on_error_like_stderr_with_zero_exit(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"type":"text","part":{"type":"text","text":"Model lookup failed."}}\n',
+            stderr="ProviderModelNotFoundError: model openai/oops was not found",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.summary == (
+        "CLI agent run failed: ProviderModelNotFoundError: model openai/oops was not found"
+    )
+    assert result.payload.details == (
+        "stdout:\nModel lookup failed.\nstderr:\n"
+        "ProviderModelNotFoundError: model openai/oops was not found"
+    )
+    assert result.payload.token_usage == []
+    assert result.summary_metadata["execution_status"] == "failed"
+    assert result.summary_metadata["failure_message"] == (
+        "CLI agent run failed: ProviderModelNotFoundError: model openai/oops was not found"
+    )
+    assert result.summary_metadata["stdout_error_event"] == {"status": "not_found"}
+    assert result.summary_metadata["stderr_analysis"] == {
+        "status": "error_like",
+        "error_like": True,
+        "reason": "error_class",
+    }
+
+
+def test_cli_agent_runner_keeps_benign_stderr_successful(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"type":"text","part":{"type":"text","text":"Run completed."}}\n',
+            stderr="warning: using fallback cache path",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.summary == "CLI agent run completed successfully."
+    assert result.summary_metadata["execution_status"] == "succeeded"
+    assert "failure_message" not in result.summary_metadata
+    assert result.summary_metadata["stderr_analysis"] == {
+        "status": "benign",
+        "error_like": False,
+    }
+
+
+def test_cli_agent_runner_keeps_zero_failed_stderr_successful(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"type":"text","part":{"type":"text","text":"Run completed."}}\n',
+            stderr="tests finished successfully: 0 failed, 12 passed",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.summary == "CLI agent run completed successfully."
+    assert result.summary_metadata["execution_status"] == "succeeded"
+    assert "failure_message" not in result.summary_metadata
+    assert result.summary_metadata["stderr_analysis"] == {
+        "status": "benign",
+        "error_like": False,
+    }
+
+
+def test_cli_agent_runner_keeps_failed_over_warning_stderr_successful(
+    monkeypatch, tmp_path
+) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"type":"text","part":{"type":"text","text":"Run completed."}}\n',
+            stderr="warning: network probe failed over to cached endpoint",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.payload.summary == "CLI agent run completed successfully."
+    assert result.summary_metadata["execution_status"] == "succeeded"
+    assert "failure_message" not in result.summary_metadata
+    assert result.summary_metadata["stderr_analysis"] == {
+        "status": "benign",
+        "error_like": False,
     }
 
 

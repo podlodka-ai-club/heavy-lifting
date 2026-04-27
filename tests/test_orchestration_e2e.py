@@ -459,6 +459,146 @@ def test_http_intake_flow_stops_after_cli_non_zero_exit(monkeypatch, session_fac
     assert runtime.tracker._comments.get("task-1", []) == []
 
 
+def test_http_intake_flow_stops_after_cli_error_signals_with_zero_exit(
+    monkeypatch, session_factory
+) -> None:
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=120,
+            provider_hint="openai",
+            model_hint="gpt-5.4",
+            profile="backend",
+        )
+    )
+    runtime = RuntimeContainer(
+        settings=replace(get_settings(), app_name="heavy-lifting-backend"),
+        tracker=MockTracker(),
+        scm=MockScm(),
+        agent_runner=runner,
+    )
+    app = create_app(runtime=runtime, session_factory=session_factory)
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=(
+                '{"type":"text","part":{"type":"text","text":"Preparing request."}}\n'
+                '{"type":"error","part":{"type":"error",'
+                '"text":"Invalid model: openai/missing-model"}}\n'
+                '{"type":"step_finish","part":{"type":"step-finish","tokens":{"total":21,'
+                '"input":13,"output":5,"reasoning":3,"cache":{"read":1,"write":0}},'
+                '"cost":"0.001200"}}\n'
+            ),
+            stderr=(
+                "ProviderModelNotFoundError: openai/missing-model "
+                "is not available for this provider"
+            ),
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    response = app.test_client().post(
+        "/tasks/intake",
+        json={
+            "context": {"title": "CLI invalid model e2e"},
+            "input_payload": {
+                "instructions": "Run the CLI worker and stop when the model is invalid.",
+                "base_branch": "main",
+                "branch_name": "task90/cli-invalid-model",
+            },
+            "repo_url": "https://example.test/repo.git",
+            "repo_ref": "main",
+            "workspace_key": "repo-90",
+        },
+    )
+
+    assert response.status_code == 201
+
+    intake_worker = TrackerIntakeWorker(
+        tracker=runtime.tracker,
+        scm=runtime.scm,
+        tracker_name=runtime.settings.tracker_adapter,
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=runtime.scm,
+        agent_runner=runtime.agent_runner,
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=runtime.tracker, session_factory=session_factory)
+
+    intake_worker.poll_once()
+    execute_report = execute_worker.poll_once()
+    deliver_report = deliver_worker.poll_once()
+
+    assert execute_report.processed_execute_tasks == 0
+    assert execute_report.failed_execute_tasks == 1
+    assert deliver_report.processed_deliver_tasks == 0
+    assert deliver_report.failed_deliver_tasks == 0
+    assert runtime.scm._commit_sequence == 0
+    assert runtime.scm._pull_requests == {}
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id="task-1",
+        )
+
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        assert execute_task.status == TaskStatus.FAILED
+        assert execute_task.error == (
+            "CLI agent run failed: Invalid model: openai/missing-model "
+            "(stderr: ProviderModelNotFoundError: openai/missing-model is not available "
+            "for this provider)"
+        )
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["metadata"]["execution_status"] == "failed"
+        assert execute_task.result_payload["metadata"]["stdout_error_event"] == {
+            "status": "detected",
+            "message": "Invalid model: openai/missing-model",
+            "event_type": "error",
+        }
+        assert execute_task.result_payload["metadata"]["stderr_analysis"] == {
+            "status": "error_like",
+            "error_like": True,
+            "reason": "error_class",
+        }
+        assert execute_task.result_payload["token_usage"] == [
+            {
+                "model": "gpt-5.4",
+                "provider": "openai",
+                "input_tokens": 13,
+                "output_tokens": 5,
+                "cached_tokens": 1,
+                "estimated": False,
+                "cost_usd": "0.001200",
+            }
+        ]
+        assert execute_task.pr_external_id is None
+        assert execute_task.pr_url is None
+
+        deliver_task = repository.find_child_task(
+            parent_id=execute_task.id, task_type=TaskType.DELIVER
+        )
+        assert deliver_task is None
+
+        token_usage_entries = session.query(TokenUsage).order_by(TokenUsage.id.asc()).all()
+        assert token_usage_entries == []
+
+    assert runtime.tracker._tasks["task-1"].status == TaskStatus.NEW
+    assert runtime.tracker._comments.get("task-1", []) == []
+
+
 def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
     tracker = MockTracker()
     scm = MockScm()

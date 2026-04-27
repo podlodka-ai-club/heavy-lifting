@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -268,8 +269,19 @@ class CliAgentRunner:
         exit_code = completed_process.returncode
         stdout_parse = self._parse_stdout(completed_process.stdout)
         stdout_preview = stdout_parse.preview
-        stderr_preview = self._build_preview(completed_process.stderr)
+        stderr_parse = self._parse_stderr(completed_process.stderr)
+        stderr_preview = stderr_parse.preview
         details = self._build_details(stdout_preview=stdout_preview, stderr_preview=stderr_preview)
+        execution_status = self._resolve_execution_status(
+            exit_code=exit_code,
+            stdout_parse=stdout_parse,
+            stderr_parse=stderr_parse,
+        )
+        failure_message = self._build_failure_message(
+            exit_code=exit_code,
+            stdout_parse=stdout_parse,
+            stderr_parse=stderr_parse,
+        )
         runner_metadata: dict[str, object] = {
             "subcommand": self.config.subcommand,
             "profile": self.config.profile,
@@ -292,15 +304,17 @@ class CliAgentRunner:
             "stdout_preview_source": stdout_parse.preview_source,
             "stdout_event_count": stdout_parse.event_count,
             "stdout_event_types": stdout_parse.event_types,
+            "stdout_error_event": stdout_parse.error_event_metadata,
             "stderr_preview": stderr_preview,
+            "stderr_analysis": stderr_parse.metadata,
             "usage": stdout_parse.usage_metadata,
             "runner_metadata": runner_metadata,
-            "execution_status": "succeeded" if exit_code == 0 else "failed",
+            "execution_status": execution_status,
         }
-        if exit_code != 0:
-            metadata["failure_message"] = self._build_summary(exit_code)
+        if failure_message is not None:
+            metadata["failure_message"] = failure_message
         return TaskResultPayload(
-            summary=self._build_summary(exit_code),
+            summary=failure_message or self._build_summary(exit_code),
             details=details,
             branch_name=request.task_context.branch_name,
             pr_url=request.task_context.pr_url,
@@ -335,6 +349,49 @@ class CliAgentRunner:
             return normalized
         return normalized[: limit - 3] + "..."
 
+    def _resolve_execution_status(
+        self,
+        *,
+        exit_code: int,
+        stdout_parse: _CliStdoutParseResult,
+        stderr_parse: _CliStderrParseResult,
+    ) -> str:
+        if exit_code != 0 or stdout_parse.has_error_event or stderr_parse.is_error_like:
+            return "failed"
+        return "succeeded"
+
+    def _build_failure_message(
+        self,
+        *,
+        exit_code: int,
+        stdout_parse: _CliStdoutParseResult,
+        stderr_parse: _CliStderrParseResult,
+    ) -> str | None:
+        if exit_code != 0:
+            return self._build_summary(exit_code)
+
+        stdout_message = stdout_parse.error_message
+        stderr_message = stderr_parse.preview
+
+        if (
+            stdout_parse.has_error_event
+            and stdout_message
+            and stderr_parse.is_error_like
+            and stderr_message
+        ):
+            if stdout_message == stderr_message:
+                return f"CLI agent run failed: {stdout_message}"
+            return f"CLI agent run failed: {stdout_message} (stderr: {stderr_message})"
+        if stdout_parse.has_error_event and stdout_message:
+            return f"CLI agent run failed: {stdout_message}"
+        if stdout_parse.has_error_event:
+            return "CLI agent run failed: CLI emitted an error event."
+        if stderr_parse.is_error_like and stderr_message:
+            return f"CLI agent run failed: {stderr_message}"
+        if stderr_parse.is_error_like:
+            return "CLI agent run failed due to error output on stderr."
+        return None
+
     def _parse_stdout(self, stdout: str) -> _CliStdoutParseResult:
         raw_preview = self._build_preview(stdout)
         lines = [line.strip() for line in stdout.splitlines() if line.strip()]
@@ -346,6 +403,9 @@ class CliAgentRunner:
                 token_usage=[],
                 event_count=0,
                 event_types=[],
+                has_error_event=False,
+                error_message=None,
+                error_event_metadata={"status": "not_found"},
                 usage_metadata={"status": "missing", "reason": "stdout_empty"},
             )
 
@@ -353,6 +413,8 @@ class CliAgentRunner:
         event_types: list[str] = []
         text_parts: list[str] = []
         step_finish_part: dict[str, object] | None = None
+        error_event: dict[str, object] | None = None
+        error_message: str | None = None
 
         for index, line in enumerate(lines, start=1):
             try:
@@ -365,6 +427,9 @@ class CliAgentRunner:
                     token_usage=[],
                     event_count=len(events),
                     event_types=event_types,
+                    has_error_event=False,
+                    error_message=None,
+                    error_event_metadata={"status": "not_found"},
                     usage_metadata={
                         "status": "malformed",
                         "reason": "invalid_json_line",
@@ -381,6 +446,9 @@ class CliAgentRunner:
                     token_usage=[],
                     event_count=len(events),
                     event_types=event_types,
+                    has_error_event=False,
+                    error_message=None,
+                    error_event_metadata={"status": "not_found"},
                     usage_metadata={
                         "status": "malformed",
                         "reason": "non_object_event",
@@ -402,11 +470,19 @@ class CliAgentRunner:
                 if event_type == "step_finish":
                     step_finish_part = part
 
+            if error_event is None and self._is_error_event(
+                event, event_type=event_type, part=part
+            ):
+                error_event = event
+                error_message = self._extract_error_message(event, part=part)
+
         preview = self._build_preview("\n".join(text_parts))
         preview_source = "text_events" if preview else None
         if preview is None:
             preview = raw_preview
             preview_source = "raw_stdout" if raw_preview else None
+
+        error_event_metadata = self._build_error_event_metadata(error_event, error_message)
 
         if step_finish_part is None:
             return _CliStdoutParseResult(
@@ -416,6 +492,9 @@ class CliAgentRunner:
                 token_usage=[],
                 event_count=len(events),
                 event_types=event_types,
+                has_error_event=error_event is not None,
+                error_message=error_message,
+                error_event_metadata=error_event_metadata,
                 usage_metadata={"status": "missing", "reason": "step_finish_not_found"},
             )
 
@@ -427,8 +506,114 @@ class CliAgentRunner:
             token_usage=usage_parse_result.token_usage,
             event_count=len(events),
             event_types=event_types,
+            has_error_event=error_event is not None,
+            error_message=error_message,
+            error_event_metadata=error_event_metadata,
             usage_metadata=usage_parse_result.metadata,
         )
+
+    def _is_error_event(
+        self,
+        event: dict[str, object],
+        *,
+        event_type: object,
+        part: dict[str, object] | None,
+    ) -> bool:
+        if event_type == "error":
+            return True
+        if part is not None and part.get("type") == "error":
+            return True
+        level = event.get("level")
+        if isinstance(level, str) and level.lower() == "error":
+            return True
+        return False
+
+    def _extract_error_message(
+        self,
+        event: dict[str, object],
+        *,
+        part: dict[str, object] | None,
+    ) -> str | None:
+        candidates: list[object] = []
+        if part is not None:
+            candidates.extend(
+                [
+                    part.get("text"),
+                    part.get("message"),
+                    part.get("error"),
+                    part.get("code"),
+                ]
+            )
+        candidates.extend([event.get("text"), event.get("message"), event.get("error")])
+
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return self._build_preview(candidate)
+        return None
+
+    def _build_error_event_metadata(
+        self,
+        error_event: dict[str, object] | None,
+        error_message: str | None,
+    ) -> dict[str, object]:
+        if error_event is None:
+            return {"status": "not_found"}
+
+        metadata: dict[str, object] = {"status": "detected", "message": error_message}
+        event_type = error_event.get("type")
+        if isinstance(event_type, str):
+            metadata["event_type"] = event_type
+        level = error_event.get("level")
+        if isinstance(level, str):
+            metadata["level"] = level
+        return metadata
+
+    def _parse_stderr(self, stderr: str) -> _CliStderrParseResult:
+        preview = self._build_preview(stderr)
+        if preview is None:
+            return _CliStderrParseResult(
+                preview=None,
+                is_error_like=False,
+                metadata={"status": "empty", "error_like": False},
+            )
+
+        for line in stderr.splitlines():
+            normalized = line.strip()
+            if not normalized:
+                continue
+            reason = self._classify_stderr_line(normalized)
+            if reason is not None:
+                return _CliStderrParseResult(
+                    preview=preview,
+                    is_error_like=True,
+                    metadata={"status": "error_like", "error_like": True, "reason": reason},
+                )
+
+        return _CliStderrParseResult(
+            preview=preview,
+            is_error_like=False,
+            metadata={"status": "benign", "error_like": False},
+        )
+
+    def _classify_stderr_line(self, line: str) -> str | None:
+        lowered = line.lower()
+        if lowered.startswith("warning:") or lowered.startswith("warn:"):
+            return None
+        if lowered.startswith("note:"):
+            return None
+        if "traceback (most recent call last):" in lowered:
+            return "python_traceback"
+        if lowered.startswith("fatal:"):
+            return "fatal_prefix"
+        if re.search(r"\b[A-Za-z_][\w.]*Error\b", line):
+            return "error_class"
+        if re.search(r"\b[A-Za-z_][\w.]*Exception\b", line):
+            return "exception_class"
+        if "error:" in lowered:
+            return "error_prefix"
+        if lowered.startswith("failed:") or lowered.startswith("failed to "):
+            return "failed_prefix"
+        return None
 
     def _build_token_usage(self, step_finish_part: dict[str, object]) -> _CliUsageParseResult:
         tokens = step_finish_part.get("tokens")
@@ -543,7 +728,17 @@ class _CliStdoutParseResult:
     token_usage: list[TokenUsagePayload]
     event_count: int
     event_types: list[str]
+    has_error_event: bool
+    error_message: str | None
+    error_event_metadata: dict[str, object]
     usage_metadata: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _CliStderrParseResult:
+    preview: str | None
+    is_error_like: bool
+    metadata: dict[str, object]
 
 
 __all__ = ["CliAgentRunner", "CliAgentRunnerConfig", "LocalAgentRunner"]
