@@ -24,6 +24,7 @@ from backend.schemas import (
     TaskInputPayload,
     TaskLink,
     TrackerCommentCreatePayload,
+    TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerStatusUpdatePayload,
@@ -115,7 +116,7 @@ def test_extract_input_block_parses_valid_json_block() -> None:
 
 
 def test_extract_input_block_returns_none_when_close_marker_missing() -> None:
-    description = f"head\n{INPUT_BLOCK_OPEN}\n{{\"x\": 1}}\nno close here"
+    description = f'head\n{INPUT_BLOCK_OPEN}\n{{"x": 1}}\nno close here'
 
     cleaned, parsed = _extract_input_block(description)
 
@@ -137,9 +138,7 @@ def test_extract_input_block_returns_none_on_invalid_json() -> None:
 
 
 def test_extract_input_block_returns_none_when_block_is_array() -> None:
-    description = (
-        f"{INPUT_BLOCK_OPEN}\n[\"not\", \"an\", \"object\"]\n{INPUT_BLOCK_CLOSE}"
-    )
+    description = f'{INPUT_BLOCK_OPEN}\n["not", "an", "object"]\n{INPUT_BLOCK_CLOSE}'
 
     cleaned, parsed = _extract_input_block(description)
 
@@ -183,6 +182,20 @@ def test_inject_then_extract_roundtrips_payload() -> None:
     assert parsed == payload
 
 
+def test_inject_then_extract_roundtrips_estimate_and_selection_metadata() -> None:
+    description = "Estimated task"
+    payload = {
+        "estimate": {"story_points": 3, "can_take_in_work": True},
+        "selection": {"taken_in_work": False},
+    }
+
+    injected = _inject_input_block(description, payload)
+    cleaned, parsed = _extract_input_block(injected)
+
+    assert cleaned == description
+    assert parsed == payload
+
+
 def test_graphql_client_uses_injected_callable_without_patching_urlopen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -191,9 +204,7 @@ def test_graphql_client_uses_injected_callable_without_patching_urlopen(
     monkeypatch.setattr(
         urllib.request,
         "urlopen",
-        lambda *a, **kw: pytest.fail(
-            "urlopen must not be called when http_requester is injected"
-        ),
+        lambda *a, **kw: pytest.fail("urlopen must not be called when http_requester is injected"),
     )
 
     captured: dict[str, Any] = {}
@@ -311,9 +322,7 @@ def test_graphql_client_raises_runtime_error_on_other_graphql_errors(
 ) -> None:
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
 
-    body = json.dumps(
-        {"errors": [{"message": "Field 'foo' is not defined"}]}
-    ).encode("utf-8")
+    body = json.dumps({"errors": [{"message": "Field 'foo' is not defined"}]}).encode("utf-8")
     client = _GraphqlClient(
         api_url="https://api.linear.app/graphql",
         token_env_var="LINEAR_API_KEY_TEST",
@@ -497,9 +506,7 @@ def test_resolve_workflow_states_is_cached_across_calls(
         ("canceled", TaskStatus.FAILED),
     ],
 )
-def test_state_to_task_status_maps_known_types(
-    state_type: str, expected: TaskStatus
-) -> None:
+def test_state_to_task_status_maps_known_types(state_type: str, expected: TaskStatus) -> None:
     assert LinearTracker._state_to_task_status(state_type) is expected
 
 
@@ -609,9 +616,7 @@ def test_fetch_tasks_returns_empty_when_state_intersection_is_empty() -> None:
     config = _make_config(fetch_state_types=("started",))
     tracker = LinearTracker(config, http_requester=_never_called)
 
-    result = tracker.fetch_tasks(
-        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50)
-    )
+    result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50))
 
     assert result == []
 
@@ -631,6 +636,8 @@ def test_fetch_tasks_single_page_maps_issue_fields(
                 "repo_url": "https://example.test/repo",
                 "repo_ref": "main",
                 "workspace_key": "ws-1",
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
                 "input": {"instructions": "do work", "branch_name": "feat/x"},
             }
         )
@@ -647,9 +654,7 @@ def test_fetch_tasks_single_page_maps_issue_fields(
     fake, calls = _scripted_http_requester([body])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
-    result = tracker.fetch_tasks(
-        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50)
-    )
+    result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50))
 
     assert len(result) == 1
     task = result[0]
@@ -671,6 +676,11 @@ def test_fetch_tasks_single_page_maps_issue_fields(
     assert task.input_payload is not None
     assert task.input_payload.instructions == "do work"
     assert task.input_payload.branch_name == "feat/x"
+    assert task.metadata["estimate"] == {
+        "story_points": 2,
+        "can_take_in_work": True,
+    }
+    assert task.metadata["selection"] == {"taken_in_work": False}
     assert task.metadata["linear_issue_url"] == "https://linear.app/team/issue/ISS-1"
     assert task.metadata["linear_team_id"] == "team-1"
 
@@ -681,6 +691,76 @@ def test_fetch_tasks_single_page_maps_issue_fields(
     assert variables["after"] is None
     state_filter = variables["filter"]["state"]["type"]["in"]
     assert set(state_filter) == {"triage", "backlog", "unstarted"}
+
+
+def test_fetch_tasks_filters_by_estimated_selection_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    issues = [
+        _issue_node(
+            issue_id="ISS-ELIGIBLE",
+            state_type="completed",
+            description=_inject_input_block(
+                "Eligible",
+                {
+                    "estimate": {"story_points": 2, "can_take_in_work": True},
+                    "selection": {"taken_in_work": False},
+                },
+            ),
+        ),
+        _issue_node(
+            issue_id="ISS-TOO-LARGE",
+            state_type="completed",
+            description=_inject_input_block(
+                "Too large",
+                {
+                    "estimate": {"story_points": 8, "can_take_in_work": True},
+                    "selection": {"taken_in_work": False},
+                },
+            ),
+        ),
+        _issue_node(
+            issue_id="ISS-CHILD",
+            state_type="completed",
+            parent_id="ISS-PARENT",
+            description=_inject_input_block(
+                "Child",
+                {
+                    "estimate": {"story_points": 1, "can_take_in_work": True},
+                    "selection": {"taken_in_work": False},
+                },
+            ),
+        ),
+        _issue_node(
+            issue_id="ISS-TAKEN",
+            state_type="completed",
+            description=_inject_input_block(
+                "Taken",
+                {
+                    "estimate": {"story_points": 1, "can_take_in_work": True},
+                    "selection": {"taken_in_work": True},
+                },
+            ),
+        ),
+    ]
+    fake, _ = _scripted_http_requester([_issues_response_body(issues)])
+    tracker = LinearTracker(_make_config(fetch_state_types=("completed",)), http_requester=fake)
+
+    result = tracker.fetch_tasks(
+        TrackerFetchTasksQuery(
+            statuses=[TaskStatus.DONE],
+            estimated_selection=TrackerEstimatedSelectionQuery(
+                max_story_points=3,
+                can_take_in_work=True,
+                taken_in_work=False,
+                only_parent_tasks=True,
+            ),
+            limit=10,
+        )
+    )
+
+    assert [task.external_id for task in result] == ["ISS-ELIGIBLE"]
 
 
 def test_fetch_tasks_paginates_with_clamp_to_250_aggregating_to_limit(
@@ -705,9 +785,7 @@ def test_fetch_tasks_paginates_with_clamp_to_250_aggregating_to_limit(
     fake, calls = _scripted_http_requester([page1, page2, page3])
     tracker = LinearTracker(_make_config(max_pages=4), http_requester=fake)
 
-    result = tracker.fetch_tasks(
-        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=600)
-    )
+    result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=600))
 
     assert len(result) == 600
     assert len(calls) == 3
@@ -738,17 +816,14 @@ def test_fetch_tasks_stops_at_max_pages_with_warning(
     fake, calls = _scripted_http_requester([page1, page2])
     tracker = LinearTracker(_make_config(max_pages=2), http_requester=fake)
 
-    result = tracker.fetch_tasks(
-        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=1000)
-    )
+    result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=1000))
 
     assert len(result) == 500
     assert len(calls) == 2
     warnings = [
         r.msg
         for r in caplog.records
-        if isinstance(r.msg, dict)
-        and r.msg.get("event") == "linear_fetch_max_pages_reached"
+        if isinstance(r.msg, dict) and r.msg.get("event") == "linear_fetch_max_pages_reached"
     ]
     assert len(warnings) == 1
     assert warnings[0]["pages_done"] == 2
@@ -767,9 +842,7 @@ def test_fetch_tasks_filter_includes_task_type_label_when_mapped(
     tracker = LinearTracker(config, http_requester=fake)
 
     tracker.fetch_tasks(
-        TrackerFetchTasksQuery(
-            statuses=[TaskStatus.NEW], task_type=TaskType.PR_FEEDBACK, limit=10
-        )
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], task_type=TaskType.PR_FEEDBACK, limit=10)
     )
 
     filter_dict = calls[0]["variables"]["filter"]
@@ -789,16 +862,12 @@ def test_fetch_tasks_filter_combines_label_and_fetch_label_via_and(
     tracker = LinearTracker(config, http_requester=fake)
 
     tracker.fetch_tasks(
-        TrackerFetchTasksQuery(
-            statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10
-        )
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10)
     )
 
     filter_dict = calls[0]["variables"]["filter"]
     assert "and" in filter_dict
-    label_clauses = [
-        clause for clause in filter_dict["and"] if "labels" in clause
-    ]
+    label_clauses = [clause for clause in filter_dict["and"] if "labels" in clause]
     label_ids = sorted(c["labels"]["id"]["eq"] for c in label_clauses)
     assert label_ids == ["label-exec", "label-fetch"]
 
@@ -813,9 +882,7 @@ def test_fetch_tasks_warns_when_task_type_has_no_label_mapping(
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
     tracker.fetch_tasks(
-        TrackerFetchTasksQuery(
-            statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10
-        )
+        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10)
     )
 
     filter_dict = calls[0]["variables"]["filter"]
@@ -823,8 +890,7 @@ def test_fetch_tasks_warns_when_task_type_has_no_label_mapping(
     warnings = [
         r.msg
         for r in caplog.records
-        if isinstance(r.msg, dict)
-        and r.msg.get("event") == "linear_task_type_label_missing"
+        if isinstance(r.msg, dict) and r.msg.get("event") == "linear_task_type_label_missing"
     ]
     assert len(warnings) == 1
     assert warnings[0]["task_type"] == "execute"
@@ -843,9 +909,7 @@ def test_fetch_tasks_skips_issue_with_unknown_state_type(
     fake, _ = _scripted_http_requester([body])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
-    result = tracker.fetch_tasks(
-        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50)
-    )
+    result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=50))
 
     assert [task.external_id for task in result] == ["GOOD"]
 
@@ -867,9 +931,7 @@ def test_fetch_tasks_assigns_task_type_via_reverse_label_lookup(
     fake, _ = _scripted_http_requester([_issues_response_body([issue])])
     tracker = LinearTracker(config, http_requester=fake)
 
-    result = tracker.fetch_tasks(
-        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10)
-    )
+    result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10))
 
     assert len(result) == 1
     assert result[0].task_type is TaskType.PR_FEEDBACK
@@ -893,24 +955,23 @@ def test_fetch_tasks_handles_invalid_input_payload_gracefully(
     fake, _ = _scripted_http_requester([_issues_response_body([issue])])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
-    result = tracker.fetch_tasks(
-        TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10)
-    )
+    result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10))
 
     assert len(result) == 1
     assert result[0].input_payload is None
     invalid_warnings = [
         r.msg
         for r in caplog.records
-        if isinstance(r.msg, dict)
-        and r.msg.get("event") == "linear_input_payload_invalid"
+        if isinstance(r.msg, dict) and r.msg.get("event") == "linear_input_payload_invalid"
     ]
     assert len(invalid_warnings) == 1
     assert invalid_warnings[0]["issue_id"] == "ISS-3"
 
 
 def _issue_create_response_body(
-    *, issue_id: str = "ISS-NEW", url: str = "https://linear.app/team/issue/ISS-NEW",
+    *,
+    issue_id: str = "ISS-NEW",
+    url: str = "https://linear.app/team/issue/ISS-NEW",
     success: bool = True,
 ) -> bytes:
     return json.dumps(
@@ -1032,9 +1093,7 @@ def test_create_task_uses_metadata_team_id_when_present(
     fake, calls = _scripted_http_requester([_issue_create_response_body()])
     tracker = LinearTracker(config, http_requester=fake)
 
-    tracker.create_task(
-        _create_payload(metadata={"linear_team_id": "team-override"})
-    )
+    tracker.create_task(_create_payload(metadata={"linear_team_id": "team-override"}))
 
     assert calls[0]["variables"]["input"]["teamId"] == "team-override"
 
@@ -1045,10 +1104,8 @@ def test_create_task_falls_back_to_team_states_when_no_explicit_state_id(
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
     states_body = _states_response_body(
         [
-            {"id": "unstarted-late", "name": "Backlog Top", "type": "unstarted",
-             "position": 200.0},
-            {"id": "unstarted-early", "name": "Todo", "type": "unstarted",
-             "position": 50.0},
+            {"id": "unstarted-late", "name": "Backlog Top", "type": "unstarted", "position": 200.0},
+            {"id": "unstarted-early", "name": "Todo", "type": "unstarted", "position": 50.0},
         ]
     )
     fake, calls = _scripted_http_requester(
@@ -1103,7 +1160,7 @@ def test_create_task_injects_input_block_with_repo_and_payload(
     }
 
 
-def test_create_task_injects_block_when_description_is_none(
+def test_create_task_preserves_estimate_and_selection_metadata_in_hidden_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
@@ -1114,8 +1171,77 @@ def test_create_task_injects_block_when_description_is_none(
     tracker = LinearTracker(config, http_requester=fake)
 
     tracker.create_task(
-        _create_payload(description=None, repo_url="https://example.test/repo")
+        _create_payload(
+            description="Body text",
+            repo_url="https://example.test/repo",
+            metadata={
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
+                "linear_team_id": "team-override",
+            },
+        )
     )
+
+    input_vars = calls[0]["variables"]["input"]
+    assert input_vars["teamId"] == "team-override"
+    cleaned, parsed = _extract_input_block(input_vars["description"])
+    assert cleaned == "Body text"
+    assert parsed == {
+        "repo_url": "https://example.test/repo",
+        "estimate": {"story_points": 2, "can_take_in_work": True},
+        "selection": {"taken_in_work": False},
+    }
+
+
+def test_create_subtask_preserves_estimate_and_selection_metadata_in_hidden_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body(issue_id="SUB-EST")])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_subtask(
+        TrackerSubtaskCreatePayload(
+            parent_external_id="ISS-PARENT",
+            context=TaskContext(title="Selected subtask", description="Body"),
+            status=TaskStatus.NEW,
+            metadata={
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {
+                    "taken_in_work": False,
+                    "selected_from_parent_external_id": "ISS-PARENT",
+                },
+            },
+        )
+    )
+
+    input_vars = calls[0]["variables"]["input"]
+    assert input_vars["parentId"] == "ISS-PARENT"
+    cleaned, parsed = _extract_input_block(input_vars["description"])
+    assert cleaned == "Body"
+    assert parsed == {
+        "estimate": {"story_points": 2, "can_take_in_work": True},
+        "selection": {
+            "taken_in_work": False,
+            "selected_from_parent_external_id": "ISS-PARENT",
+        },
+    }
+
+
+def test_create_task_injects_block_when_description_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
+    )
+    fake, calls = _scripted_http_requester([_issue_create_response_body()])
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.create_task(_create_payload(description=None, repo_url="https://example.test/repo"))
 
     sent_description = calls[0]["variables"]["input"]["description"]
     cleaned, parsed = _extract_input_block(sent_description)
@@ -1202,9 +1328,7 @@ def test_create_task_does_not_warn_below_threshold(
     fake, _ = _scripted_http_requester([_issue_create_response_body()])
     tracker = LinearTracker(config, http_requester=fake)
 
-    tracker.create_task(
-        _create_payload(description="short", repo_url="https://example.test/repo")
-    )
+    tracker.create_task(_create_payload(description="short", repo_url="https://example.test/repo"))
 
     warnings = [
         r.msg
@@ -1260,9 +1384,7 @@ def test_create_task_raises_when_issue_payload_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
-    body = json.dumps(
-        {"data": {"issueCreate": {"success": True, "issue": None}}}
-    ).encode("utf-8")
+    body = json.dumps({"data": {"issueCreate": {"success": True, "issue": None}}}).encode("utf-8")
     fake, _ = _scripted_http_requester([body])
     config = _make_config(
         explicit_status_to_state_id={TaskStatus.NEW: "state-new"},
@@ -1275,9 +1397,7 @@ def test_create_task_raises_when_issue_payload_missing(
     assert "issue" in str(exc_info.value)
 
 
-def _comment_create_response_body(
-    *, comment_id: str = "cmt-1", success: bool = True
-) -> bytes:
+def _comment_create_response_body(*, comment_id: str = "cmt-1", success: bool = True) -> bytes:
     return json.dumps(
         {
             "data": {
@@ -1319,9 +1439,7 @@ def _attachment_create_response_body(
             "data": {
                 "attachmentCreate": {
                     "success": success,
-                    "attachment": (
-                        {"id": attachment_id, "url": url} if success else None
-                    ),
+                    "attachment": ({"id": attachment_id, "url": url} if success else None),
                 }
             }
         }
@@ -1332,15 +1450,11 @@ def test_add_comment_sends_issue_id_and_body_and_returns_comment_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
-    fake, calls = _scripted_http_requester(
-        [_comment_create_response_body(comment_id="cmt-42")]
-    )
+    fake, calls = _scripted_http_requester([_comment_create_response_body(comment_id="cmt-42")])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
     ref = tracker.add_comment(
-        TrackerCommentCreatePayload(
-            external_task_id="ISS-7", body="Hello from worker"
-        )
+        TrackerCommentCreatePayload(external_task_id="ISS-7", body="Hello from worker")
     )
 
     assert ref.comment_id == "cmt-42"
@@ -1353,15 +1467,11 @@ def test_add_comment_raises_when_response_success_is_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
-    fake, _ = _scripted_http_requester(
-        [_comment_create_response_body(success=False)]
-    )
+    fake, _ = _scripted_http_requester([_comment_create_response_body(success=False)])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
     with pytest.raises(RuntimeError) as exc_info:
-        tracker.add_comment(
-            TrackerCommentCreatePayload(external_task_id="ISS-1", body="x")
-        )
+        tracker.add_comment(TrackerCommentCreatePayload(external_task_id="ISS-1", body="x"))
 
     assert "success=false" in str(exc_info.value)
 
@@ -1370,16 +1480,14 @@ def test_add_comment_raises_when_comment_payload_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
-    body = json.dumps(
-        {"data": {"commentCreate": {"success": True, "comment": None}}}
-    ).encode("utf-8")
+    body = json.dumps({"data": {"commentCreate": {"success": True, "comment": None}}}).encode(
+        "utf-8"
+    )
     fake, _ = _scripted_http_requester([body])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
     with pytest.raises(RuntimeError) as exc_info:
-        tracker.add_comment(
-            TrackerCommentCreatePayload(external_task_id="ISS-1", body="x")
-        )
+        tracker.add_comment(TrackerCommentCreatePayload(external_task_id="ISS-1", body="x"))
 
     assert "comment" in str(exc_info.value)
 
@@ -1388,16 +1496,14 @@ def test_add_comment_raises_when_comment_id_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
-    body = json.dumps(
-        {"data": {"commentCreate": {"success": True, "comment": {"id": ""}}}}
-    ).encode("utf-8")
+    body = json.dumps({"data": {"commentCreate": {"success": True, "comment": {"id": ""}}}}).encode(
+        "utf-8"
+    )
     fake, _ = _scripted_http_requester([body])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
     with pytest.raises(RuntimeError) as exc_info:
-        tracker.add_comment(
-            TrackerCommentCreatePayload(external_task_id="ISS-1", body="x")
-        )
+        tracker.add_comment(TrackerCommentCreatePayload(external_task_id="ISS-1", body="x"))
 
     assert "comment id" in str(exc_info.value)
 
@@ -1415,9 +1521,7 @@ def test_update_status_uses_explicit_state_id_without_calling_team_states(
     tracker = LinearTracker(config, http_requester=fake)
 
     ref = tracker.update_status(
-        TrackerStatusUpdatePayload(
-            external_task_id="ISS-9", status=TaskStatus.DONE
-        )
+        TrackerStatusUpdatePayload(external_task_id="ISS-9", status=TaskStatus.DONE)
     )
 
     assert ref.external_id == "ISS-9"
@@ -1434,10 +1538,8 @@ def test_update_status_falls_back_to_team_states_when_no_explicit_id(
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
     states_body = _states_response_body(
         [
-            {"id": "started-late", "name": "WIP", "type": "started",
-             "position": 200.0},
-            {"id": "started-early", "name": "Doing", "type": "started",
-             "position": 50.0},
+            {"id": "started-late", "name": "WIP", "type": "started", "position": 200.0},
+            {"id": "started-early", "name": "Doing", "type": "started", "position": 50.0},
         ]
     )
     fake, calls = _scripted_http_requester(
@@ -1446,9 +1548,7 @@ def test_update_status_falls_back_to_team_states_when_no_explicit_id(
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
     tracker.update_status(
-        TrackerStatusUpdatePayload(
-            external_task_id="ISS-9", status=TaskStatus.PROCESSING
-        )
+        TrackerStatusUpdatePayload(external_task_id="ISS-9", status=TaskStatus.PROCESSING)
     )
 
     assert len(calls) == 2
@@ -1461,8 +1561,7 @@ def test_update_status_propagates_runtime_error_when_status_unmappable(
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
     states_body = _states_response_body(
         [
-            {"id": "started-1", "name": "Doing", "type": "started",
-             "position": 10.0},
+            {"id": "started-1", "name": "Doing", "type": "started", "position": 10.0},
         ]
     )
     fake, _ = _scripted_http_requester([states_body])
@@ -1470,9 +1569,7 @@ def test_update_status_propagates_runtime_error_when_status_unmappable(
 
     with pytest.raises(RuntimeError) as exc_info:
         tracker.update_status(
-            TrackerStatusUpdatePayload(
-                external_task_id="ISS-1", status=TaskStatus.DONE
-            )
+            TrackerStatusUpdatePayload(external_task_id="ISS-1", status=TaskStatus.DONE)
         )
 
     assert "LINEAR_STATE_ID_DONE" in str(exc_info.value)
@@ -1485,16 +1582,12 @@ def test_update_status_raises_when_response_success_is_false(
     config = _make_config(
         explicit_status_to_state_id={TaskStatus.DONE: "state-done"},
     )
-    fake, _ = _scripted_http_requester(
-        [_issue_update_response_body(success=False)]
-    )
+    fake, _ = _scripted_http_requester([_issue_update_response_body(success=False)])
     tracker = LinearTracker(config, http_requester=fake)
 
     with pytest.raises(RuntimeError) as exc_info:
         tracker.update_status(
-            TrackerStatusUpdatePayload(
-                external_task_id="ISS-1", status=TaskStatus.DONE
-            )
+            TrackerStatusUpdatePayload(external_task_id="ISS-1", status=TaskStatus.DONE)
         )
 
     assert "success=false" in str(exc_info.value)
@@ -1511,9 +1604,7 @@ def test_update_status_returns_reference_without_url_when_response_url_missing(
     tracker = LinearTracker(config, http_requester=fake)
 
     ref = tracker.update_status(
-        TrackerStatusUpdatePayload(
-            external_task_id="ISS-1", status=TaskStatus.DONE
-        )
+        TrackerStatusUpdatePayload(external_task_id="ISS-1", status=TaskStatus.DONE)
     )
 
     assert ref.external_id == "ISS-1"
@@ -1624,9 +1715,7 @@ def test_attach_links_raises_with_url_when_attachment_create_fails(
     fake, _ = _scripted_http_requester(
         [
             _attachment_create_response_body(url="https://example.test/ok"),
-            _attachment_create_response_body(
-                url="https://example.test/bad", success=False
-            ),
+            _attachment_create_response_body(url="https://example.test/bad", success=False),
         ]
     )
     tracker = LinearTracker(_make_config(), http_requester=fake)
@@ -1651,7 +1740,11 @@ def _make_http_error(
     *, code: int, body: bytes = b"", url: str = "https://api.linear.app/graphql"
 ) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        url, code, "rate-limited" if code == 429 else "err", {}, io.BytesIO(body)  # type: ignore[arg-type]
+        url,
+        code,
+        "rate-limited" if code == 429 else "err",
+        {},
+        io.BytesIO(body),  # type: ignore[arg-type]
     )
 
 
@@ -1793,9 +1886,7 @@ def test_graphql_client_rate_limit_message_contains_endpoint_and_no_token(
 ) -> None:
     secret = "lin_api_z9y8x7w6v5u4t3s2"
     monkeypatch.setenv("LINEAR_API_KEY_TEST", secret)
-    body = json.dumps(
-        {"errors": [{"extensions": {"code": "RATELIMITED"}}]}
-    ).encode("utf-8")
+    body = json.dumps({"errors": [{"extensions": {"code": "RATELIMITED"}}]}).encode("utf-8")
     endpoint = "https://api.linear.app/graphql"
     client = _GraphqlClient(
         api_url=endpoint,
@@ -1819,16 +1910,12 @@ def test_fetch_tasks_propagates_linear_rate_limit_error(
     # a RATELIMITED extension code. fetch_tasks must surface
     # LinearRateLimitError so tracker_intake can log it and re-raise.
     monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
-    body = json.dumps(
-        {"errors": [{"extensions": {"code": "RATELIMITED"}}]}
-    ).encode("utf-8")
+    body = json.dumps({"errors": [{"extensions": {"code": "RATELIMITED"}}]}).encode("utf-8")
     fake, _ = _scripted_http_requester([body])
     tracker = LinearTracker(_make_config(), http_requester=fake)
 
     with pytest.raises(LinearRateLimitError):
-        tracker.fetch_tasks(
-            TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10)
-        )
+        tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10))
 
 
 def test_update_status_propagates_linear_rate_limit_error_on_http_429(
@@ -1849,7 +1936,5 @@ def test_update_status_propagates_linear_rate_limit_error_on_http_429(
 
     with pytest.raises(LinearRateLimitError):
         tracker.update_status(
-            TrackerStatusUpdatePayload(
-                external_task_id="ISS-1", status=TaskStatus.DONE
-            )
+            TrackerStatusUpdatePayload(external_task_id="ISS-1", status=TaskStatus.DONE)
         )

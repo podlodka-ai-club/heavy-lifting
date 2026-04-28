@@ -36,7 +36,7 @@ The target system is a reliable orchestration backend that:
 
 The tracker submits a new task to the orchestrator through the intake API. The orchestrator validates the payload, records the incoming request, and creates the initial internal task state needed for downstream processing.
 
-For the current mock-only tracker workflow, the orchestrator may also query previously estimated tracker tasks, select one eligible small parent task through explicit metadata, and create a fresh tracker subtask that re-enters the same intake path as a normal executable request.
+For tracker flows that persist estimate-selection metadata, the orchestrator may also query previously estimated tracker tasks, select one eligible small parent task through explicit metadata, and create a fresh tracker subtask that re-enters the same intake path as a normal executable request.
 
 ### Triage
 
@@ -102,7 +102,7 @@ The MVP intentionally stays narrow:
 - machine-readable OpenAPI schema through `GET /openapi.json`;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
-- mock-only selection of previously estimated small tracker tasks into one executable subtask, with duplicate parent selection blocked through tracker metadata.
+- selection of previously estimated small tracker tasks into one executable subtask through the tracker boundary contract, with duplicate parent selection blocked through tracker metadata.
 
 ## Non-Goals
 

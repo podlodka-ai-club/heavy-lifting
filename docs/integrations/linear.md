@@ -36,22 +36,22 @@ code changes in the workers.
 The adapter is configured entirely through environment variables exposed
 by `src/backend/settings.py`. The complete list:
 
-| Variable | Default | Required | Purpose |
-| --- | --- | --- | --- |
-| `LINEAR_API_URL` | `https://api.linear.app/graphql` | no | GraphQL endpoint. Override only for self-hosted proxies. |
-| `LINEAR_TOKEN_ENV_VAR` | `LINEAR_API_KEY` | no | **Name** of the env var that holds the personal API key. The value is read lazily at every GraphQL call, never at startup. Override only if your secrets store exposes the key under a different name. The override must be a non-empty string — explicitly setting it to an empty string makes `_build_linear_tracker` raise `ValueError("LINEAR_TOKEN_ENV_VAR must be set when tracker_adapter='linear'")` at runtime container build. (`_build_github_scm` has no equivalent check; `GITHUB_TOKEN_ENV_VAR` falls through to its default in the same situation.) |
-| `LINEAR_API_KEY` (or whatever `LINEAR_TOKEN_ENV_VAR` points to) | - | yes (at runtime) | The personal API key itself, format `lin_api_…`. Generated in Linear → Settings → Account → Security & access → API keys. |
-| `LINEAR_TEAM_ID` | - | yes | UUID of the team the adapter writes to. Validated when the runtime container is built. |
-| `LINEAR_REQUEST_TIMEOUT_SECONDS` | `30` | no | Per-request HTTP timeout. |
-| `LINEAR_FETCH_LABEL_ID` | - | no | Extra label filter applied to `fetch_tasks`. AND-ed with `LINEAR_TASK_TYPE_LABEL_MAPPING[task_type]` when both are set: an issue must carry **both** labels to be ingested. See "Pagination And Sorting" for the resulting filter shape. |
-| `LINEAR_STATE_ID_NEW` | - | recommended | Workflow state UUID written when creating an issue with `TaskStatus.NEW`. If empty, the adapter falls back to the lowest-position state of type `unstarted` (or `backlog`). |
-| `LINEAR_STATE_ID_PROCESSING` | - | recommended | Same, for `TaskStatus.PROCESSING` (fallback type: `started`). |
-| `LINEAR_STATE_ID_DONE` | - | recommended | Same, for `TaskStatus.DONE` (fallback type: `completed`). |
-| `LINEAR_STATE_ID_FAILED` | - | recommended | Same, for `TaskStatus.FAILED` (fallback type: `canceled`). |
-| `LINEAR_FETCH_STATE_TYPES` | `triage,backlog,unstarted` | no | CSV of `state.type` values that count as "new" during polling. |
-| `LINEAR_TASK_TYPE_LABEL_MAPPING` | `{}` | no | JSON object mapping `TaskType` values (`fetch`, `execute`, `deliver`, `pr_feedback`) to label UUIDs. Unknown keys are warned and skipped. |
-| `LINEAR_MAX_PAGES` | `4` | no | Hard cap on the number of pagination round-trips per `fetch_tasks` call. |
-| `LINEAR_DESCRIPTION_WARN_THRESHOLD` | `50000` | no | Soft length limit for issue `description`. Exceeding it logs a warning but does not fail the request. |
+| Variable                                                        | Default                          | Required         | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------- | -------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `LINEAR_API_URL`                                                | `https://api.linear.app/graphql` | no               | GraphQL endpoint. Override only for self-hosted proxies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `LINEAR_TOKEN_ENV_VAR`                                          | `LINEAR_API_KEY`                 | no               | **Name** of the env var that holds the personal API key. The value is read lazily at every GraphQL call, never at startup. Override only if your secrets store exposes the key under a different name. The override must be a non-empty string — explicitly setting it to an empty string makes `_build_linear_tracker` raise `ValueError("LINEAR_TOKEN_ENV_VAR must be set when tracker_adapter='linear'")` at runtime container build. (`_build_github_scm` has no equivalent check; `GITHUB_TOKEN_ENV_VAR` falls through to its default in the same situation.) |
+| `LINEAR_API_KEY` (or whatever `LINEAR_TOKEN_ENV_VAR` points to) | -                                | yes (at runtime) | The personal API key itself, format `lin_api_…`. Generated in Linear → Settings → Account → Security & access → API keys.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `LINEAR_TEAM_ID`                                                | -                                | yes              | UUID of the team the adapter writes to. Validated when the runtime container is built.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `LINEAR_REQUEST_TIMEOUT_SECONDS`                                | `30`                             | no               | Per-request HTTP timeout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `LINEAR_FETCH_LABEL_ID`                                         | -                                | no               | Extra label filter applied to `fetch_tasks`. AND-ed with `LINEAR_TASK_TYPE_LABEL_MAPPING[task_type]` when both are set: an issue must carry **both** labels to be ingested. See "Pagination And Sorting" for the resulting filter shape.                                                                                                                                                                                                                                                                                                                           |
+| `LINEAR_STATE_ID_NEW`                                           | -                                | recommended      | Workflow state UUID written when creating an issue with `TaskStatus.NEW`. If empty, the adapter falls back to the lowest-position state of type `unstarted` (or `backlog`).                                                                                                                                                                                                                                                                                                                                                                                        |
+| `LINEAR_STATE_ID_PROCESSING`                                    | -                                | recommended      | Same, for `TaskStatus.PROCESSING` (fallback type: `started`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `LINEAR_STATE_ID_DONE`                                          | -                                | recommended      | Same, for `TaskStatus.DONE` (fallback type: `completed`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `LINEAR_STATE_ID_FAILED`                                        | -                                | recommended      | Same, for `TaskStatus.FAILED` (fallback type: `canceled`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `LINEAR_FETCH_STATE_TYPES`                                      | `triage,backlog,unstarted`       | no               | CSV of `state.type` values that count as "new" during polling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `LINEAR_TASK_TYPE_LABEL_MAPPING`                                | `{}`                             | no               | JSON object mapping `TaskType` values (`fetch`, `execute`, `deliver`, `pr_feedback`) to label UUIDs. Unknown keys are warned and skipped.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `LINEAR_MAX_PAGES`                                              | `4`                              | no               | Hard cap on the number of pagination round-trips per `fetch_tasks` call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `LINEAR_DESCRIPTION_WARN_THRESHOLD`                             | `50000`                          | no               | Soft length limit for issue `description`. Exceeding it logs a warning but does not fail the request.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Why explicit `state_id` rather than `state.type`: a single Linear
 workflow may contain multiple states of the same type (for example two
@@ -102,12 +102,12 @@ curl -sS \
 For each `TaskStatus`, pick the `id` of the state you want the
 orchestrator to write:
 
-| `TaskStatus` | Pick a state with `type` ∈ |
-| --- | --- |
-| `NEW` | `unstarted` (or `backlog` if the team has no `unstarted`) |
-| `PROCESSING` | `started` |
-| `DONE` | `completed` |
-| `FAILED` | `canceled` (Linear uses the American spelling, one `l`) |
+| `TaskStatus` | Pick a state with `type` ∈                                |
+| ------------ | --------------------------------------------------------- |
+| `NEW`        | `unstarted` (or `backlog` if the team has no `unstarted`) |
+| `PROCESSING` | `started`                                                 |
+| `DONE`       | `completed`                                               |
+| `FAILED`     | `canceled` (Linear uses the American spelling, one `l`)   |
 
 If multiple states share the desired type, prefer the one with the
 lowest `position` — that matches the adapter's fallback rule, so a future
@@ -152,11 +152,11 @@ single typo does not block runtime assembly.
    adapter.
 
 | `TaskStatus` | Fallback `state.type` priority |
-| --- | --- |
-| `NEW` | `unstarted` → `backlog` |
-| `PROCESSING` | `started` |
-| `DONE` | `completed` |
-| `FAILED` | `canceled` |
+| ------------ | ------------------------------ |
+| `NEW`        | `unstarted` → `backlog`        |
+| `PROCESSING` | `started`                      |
+| `DONE`       | `completed`                    |
+| `FAILED`     | `canceled`                     |
 
 If neither an explicit env nor a fallback state is found, the adapter
 raises `RuntimeError` with a hint pointing at the missing env var.
@@ -165,14 +165,14 @@ raises `RuntimeError` with a hint pointing at the missing env var.
 
 `fetch_tasks` maps Linear `state.type` back to `TaskStatus`:
 
-| `state.type` | `TaskStatus` |
-| --- | --- |
-| `triage` | `NEW` (toggle via `LINEAR_FETCH_STATE_TYPES`) |
-| `backlog` | `NEW` |
-| `unstarted` | `NEW` |
-| `started` | `PROCESSING` |
-| `completed` | `DONE` |
-| `canceled` | `FAILED` |
+| `state.type` | `TaskStatus`                                  |
+| ------------ | --------------------------------------------- |
+| `triage`     | `NEW` (toggle via `LINEAR_FETCH_STATE_TYPES`) |
+| `backlog`    | `NEW`                                         |
+| `unstarted`  | `NEW`                                         |
+| `started`    | `PROCESSING`                                  |
+| `completed`  | `DONE`                                        |
+| `canceled`   | `FAILED`                                      |
 
 `triage` is read-only by design: the adapter ingests issues sitting in
 the team's triage queue but never writes them back into a triage state
@@ -183,8 +183,8 @@ into triage, and forcing it would make the worker brittle.
 
 Linear custom fields require the Plus plan, so the adapter carries
 orchestrator-specific metadata (`repo_url`, `repo_ref`, `workspace_key`,
-and `input_payload`) inside the issue `description`, between two HTML
-comment markers:
+`input_payload`, and estimate-selection metadata) inside the issue
+`description`, between two HTML comment markers:
 
 ```
 <!-- heavy-lifting:input -->
@@ -192,6 +192,13 @@ comment markers:
   "repo_url": "https://github.com/org/repo",
   "repo_ref": "main",
   "workspace_key": "org-repo",
+  "estimate": {
+    "story_points": 3,
+    "can_take_in_work": true
+  },
+  "selection": {
+    "taken_in_work": false
+  },
   "input": {
     "instructions": "Сделать что-то полезное",
     "base_branch": "main",
@@ -207,14 +214,16 @@ Behaviour:
   `json.loads`. `repo_url`, `repo_ref`, `workspace_key` are mapped to the
   identically named `TrackerTask` fields. The `input` object is fed to
   `TaskInputPayload.model_validate(...)` (Pydantic, `extra="forbid"`).
-  Any parse error logs one of `linear_input_block_invalid_json`
+  The `estimate` and `selection` objects, when present, are copied into
+  `TrackerTask.metadata` unchanged. Any parse error logs one of `linear_input_block_invalid_json`
   (malformed JSON), `linear_input_block_not_object` (parsed value is not
   a JSON object), or `linear_input_payload_invalid` (object failed
   `TaskInputPayload` validation), and leaves the corresponding
   `TrackerTask` fields as `None` — the issue is still ingested.
 - **On write (`create_task`, `create_subtask`):** the adapter serialises
-  any of `repo_url`, `repo_ref`, `workspace_key`, `input_payload` that
-  are present back into the same block and appends it to the
+  any of `repo_url`, `repo_ref`, `workspace_key`, `input_payload`,
+  `metadata.estimate`, and `metadata.selection` that are present back
+  into the same block and appends it to the
   user-supplied description so a later poll round-trip can recover them.
 - **Length guard:** if the resulting `description` exceeds
   `LINEAR_DESCRIPTION_WARN_THRESHOLD` characters (default 50 000), the
@@ -261,12 +270,19 @@ raises `ValueError("MockScm requires repo_url")` otherwise.
 ## Per-Task Metadata Overrides
 
 `create_task` and `create_subtask` accept a `TrackerTaskCreatePayload`
-whose `metadata` mapping carries Linear-specific routing hints that
-do **not** travel through the issue `description` service block.
-The adapter currently honours one such hint:
+whose `metadata` mapping carries both tracker-agnostic selection hints
+and Linear-specific routing hints.
 
-| `metadata` key | Effect |
-| --- | --- |
+- `estimate` and `selection` are persisted inside the description service
+  block so later `fetch_tasks` calls can restore them into
+  `TrackerTask.metadata`.
+- `linear_team_id` stays outside that block and is used only as a
+  mutation-time routing override.
+
+The adapter currently honours one Linear-only hint:
+
+| `metadata` key   | Effect                                                                                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `linear_team_id` | Overrides `LINEAR_TEAM_ID` for this single mutation. The value must be a non-empty string UUID; missing or non-string values fall back to the configured team. |
 
 This is intended for multi-team deployments where one Heavy Lifting
@@ -285,6 +301,23 @@ builds.
 `TrackerTask.metadata["linear_team_id"]` for every ingested issue,
 so downstream stages can keep the team association without
 re-querying the GraphQL API.
+
+## Estimated-Task Selection Filter
+
+`fetch_tasks` honors `TrackerFetchTasksQuery.estimated_selection` after
+each issue is mapped into a `TrackerTask`, using only structured
+metadata from `TrackerTask.metadata`.
+
+Supported predicates:
+
+- `max_story_points` matches `metadata.estimate.story_points <= value`
+- `can_take_in_work` matches `metadata.estimate.can_take_in_work`
+- `taken_in_work` matches `metadata.selection.taken_in_work`
+- `only_parent_tasks` excludes issues that already have `parent.id`
+
+If `story_points` is missing or not an integer while
+`max_story_points` is requested, the issue is treated as ineligible
+rather than inferred from free text.
 
 ## Pagination And Sorting
 

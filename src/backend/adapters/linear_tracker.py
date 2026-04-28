@@ -26,11 +26,13 @@ from backend.schemas import (
     TrackerTaskReference,
 )
 from backend.task_constants import TaskStatus, TaskType
+from backend.tracker_metadata import matches_estimated_selection
 
 HttpRequester = Callable[[urllib.request.Request, float], Any]
 
 INPUT_BLOCK_OPEN = "<!-- heavy-lifting:input -->"
 INPUT_BLOCK_CLOSE = "<!-- /heavy-lifting:input -->"
+_HIDDEN_METADATA_KEYS = frozenset({"estimate", "selection"})
 
 _logger = get_logger(component="linear_tracker")
 
@@ -182,7 +184,7 @@ def _extract_input_block(description: str | None) -> tuple[str, dict[str, Any] |
 
     body = description[close_search_from:close_idx].strip()
     before = description[:open_idx].rstrip()
-    after = description[close_idx + len(INPUT_BLOCK_CLOSE):].lstrip()
+    after = description[close_idx + len(INPUT_BLOCK_CLOSE) :].lstrip()
     cleaned = (before + ("\n" if before and after else "") + after).strip()
 
     try:
@@ -218,6 +220,33 @@ def _inject_input_block(description: str | None, payload_dict: Mapping[str, Any]
     return description.rstrip() + "\n\n" + block
 
 
+def _copy_json_mapping(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _extract_hidden_block_metadata(
+    payload_dict: Mapping[str, Any] | None,
+) -> tuple[str | None, str | None, str | None, dict[str, Any] | None, dict[str, Any]]:
+    if not payload_dict:
+        return None, None, None, None, {}
+
+    def _opt_str(key: str) -> str | None:
+        value = payload_dict.get(key)
+        return value if isinstance(value, str) and value else None
+
+    return (
+        _opt_str("repo_url"),
+        _opt_str("repo_ref"),
+        _opt_str("workspace_key"),
+        _copy_json_mapping(payload_dict.get("input")),
+        {
+            key: value
+            for key, value in payload_dict.items()
+            if key in _HIDDEN_METADATA_KEYS and isinstance(value, dict)
+        },
+    )
+
+
 class _GraphqlClient:
     def __init__(
         self,
@@ -235,9 +264,7 @@ class _GraphqlClient:
     def execute(self, query: str, variables: Mapping[str, Any]) -> dict[str, Any]:
         token = os.getenv(self._token_env_var)
         if not token:
-            raise RuntimeError(
-                f"LINEAR token env var {self._token_env_var} is empty"
-            )
+            raise RuntimeError(f"LINEAR token env var {self._token_env_var} is empty")
 
         body = json.dumps({"query": query, "variables": dict(variables)}).encode("utf-8")
         request = urllib.request.Request(
@@ -284,11 +311,7 @@ class _GraphqlClient:
         except (json.JSONDecodeError, UnicodeDecodeError):
             payload = None
 
-        errors = (
-            payload.get("errors")
-            if isinstance(payload, dict)
-            else None
-        )
+        errors = payload.get("errors") if isinstance(payload, dict) else None
 
         if isinstance(errors, list) and self._has_ratelimited(errors):
             raise LinearRateLimitError(
@@ -296,33 +319,24 @@ class _GraphqlClient:
             )
 
         if status == 429:
-            raise LinearRateLimitError(
-                f"Linear GraphQL rate-limited (HTTP 429) at {self._api_url}"
-            )
+            raise LinearRateLimitError(f"Linear GraphQL rate-limited (HTTP 429) at {self._api_url}")
 
         if status >= 400:
             raise RuntimeError(f"Linear GraphQL HTTP {status} at {self._api_url}")
 
         if isinstance(errors, list) and errors:
             raise RuntimeError(
-                f"Linear GraphQL errors at {self._api_url}: "
-                f"{self._summarize_errors(errors)}"
+                f"Linear GraphQL errors at {self._api_url}: {self._summarize_errors(errors)}"
             )
 
         if payload is None:
-            raise RuntimeError(
-                f"Linear GraphQL invalid JSON response at {self._api_url}"
-            )
+            raise RuntimeError(f"Linear GraphQL invalid JSON response at {self._api_url}")
 
         data = payload.get("data") if isinstance(payload, dict) else None
         if data is None:
-            raise RuntimeError(
-                f"Linear GraphQL response missing data at {self._api_url}"
-            )
+            raise RuntimeError(f"Linear GraphQL response missing data at {self._api_url}")
         if not isinstance(data, dict):
-            raise RuntimeError(
-                f"Linear GraphQL response data is not an object at {self._api_url}"
-            )
+            raise RuntimeError(f"Linear GraphQL response data is not an object at {self._api_url}")
         return data
 
     @staticmethod
@@ -371,34 +385,24 @@ class LinearTracker:
         self._workflow_states_by_type: dict[str, list[_WorkflowState]] | None = None
 
     def __repr__(self) -> str:
-        return (
-            f"LinearTracker(api_url={self._config.api_url!r}, "
-            f"team_id={self._config.team_id!r})"
-        )
+        return f"LinearTracker(api_url={self._config.api_url!r}, team_id={self._config.team_id!r})"
 
     def _resolve_workflow_states(self) -> dict[str, list[_WorkflowState]]:
         if self._workflow_states_by_type is not None:
             return self._workflow_states_by_type
 
-        data = self._client.execute(
-            _WORKFLOW_STATES_QUERY, {"id": self._config.team_id}
-        )
+        data = self._client.execute(_WORKFLOW_STATES_QUERY, {"id": self._config.team_id})
         team = data.get("team")
         if not isinstance(team, dict):
             raise RuntimeError(
-                f"Linear team {self._config.team_id!r} not found "
-                f"or response missing 'team'"
+                f"Linear team {self._config.team_id!r} not found or response missing 'team'"
             )
         states_block = team.get("states")
         if not isinstance(states_block, dict):
-            raise RuntimeError(
-                f"Linear team {self._config.team_id!r} response missing 'states'"
-            )
+            raise RuntimeError(f"Linear team {self._config.team_id!r} response missing 'states'")
         nodes = states_block.get("nodes")
         if not isinstance(nodes, list):
-            raise RuntimeError(
-                f"Linear team {self._config.team_id!r} states.nodes is not a list"
-            )
+            raise RuntimeError(f"Linear team {self._config.team_id!r} states.nodes is not a list")
 
         by_type: dict[str, list[_WorkflowState]] = {}
         for raw in nodes:
@@ -414,25 +418,15 @@ class LinearTracker:
     @staticmethod
     def _parse_workflow_state(raw: Any) -> _WorkflowState:
         if not isinstance(raw, dict):
-            raise RuntimeError(
-                f"Linear workflow state entry is not an object: {raw!r}"
-            )
+            raise RuntimeError(f"Linear workflow state entry is not an object: {raw!r}")
         id_ = raw.get("id")
         name = raw.get("name")
         type_ = raw.get("type")
         position = raw.get("position")
-        if (
-            not isinstance(id_, str)
-            or not isinstance(name, str)
-            or not isinstance(type_, str)
-        ):
-            raise RuntimeError(
-                f"Linear workflow state entry missing id/name/type: {raw!r}"
-            )
-        if not isinstance(position, (int, float)) or isinstance(position, bool):
-            raise RuntimeError(
-                f"Linear workflow state position is not numeric: {raw!r}"
-            )
+        if not isinstance(id_, str) or not isinstance(name, str) or not isinstance(type_, str):
+            raise RuntimeError(f"Linear workflow state entry missing id/name/type: {raw!r}")
+        if not isinstance(position, int | float) or isinstance(position, bool):
+            raise RuntimeError(f"Linear workflow state position is not numeric: {raw!r}")
         return _WorkflowState(id=id_, name=name, type=type_, position=float(position))
 
     def _status_to_state_id(self, status: TaskStatus) -> str:
@@ -472,11 +466,7 @@ class LinearTracker:
         pages_done = 0
         has_next = True
 
-        while (
-            len(collected) < query.limit
-            and has_next
-            and pages_done < self._config.max_pages
-        ):
+        while len(collected) < query.limit and has_next and pages_done < self._config.max_pages:
             remaining = query.limit - len(collected)
             first = min(remaining, _LINEAR_PAGE_LIMIT)
             variables: dict[str, Any] = {
@@ -488,9 +478,7 @@ class LinearTracker:
             data = self._client.execute(_FETCH_ISSUES_QUERY, variables)
             issues_block = data.get("issues")
             if not isinstance(issues_block, dict):
-                raise RuntimeError(
-                    "Linear issues response missing 'issues' object"
-                )
+                raise RuntimeError("Linear issues response missing 'issues' object")
             nodes = issues_block.get("nodes")
             if not isinstance(nodes, list):
                 raise RuntimeError("Linear issues.nodes is not a list")
@@ -500,6 +488,11 @@ class LinearTracker:
                     continue
                 tracker_task = self._to_tracker_task(raw_issue)
                 if tracker_task is None:
+                    continue
+                if not matches_estimated_selection(
+                    task=tracker_task,
+                    selection=query.estimated_selection,
+                ):
                     continue
                 collected.append(tracker_task)
                 if len(collected) >= query.limit:
@@ -518,11 +511,7 @@ class LinearTracker:
             if after is None:
                 break
 
-        if (
-            has_next
-            and len(collected) < query.limit
-            and pages_done >= self._config.max_pages
-        ):
+        if has_next and len(collected) < query.limit and pages_done >= self._config.max_pages:
             _logger.warning(
                 "linear_fetch_max_pages_reached",
                 pages_done=pages_done,
@@ -533,9 +522,7 @@ class LinearTracker:
 
         return collected
 
-    def _collect_fetch_state_types(
-        self, statuses: Sequence[TaskStatus]
-    ) -> list[str]:
+    def _collect_fetch_state_types(self, statuses: Sequence[TaskStatus]) -> list[str]:
         desired = set(statuses)
         candidates = [
             state_type
@@ -598,22 +585,22 @@ class LinearTracker:
         title = title_raw if isinstance(title_raw, str) and title_raw else external_id
 
         description_raw = issue.get("description")
-        description: str | None = (
-            description_raw if isinstance(description_raw, str) else None
-        )
+        description: str | None = description_raw if isinstance(description_raw, str) else None
         cleaned_description_raw, payload_dict = _extract_input_block(description)
         cleaned_description: str | None = cleaned_description_raw or None
 
         references = self._extract_references(issue.get("attachments"))
         task_type = self._extract_task_type(issue.get("labels"))
-        repo_url, repo_ref, workspace_key, input_payload = (
-            self._extract_input_payload(payload_dict, external_id)
+        repo_url, repo_ref, workspace_key, input_dict, hidden_metadata = (
+            _extract_hidden_block_metadata(payload_dict)
         )
+        input_payload = self._extract_input_payload(input_dict, external_id)
 
         metadata: dict[str, Any] = {"linear_team_id": self._config.team_id}
         issue_url = issue.get("url")
         if isinstance(issue_url, str) and issue_url:
             metadata["linear_issue_url"] = issue_url
+        metadata.update(hidden_metadata)
 
         return TrackerTask(
             external_id=external_id,
@@ -669,20 +656,8 @@ class LinearTracker:
 
     @staticmethod
     def _extract_input_payload(
-        payload_dict: dict[str, Any] | None, issue_id: str
-    ) -> tuple[str | None, str | None, str | None, TaskInputPayload | None]:
-        if not payload_dict:
-            return None, None, None, None
-
-        def _opt_str(key: str) -> str | None:
-            value = payload_dict.get(key)
-            return value if isinstance(value, str) and value else None
-
-        repo_url = _opt_str("repo_url")
-        repo_ref = _opt_str("repo_ref")
-        workspace_key = _opt_str("workspace_key")
-
-        input_dict = payload_dict.get("input")
+        input_dict: dict[str, Any] | None, issue_id: str
+    ) -> TaskInputPayload | None:
         input_payload: TaskInputPayload | None = None
         if isinstance(input_dict, dict):
             try:
@@ -695,7 +670,7 @@ class LinearTracker:
                 )
                 input_payload = None
 
-        return repo_url, repo_ref, workspace_key, input_payload
+        return input_payload
 
     def create_task(self, payload: TrackerTaskCreatePayload) -> TrackerTaskReference:
         variables = self._build_create_variables(payload, parent_external_id=None)
@@ -776,14 +751,16 @@ class LinearTracker:
         if payload.workspace_key:
             block["workspace_key"] = payload.workspace_key
         if payload.input_payload is not None:
-            input_dump = payload.input_payload.model_dump(
-                mode="json", exclude_none=True
-            )
+            input_dump = payload.input_payload.model_dump(mode="json", exclude_none=True)
             input_dump = {
                 k: v for k, v in input_dump.items() if not (isinstance(v, dict) and not v)
             }
             if input_dump:
                 block["input"] = input_dump
+        for key in _HIDDEN_METADATA_KEYS:
+            value = payload.metadata.get(key)
+            if isinstance(value, dict):
+                block[key] = dict(value)
         return block
 
     def _inject_input_block_with_warning(
@@ -832,9 +809,7 @@ class LinearTracker:
         )
         comment_id = comment.get("id")
         if not isinstance(comment_id, str) or not comment_id:
-            raise RuntimeError(
-                "Linear commentCreate response missing comment id"
-            )
+            raise RuntimeError("Linear commentCreate response missing comment id")
         return TrackerCommentReference(comment_id=comment_id)
 
     def update_status(self, payload: TrackerStatusUpdatePayload) -> TrackerTaskReference:
@@ -844,14 +819,10 @@ class LinearTracker:
             "input": {"stateId": state_id},
         }
         data = self._client.execute(_ISSUE_UPDATE_MUTATION, variables)
-        issue = self._require_success_child(
-            data, mutation_key="issueUpdate", child_key="issue"
-        )
+        issue = self._require_success_child(data, mutation_key="issueUpdate", child_key="issue")
         url_raw = issue.get("url")
         url = url_raw if isinstance(url_raw, str) and url_raw else None
-        return TrackerTaskReference(
-            external_id=payload.external_task_id, url=url
-        )
+        return TrackerTaskReference(external_id=payload.external_task_id, url=url)
 
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference:
         for link in payload.links:
@@ -879,18 +850,12 @@ class LinearTracker:
     ) -> dict[str, Any]:
         result = data.get(mutation_key)
         if not isinstance(result, dict):
-            raise RuntimeError(
-                f"Linear {mutation_key} response missing '{mutation_key}' object"
-            )
+            raise RuntimeError(f"Linear {mutation_key} response missing '{mutation_key}' object")
         if not result.get("success"):
-            raise RuntimeError(
-                f"Linear {mutation_key} returned success=false"
-            )
+            raise RuntimeError(f"Linear {mutation_key} returned success=false")
         child = result.get(child_key)
         if not isinstance(child, dict):
-            raise RuntimeError(
-                f"Linear {mutation_key} response missing '{child_key}' object"
-            )
+            raise RuntimeError(f"Linear {mutation_key} response missing '{child_key}' object")
         return child
 
 
