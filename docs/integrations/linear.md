@@ -22,6 +22,8 @@ by:
   `add_comment`, `update_status`, and `attach_links` to deliver results.
 - The orchestrator and pre-processing steps may call `create_task` and
   `create_subtask` when they need to write a new tracker record.
+- The estimated-task selection flow may call `claim_task_selection` on an
+  existing parent issue after a child subtask is created.
 
 The factory `_build_linear_tracker` in `src/backend/composition.py` is
 registered under the key `"linear"` and is selected when
@@ -225,6 +227,11 @@ Behaviour:
   `metadata.estimate`, and `metadata.selection` that are present back
   into the same block and appends it to the
   user-supplied description so a later poll round-trip can recover them.
+- **On parent claim (`claim_task_selection`):** the adapter first reads
+  the current issue description, parses the existing hidden block, sets
+  `selection.taken_in_work = true`, and writes the description back
+  through `issueUpdate`. User-visible description text is preserved, and
+  other hidden keys in the block remain unchanged.
 - **Length guard:** if the resulting `description` exceeds
   `LINEAR_DESCRIPTION_WARN_THRESHOLD` characters (default 50 000), the
   adapter logs `linear_description_warn_threshold_exceeded` but still
@@ -387,6 +394,9 @@ retries.
 - `fetch_tasks` is idempotent by construction. Worker 1 deduplicates via
   `find_fetch_task_by_tracker_task` keyed on
   `(tracker_name, external_task_id)`.
+- `claim_task_selection` is logically idempotent: repeating it keeps the
+  same hidden-block value `selection.taken_in_work = true` on the parent
+  issue.
 - `attach_links` relies on Linear's idempotency by `(issueId, url)` — a
   repeat `attachmentCreate` for the same URL updates the existing
   attachment instead of producing a duplicate.

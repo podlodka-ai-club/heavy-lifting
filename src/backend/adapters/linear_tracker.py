@@ -24,6 +24,7 @@ from backend.schemas import (
     TrackerTask,
     TrackerTaskCreatePayload,
     TrackerTaskReference,
+    TrackerTaskSelectionClaimPayload,
 )
 from backend.task_constants import TaskStatus, TaskType
 from backend.tracker_metadata import matches_estimated_selection
@@ -95,6 +96,15 @@ query LinearFetchIssues(
       url
     }
     pageInfo { hasNextPage endCursor }
+  }
+}
+""".strip()
+
+_ISSUE_DESCRIPTION_QUERY = """
+query LinearIssueDescription($id: String!) {
+  issue(id: $id) {
+    id
+    description
   }
 }
 """.strip()
@@ -824,6 +834,29 @@ class LinearTracker:
         url = url_raw if isinstance(url_raw, str) and url_raw else None
         return TrackerTaskReference(external_id=payload.external_task_id, url=url)
 
+    def claim_task_selection(
+        self, payload: TrackerTaskSelectionClaimPayload
+    ) -> TrackerTaskReference:
+        description = self._fetch_issue_description(payload.external_task_id)
+        cleaned_description, payload_dict = _extract_input_block(description)
+        next_payload = dict(payload_dict) if isinstance(payload_dict, dict) else {}
+        selection_value = next_payload.get("selection")
+        selection_metadata = dict(selection_value) if isinstance(selection_value, dict) else {}
+        selection_metadata["taken_in_work"] = True
+        next_payload["selection"] = selection_metadata
+
+        variables = {
+            "id": payload.external_task_id,
+            "input": {
+                "description": _inject_input_block(cleaned_description or None, next_payload),
+            },
+        }
+        data = self._client.execute(_ISSUE_UPDATE_MUTATION, variables)
+        issue = self._require_success_child(data, mutation_key="issueUpdate", child_key="issue")
+        url_raw = issue.get("url")
+        url = url_raw if isinstance(url_raw, str) and url_raw else None
+        return TrackerTaskReference(external_id=payload.external_task_id, url=url)
+
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference:
         for link in payload.links:
             variables = {
@@ -857,6 +890,14 @@ class LinearTracker:
         if not isinstance(child, dict):
             raise RuntimeError(f"Linear {mutation_key} response missing '{child_key}' object")
         return child
+
+    def _fetch_issue_description(self, issue_id: str) -> str | None:
+        data = self._client.execute(_ISSUE_DESCRIPTION_QUERY, {"id": issue_id})
+        issue = data.get("issue")
+        if not isinstance(issue, dict):
+            raise RuntimeError("Linear issue query response missing 'issue' object")
+        description = issue.get("description")
+        return description if isinstance(description, str) else None
 
 
 __all__ = [

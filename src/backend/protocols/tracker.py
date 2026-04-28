@@ -10,6 +10,7 @@ from backend.schemas import (
     TrackerTask,
     TrackerTaskCreatePayload,
     TrackerTaskReference,
+    TrackerTaskSelectionClaimPayload,
 )
 
 
@@ -24,5 +25,9 @@ class TrackerProtocol(Protocol):
     def add_comment(self, payload: TrackerCommentCreatePayload) -> TrackerCommentReference: ...
 
     def update_status(self, payload: TrackerStatusUpdatePayload) -> TrackerTaskReference: ...
+
+    def claim_task_selection(
+        self, payload: TrackerTaskSelectionClaimPayload
+    ) -> TrackerTaskReference: ...
 
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference: ...

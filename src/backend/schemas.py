@@ -155,6 +155,10 @@ class TrackerStatusUpdatePayload(SchemaModel):
     status: TaskStatus
 
 
+class TrackerTaskSelectionClaimPayload(SchemaModel):
+    external_task_id: str
+
+
 class TrackerLinksAttachPayload(SchemaModel):
     external_task_id: str
     links: list[TaskLink] = Field(min_length=1)
@@ -294,6 +298,7 @@ __all__ = [
     "TrackerEstimatedSelectionQuery",
     "TrackerFetchTasksQuery",
     "TrackerLinksAttachPayload",
+    "TrackerTaskSelectionClaimPayload",
     "TrackerStatusUpdatePayload",
     "TrackerSubtaskCreatePayload",
     "TrackerTask",

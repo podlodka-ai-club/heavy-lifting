@@ -9,6 +9,7 @@ from backend.schemas import (
     TrackerSubtaskCreatePayload,
     TrackerTask,
     TrackerTaskReference,
+    TrackerTaskSelectionClaimPayload,
 )
 from backend.task_constants import TaskStatus
 
@@ -62,6 +63,9 @@ class MockTaskSelectionService:
                 workspace_key=selected_task.workspace_key,
                 metadata=_build_selected_subtask_metadata(selected_task),
             )
+        )
+        self.tracker.claim_task_selection(
+            TrackerTaskSelectionClaimPayload(external_task_id=selected_task.external_id)
         )
         return MockTaskSelectionResult(parent_task=selected_task, created_task=created_task)
 

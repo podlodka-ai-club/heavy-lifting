@@ -30,6 +30,7 @@ from backend.schemas import (
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
+    TrackerTaskSelectionClaimPayload,
 )
 from backend.task_constants import TaskStatus, TaskType
 
@@ -1428,6 +1429,23 @@ def _issue_update_response_body(
     ).encode("utf-8")
 
 
+def _issue_description_response_body(
+    *,
+    issue_id: str = "ISS-1",
+    description: str | None = None,
+) -> bytes:
+    return json.dumps(
+        {
+            "data": {
+                "issue": {
+                    "id": issue_id,
+                    "description": description,
+                }
+            }
+        }
+    ).encode("utf-8")
+
+
 def _attachment_create_response_body(
     *,
     attachment_id: str = "att-1",
@@ -1609,6 +1627,72 @@ def test_update_status_returns_reference_without_url_when_response_url_missing(
 
     assert ref.external_id == "ISS-1"
     assert ref.url is None
+
+
+def test_claim_task_selection_updates_hidden_block_and_preserves_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    description = _inject_input_block(
+        "User-visible description",
+        {
+            "repo_url": "https://example.test/repo.git",
+            "input": {"instructions": "Implement it"},
+            "estimate": {"story_points": 2, "can_take_in_work": True},
+            "selection": {
+                "taken_in_work": False,
+                "selected_from_parent_external_id": "ISS-ROOT",
+            },
+        },
+    )
+    fake, calls = _scripted_http_requester(
+        [
+            _issue_description_response_body(issue_id="ISS-9", description=description),
+            _issue_update_response_body(issue_id="ISS-9", url="https://l/i/9"),
+        ]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    ref = tracker.claim_task_selection(TrackerTaskSelectionClaimPayload(external_task_id="ISS-9"))
+
+    assert ref.external_id == "ISS-9"
+    assert ref.url == "https://l/i/9"
+    assert len(calls) == 2
+    assert calls[0]["variables"] == {"id": "ISS-9"}
+    update_vars = calls[1]["variables"]
+    assert update_vars["id"] == "ISS-9"
+    updated_description = update_vars["input"]["description"]
+    cleaned, parsed = _extract_input_block(updated_description)
+    assert cleaned == "User-visible description"
+    assert parsed == {
+        "repo_url": "https://example.test/repo.git",
+        "input": {"instructions": "Implement it"},
+        "estimate": {"story_points": 2, "can_take_in_work": True},
+        "selection": {
+            "taken_in_work": True,
+            "selected_from_parent_external_id": "ISS-ROOT",
+        },
+    }
+
+
+def test_claim_task_selection_injects_hidden_block_when_issue_has_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, calls = _scripted_http_requester(
+        [
+            _issue_description_response_body(issue_id="ISS-10", description="Plain text only"),
+            _issue_update_response_body(issue_id="ISS-10"),
+        ]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    tracker.claim_task_selection(TrackerTaskSelectionClaimPayload(external_task_id="ISS-10"))
+
+    updated_description = calls[1]["variables"]["input"]["description"]
+    cleaned, parsed = _extract_input_block(updated_description)
+    assert cleaned == "Plain text only"
+    assert parsed == {"selection": {"taken_in_work": True}}
 
 
 def test_attach_links_sends_one_mutation_per_link_in_order(

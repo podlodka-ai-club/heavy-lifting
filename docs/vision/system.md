@@ -36,7 +36,7 @@ The target system is a reliable orchestration backend that:
 
 The tracker submits a new task to the orchestrator through the intake API. The orchestrator validates the payload, records the incoming request, and creates the initial internal task state needed for downstream processing.
 
-For tracker flows that persist estimate-selection metadata, the orchestrator may also query previously estimated tracker tasks, select one eligible small parent task through explicit metadata, and create a fresh tracker subtask that re-enters the same intake path as a normal executable request.
+For tracker flows that persist estimate-selection metadata, the orchestrator may also query previously estimated tracker tasks, select one eligible small parent task through explicit metadata, create a fresh tracker subtask that re-enters the same intake path as a normal executable request, and mark the selected parent as taken in work in the tracker so it is not selected again.
 
 ### Triage
 

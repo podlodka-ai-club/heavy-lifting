@@ -39,6 +39,8 @@ For estimate-selection flows, the tracker task metadata may also carry:
 
 Those fields are tracker-side selection hints only. They do not replace the worker handoff contract and are used only to decide whether the orchestrator should create a new executable tracker subtask. Real tracker adapters may persist and restore them through tracker-specific storage, but downstream workers must consume them only through `TrackerTask.metadata`.
 
+When the orchestrator creates a child subtask from a selected estimated parent, it must also call the tracker claim boundary for that parent so `metadata.selection.taken_in_work` becomes `true` in the real tracker record. This claim happens after successful child creation, while the child keeps its own copied `selection` metadata such as `selected_from_parent_external_id` for lineage.
+
 ## Context V1
 
 `context` is stable across the life of a business task thread unless new durable source facts arrive.

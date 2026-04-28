@@ -9,6 +9,7 @@ from backend.schemas import (
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
+    TrackerTaskSelectionClaimPayload,
 )
 from backend.task_constants import TaskStatus, TaskType
 
@@ -48,6 +49,9 @@ def test_mock_tracker_supports_mvp_tracker_operations() -> None:
             status=TaskStatus.DONE,
         )
     )
+    claimed = tracker.claim_task_selection(
+        TrackerTaskSelectionClaimPayload(external_task_id=created_task.external_id)
+    )
     linked = tracker.attach_links(
         TrackerLinksAttachPayload(
             external_task_id=created_subtask.external_id,
@@ -62,11 +66,13 @@ def test_mock_tracker_supports_mvp_tracker_operations() -> None:
     assert created_subtask.external_id == "task-2"
     assert comment.comment_id == "comment-1"
     assert updated.external_id == created_subtask.external_id
+    assert claimed.external_id == created_task.external_id
     assert linked.external_id == created_subtask.external_id
     assert [task.external_id for task in tasks] == ["task-1", "task-2"]
     assert tasks[1].parent_external_id == created_task.external_id
     assert tasks[1].status is TaskStatus.DONE
     assert tasks[1].context.references[0].label == "PR"
+    assert tasks[0].metadata["selection"] == {"taken_in_work": True}
 
 
 def test_mock_tracker_isolates_state_from_payload_mutation_after_create() -> None:
@@ -210,6 +216,9 @@ def test_mock_tracker_filters_eligible_estimated_tasks_via_explicit_query() -> N
             },
         )
     )
+    tracker.claim_task_selection(
+        TrackerTaskSelectionClaimPayload(external_task_id=child_parent.external_id)
+    )
     tracker.create_task(
         TrackerTaskCreatePayload(
             context=TaskContext(title="Cannot take in work"),
@@ -245,3 +254,30 @@ def test_mock_tracker_filters_eligible_estimated_tasks_via_explicit_query() -> N
     )
 
     assert [task.external_id for task in tasks] == [eligible_parent.external_id]
+
+
+def test_mock_tracker_claim_selection_preserves_existing_selection_metadata() -> None:
+    tracker = MockTracker()
+    created = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Estimated parent"),
+            metadata={
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {
+                    "taken_in_work": False,
+                    "selected_from_parent_external_id": "legacy-parent",
+                },
+            },
+        )
+    )
+
+    tracker.claim_task_selection(
+        TrackerTaskSelectionClaimPayload(external_task_id=created.external_id)
+    )
+
+    claimed = tracker.fetch_tasks(TrackerFetchTasksQuery(limit=10))[0]
+
+    assert claimed.metadata["selection"] == {
+        "taken_in_work": True,
+        "selected_from_parent_external_id": "legacy-parent",
+    }

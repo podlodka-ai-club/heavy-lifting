@@ -10,6 +10,7 @@ from backend.schemas import (
     TrackerTask,
     TrackerTaskCreatePayload,
     TrackerTaskReference,
+    TrackerTaskSelectionClaimPayload,
 )
 from backend.tracker_metadata import get_nested_mapping, matches_estimated_selection
 
@@ -62,7 +63,6 @@ class MockTracker:
             workspace_key=stored_payload.workspace_key,
             metadata=stored_payload.metadata,
         )
-        self._mark_parent_taken_in_work(parent_external_id=stored_payload.parent_external_id)
         return TrackerTaskReference(external_id=external_id)
 
     def add_comment(self, payload: TrackerCommentCreatePayload) -> TrackerCommentReference:
@@ -76,6 +76,17 @@ class MockTracker:
         task.status = payload.status
         return TrackerTaskReference(external_id=task.external_id)
 
+    def claim_task_selection(
+        self, payload: TrackerTaskSelectionClaimPayload
+    ) -> TrackerTaskReference:
+        task = self._tasks[payload.external_task_id]
+        metadata = dict(task.metadata)
+        selection_metadata = dict(get_nested_mapping(metadata, "selection"))
+        selection_metadata["taken_in_work"] = True
+        metadata["selection"] = selection_metadata
+        task.metadata = metadata
+        return TrackerTaskReference(external_id=task.external_id)
+
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference:
         task = self._tasks[payload.external_task_id]
         task.context.references.extend(link.model_copy(deep=True) for link in payload.links)
@@ -84,16 +95,3 @@ class MockTracker:
     def _next_task_id(self) -> str:
         self._task_sequence += 1
         return f"task-{self._task_sequence}"
-
-    def _mark_parent_taken_in_work(self, *, parent_external_id: str) -> None:
-        parent_task = self._tasks.get(parent_external_id)
-        if parent_task is None:
-            return
-        estimate_metadata = get_nested_mapping(parent_task.metadata, "estimate")
-        if "story_points" not in estimate_metadata or "can_take_in_work" not in estimate_metadata:
-            return
-        metadata = dict(parent_task.metadata)
-        selection_metadata = dict(get_nested_mapping(metadata, "selection"))
-        selection_metadata["taken_in_work"] = True
-        metadata["selection"] = selection_metadata
-        parent_task.metadata = metadata
