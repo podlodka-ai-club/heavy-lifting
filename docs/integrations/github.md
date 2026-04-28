@@ -30,18 +30,18 @@ registered under the key `"github"` and is selected when
 
 ## Environment Variables
 
-| Variable | Default | Required | Purpose |
-| --- | --- | --- | --- |
-| `GITHUB_API_BASE_URL` | `https://api.github.com` | no | REST endpoint. For GitHub Enterprise set `https://<host>/api/v3`. |
-| `GITHUB_TOKEN_ENV_VAR` | `GITHUB_TOKEN` | no | **Name** of the env var that holds the PAT or installation token. The value is read lazily on every call. |
-| `GITHUB_TOKEN` (or whatever `GITHUB_TOKEN_ENV_VAR` points to) | - | yes (at runtime) | The token itself, scoped to repo contents and pull requests. |
-| `GITHUB_USER_NAME` | - | no | `git -c user.name=...` value used for commits. Falls back to the global git config. |
-| `GITHUB_USER_EMAIL` | - | no | `git -c user.email=...` value used for commits. |
-| `GITHUB_DEFAULT_REMOTE` | `origin` | no | Name of the remote used for `fetch`/`push`/default-branch resolution. |
-| `GITHUB_DEFAULT_REPO_URL` | - | no | Default `repo_url` for single-repo deployments. If a task does not carry `repo_url`, the adapter clones this URL. Per-task `repo_url` always overrides the default. |
-| `SCM_DEFAULT_BASE_BRANCH` | - | no | SCM-agnostic fallback for `base_branch` resolution in Worker 2. Used when neither the task nor `repo_ref` defines one; final fallback is `main`. |
-| `SCM_BRANCH_PREFIX` | `execute/` | no | SCM-agnostic prefix for auto-generated branch names. Worker 2 builds `<prefix><slug-of-tracker-id>`. |
-| `WORKSPACE_ROOT` | `/workspace/repos` | no | Filesystem root for cloned repositories. The adapter refuses workspace keys that escape this root. |
+| Variable                                                      | Default                  | Required         | Purpose                                                                                                                                                             |
+| ------------------------------------------------------------- | ------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GITHUB_API_BASE_URL`                                         | `https://api.github.com` | no               | REST endpoint. For GitHub Enterprise set `https://<host>/api/v3`.                                                                                                   |
+| `GITHUB_TOKEN_ENV_VAR`                                        | `GITHUB_TOKEN`           | no               | **Name** of the env var that holds the PAT or installation token. The value is read lazily on every call.                                                           |
+| `GITHUB_TOKEN` (or whatever `GITHUB_TOKEN_ENV_VAR` points to) | -                        | yes (at runtime) | The token itself, scoped to repo contents and pull requests.                                                                                                        |
+| `GITHUB_USER_NAME`                                            | -                        | no               | `git -c user.name=...` value used for commits. Falls back to the global git config.                                                                                 |
+| `GITHUB_USER_EMAIL`                                           | -                        | no               | `git -c user.email=...` value used for commits.                                                                                                                     |
+| `GITHUB_DEFAULT_REMOTE`                                       | `origin`                 | no               | Name of the remote used for `fetch`/`push`/default-branch resolution.                                                                                               |
+| `GITHUB_DEFAULT_REPO_URL`                                     | -                        | no               | Default `repo_url` for single-repo deployments. If a task does not carry `repo_url`, the adapter clones this URL. Per-task `repo_url` always overrides the default. |
+| `SCM_DEFAULT_BASE_BRANCH`                                     | -                        | no               | SCM-agnostic fallback for `base_branch` resolution in Worker 2. Used when neither the task nor `repo_ref` defines one; final fallback is `main`.                    |
+| `SCM_BRANCH_PREFIX`                                           | `execute/`               | no               | SCM-agnostic prefix for auto-generated branch names. Worker 2 builds `<prefix><slug-of-tracker-id>`.                                                                |
+| `WORKSPACE_ROOT`                                              | `/workspace/repos`       | no               | Filesystem root for cloned repositories. The adapter refuses workspace keys that escape this root.                                                                  |
 
 `SCM_*` keys are not GitHub-specific by name because they live in the
 SCM-agnostic `ExecuteWorker`. They keep the same meaning if you swap the
@@ -49,11 +49,11 @@ adapter for `mock` or a future GitLab/Bitbucket implementation.
 
 ## Single-repo vs Multi-repo Deployment
 
-| Scenario | `.env.local` | Tracker issue service block |
-| --- | --- | --- |
-| **Single-repo** (1 team → 1 repo, typical) | Set `GITHUB_DEFAULT_REPO_URL`, optionally `SCM_DEFAULT_BASE_BRANCH=main`. | Only `instructions` is required. `repo_url`/`base_branch`/`branch_name` may be omitted. |
-| **Multi-repo** (1 team → many repos) | Leave `GITHUB_DEFAULT_REPO_URL` unset. | Every issue must include its own `repo_url`. |
-| **Hybrid** | Set `GITHUB_DEFAULT_REPO_URL` to the primary repo. | Issues without `repo_url` go to the primary; issues with explicit `repo_url` go to their own repo. |
+| Scenario                                   | `.env.local`                                                              | Tracker issue service block                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **Single-repo** (1 team → 1 repo, typical) | Set `GITHUB_DEFAULT_REPO_URL`, optionally `SCM_DEFAULT_BASE_BRANCH=main`. | Only `instructions` is required. `repo_url`/`base_branch`/`branch_name` may be omitted.            |
+| **Multi-repo** (1 team → many repos)       | Leave `GITHUB_DEFAULT_REPO_URL` unset.                                    | Every issue must include its own `repo_url`.                                                       |
+| **Hybrid**                                 | Set `GITHUB_DEFAULT_REPO_URL` to the primary repo.                        | Issues without `repo_url` go to the primary; issues with explicit `repo_url` go to their own repo. |
 
 If neither the operator nor the tracker provides `repo_url`,
 `ensure_workspace` raises `RuntimeError("repo_url required: set
@@ -127,11 +127,11 @@ before persisting the feedback as a child task.
 
 `read_pr_feedback` merges three GitHub endpoints:
 
-| `metadata.event_kind` | Endpoint | Notes |
-| --- | --- | --- |
-| `pr_comment` (issue) | `GET /repos/{o}/{r}/issues/{n}/comments` | General PR conversation. |
-| `pr_comment` (review_comment) | `GET /repos/{o}/{r}/pulls/{n}/comments` | Inline diff comments. `path`/`line`/`side`/`commit_sha` populated. |
-| `pr_review_approved` / `pr_review_requested_changes` / `pr_comment` | `GET /repos/{o}/{r}/pulls/{n}/reviews` | Review verdict. `commit_sha` populated. Empty review bodies are normalized to `(approved without comment)` for `APPROVED`, `(changes requested without comment)` for `CHANGES_REQUESTED`, and `(review without comment)` for `COMMENTED` or any other state, so `PrFeedbackPayload.body` stays non-empty. |
+| `metadata.event_kind`                                               | Endpoint                                 | Notes                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pr_comment` (issue)                                                | `GET /repos/{o}/{r}/issues/{n}/comments` | General PR conversation.                                                                                                                                                                                                                                                                                  |
+| `pr_comment` (review_comment)                                       | `GET /repos/{o}/{r}/pulls/{n}/comments`  | Inline diff comments. `path`/`line`/`side`/`commit_sha` populated.                                                                                                                                                                                                                                        |
+| `pr_review_approved` / `pr_review_requested_changes` / `pr_comment` | `GET /repos/{o}/{r}/pulls/{n}/reviews`   | Review verdict. `commit_sha` populated. Empty review bodies are normalized to `(approved without comment)` for `APPROVED`, `(changes requested without comment)` for `CHANGES_REQUESTED`, and `(review without comment)` for `COMMENTED` or any other state, so `PrFeedbackPayload.body` stays non-empty. |
 
 `comment_id` is namespaced as `<source>-<numeric_id>` so collisions
 across endpoints are impossible.
@@ -158,6 +158,10 @@ that is documented as a known limitation in
 
 - `ensure_workspace`: clones if the local path is missing, otherwise
   fetches. Always runs `git checkout` to land on the requested ref.
+  When Worker 2 asks to reuse an existing PR branch, the adapter checks
+  out that branch and, if the remote branch exists, resets the local
+  branch to `origin/<branch>` before execution so follow-up commits land
+  on the live PR branch instead of the workspace base ref.
 - `create_branch`: uses `git checkout -B`, so re-runs reset the branch
   to the resolved `from_ref`.
 - `commit_changes`: empty `git status --porcelain` raises

@@ -45,9 +45,7 @@ class FakeRunner:
     def add_failure(self, *, stderr: str = "boom", returncode: int = 1) -> None:
         self._responders.append((None, stderr, returncode))
 
-    def run(
-        self, args: list[str], cwd: str | None = None
-    ) -> subprocess.CompletedProcess[str]:
+    def run(self, args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
         self.calls.append((args, cwd))
         if not self._responders:
             stdout, stderr, returncode = "", "", 0
@@ -69,9 +67,7 @@ class LeakyCalledProcessRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], str | None]] = []
 
-    def run(
-        self, args: list[str], cwd: str | None = None
-    ) -> subprocess.CompletedProcess[str]:
+    def run(self, args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
         self.calls.append((args, cwd))
         raise subprocess.CalledProcessError(
             1,
@@ -129,9 +125,9 @@ def test_git_auth_args_uses_basic_x_access_token_header() -> None:
 
     assert args == ["-c", f"http.extraHeader=Authorization: Basic {encoded}"]
     assert (
-        base64.b64decode(
-            args[1].removeprefix("http.extraHeader=Authorization: Basic ")
-        ).decode("utf-8")
+        base64.b64decode(args[1].removeprefix("http.extraHeader=Authorization: Basic ")).decode(
+            "utf-8"
+        )
         == f"x-access-token:{token}"
     )
 
@@ -204,6 +200,71 @@ def test_ensure_workspace_resolves_default_branch_when_repo_ref_absent(tmp_path)
     assert "origin" in fetch_args
     sym_args, _ = runner.calls[1]
     assert sym_args[1:] == ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]
+
+
+def test_ensure_workspace_checks_out_remote_branch_when_branch_name_requested(tmp_path) -> None:
+    repo_dir = tmp_path / "widgets-feedback"
+    repo_dir.mkdir()
+    runner = FakeRunner()
+    runner.add_response()  # fetch
+    runner.add_response(stdout="origin/task27/worker-2\n")  # rev-parse remote branch
+    runner.add_response()  # checkout -B origin/task27/worker-2
+    scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
+
+    workspace = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://github.com/acme/widgets",
+            workspace_key="widgets-feedback",
+            repo_ref="main",
+            branch_name="task27/worker-2",
+        )
+    )
+
+    assert workspace.repo_ref == "main"
+    assert workspace.branch_name == "task27/worker-2"
+    rev_parse_args, rev_parse_cwd = runner.calls[1]
+    assert rev_parse_args == [
+        "git",
+        "rev-parse",
+        "--verify",
+        "refs/remotes/origin/task27/worker-2",
+    ]
+    checkout_args, checkout_cwd = runner.calls[2]
+    assert checkout_args == [
+        "git",
+        "checkout",
+        "-B",
+        "task27/worker-2",
+        "origin/task27/worker-2",
+    ]
+    assert rev_parse_cwd == str(repo_dir)
+    assert checkout_cwd == str(repo_dir)
+
+
+def test_ensure_workspace_falls_back_to_local_branch_checkout_when_remote_branch_missing(
+    tmp_path,
+) -> None:
+    repo_dir = tmp_path / "widgets-local-feedback"
+    repo_dir.mkdir()
+    runner = FakeRunner()
+    runner.add_response()  # fetch
+    runner.add_failure(stderr="unknown revision")  # rev-parse remote branch
+    runner.add_response()  # checkout local branch
+    scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
+
+    workspace = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://github.com/acme/widgets",
+            workspace_key="widgets-local-feedback",
+            repo_ref="main",
+            branch_name="task27/worker-2",
+        )
+    )
+
+    assert workspace.branch_name == "task27/worker-2"
+    checkout_args, checkout_cwd = runner.calls[2]
+    assert checkout_args == ["git", "checkout", "task27/worker-2"]
+    assert checkout_cwd == str(repo_dir)
 
 
 def test_ensure_workspace_uses_default_repo_url_when_payload_missing(tmp_path) -> None:
@@ -494,8 +555,7 @@ def test_create_pull_request_falls_back_to_existing_on_422(tmp_path) -> None:
             method="POST",
             url="https://api.github.com/repos/acme/widgets/pulls",
             body_excerpt=(
-                '{"errors":[{"message":"A pull request already exists '
-                'for acme:feature/x."}]}'
+                '{"errors":[{"message":"A pull request already exists for acme:feature/x."}]}'
             ),
         )
     )
@@ -859,9 +919,7 @@ def test_git_runner_failure_does_not_expose_secret_in_cause_or_context(
     encoded_secret = base64.b64encode(secret.encode()).decode("ascii")
     monkeypatch.setenv("GITHUB_TOKEN_TEST", secret)
     runner = LeakyCalledProcessRunner()
-    scm = GitHubScm(
-        _build_config(Path.cwd()), runner=runner, http_client=FakeHttpClient()
-    )
+    scm = GitHubScm(_build_config(Path.cwd()), runner=runner, http_client=FakeHttpClient())
 
     with pytest.raises(RuntimeError) as exc_info:
         scm.ensure_workspace(

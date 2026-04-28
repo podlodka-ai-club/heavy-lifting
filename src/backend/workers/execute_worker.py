@@ -267,11 +267,16 @@ class ExecuteWorker:
         if not workspace_key:
             raise ValueError("Worker 2 requires workspace_key for SCM workspace sync")
 
+        checkout_branch_name = None
+        if task_context.flow_type == TaskType.PR_FEEDBACK:
+            checkout_branch_name = task_context.branch_name
+
         return self.scm.ensure_workspace(
             ScmWorkspaceEnsurePayload(
                 repo_url=task_context.repo_url,
                 workspace_key=workspace_key,
                 repo_ref=task_context.repo_ref,
+                branch_name=checkout_branch_name,
                 metadata={
                     "flow_type": task_context.flow_type.value,
                     "root_task_id": task_context.root_task.task.id,
@@ -331,9 +336,7 @@ class ExecuteWorker:
                     body=self._build_pr_body(
                         task_context=task_context, agent_payload=agent_payload
                     ),
-                    pr_metadata=self._build_pr_metadata(
-                        task_context, workspace=workspace
-                    ),
+                    pr_metadata=self._build_pr_metadata(task_context, workspace=workspace),
                     metadata={
                         "task_id": task.id,
                         "flow_type": task.task_type.value,

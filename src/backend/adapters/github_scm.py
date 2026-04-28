@@ -33,9 +33,7 @@ from backend.schemas import (
 )
 
 _PR_METADATA_TAG = "heavy-lifting:pr-metadata:v1"
-_PR_METADATA_PATTERN = re.compile(
-    r"<!-- " + re.escape(_PR_METADATA_TAG) + r" ([A-Za-z0-9_-]+) -->"
-)
+_PR_METADATA_PATTERN = re.compile(r"<!-- " + re.escape(_PR_METADATA_TAG) + r" ([A-Za-z0-9_-]+) -->")
 _HL_UNRESOLVED_KEY = "_hl_unresolved"
 
 _FEEDBACK_SOURCES = ("issue", "review_comment", "review")
@@ -123,9 +121,7 @@ class _FeedbackCursor:
         if len(parts) != 3:
             raise ValueError(f"Invalid feedback cursor: {value!r}")
         updated_at, source, numeric_id = parts
-        return cls(
-            updated_at=updated_at, source=source, numeric_id=int(numeric_id)
-        )
+        return cls(updated_at=updated_at, source=source, numeric_id=int(numeric_id))
 
     def sort_key(self) -> tuple[str, str, int]:
         return (self.updated_at, self.source, self.numeric_id)
@@ -179,9 +175,7 @@ def _safe_workspace_path(workspace_root: Path, workspace_key: str) -> Path:
     root_resolved = workspace_root.resolve()
     candidate = (workspace_root / workspace_key).resolve()
     if not candidate.is_relative_to(root_resolved):
-        raise ValueError(
-            f"workspace_key escapes workspace_root: {workspace_key!r}"
-        )
+        raise ValueError(f"workspace_key escapes workspace_root: {workspace_key!r}")
     return candidate
 
 
@@ -209,9 +203,7 @@ def _sanitize_token(text: str, token: str | None) -> str:
 
 
 class _GitRunner:
-    def run(
-        self, args: list[str], cwd: str | None = None
-    ) -> subprocess.CompletedProcess[str]:
+    def run(self, args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(  # noqa: S603 — args constructed by adapter
             args,
             cwd=cwd,
@@ -266,9 +258,7 @@ class _GithubHttpClient:
                 )
         except urllib.error.HTTPError as exc:
             payload_bytes = exc.read() if exc.fp is not None else b""
-            response_headers = (
-                {k: v for k, v in exc.headers.items()} if exc.headers else {}
-            )
+            response_headers = {k: v for k, v in exc.headers.items()} if exc.headers else {}
             text = payload_bytes.decode("utf-8", errors="replace")
             excerpt = text[:500]
             raise GitHubApiError(
@@ -342,9 +332,7 @@ class GitHubScm:
                 "repo_url required: set GITHUB_DEFAULT_REPO_URL or pass per-task repo_url"
             )
 
-        local_path = _safe_workspace_path(
-            self._config.workspace_root, payload.workspace_key
-        )
+        local_path = _safe_workspace_path(self._config.workspace_root, payload.workspace_key)
         self._config.workspace_root.mkdir(parents=True, exist_ok=True)
         token = self._token()
 
@@ -373,17 +361,26 @@ class GitHubScm:
             )
 
         resolved_ref = payload.repo_ref or self._resolve_default_branch(local_path)
-        self._git_run(
-            ["git", "checkout", resolved_ref],
-            cwd=str(local_path),
-            token=token,
-        )
+        checked_out_branch = payload.branch_name
+        if checked_out_branch:
+            self._checkout_branch(
+                local_path=local_path,
+                branch_name=checked_out_branch,
+                token=token,
+            )
+        else:
+            self._git_run(
+                ["git", "checkout", resolved_ref],
+                cwd=str(local_path),
+                token=token,
+            )
 
         workspace = ScmWorkspace(
             repo_url=repo_url,
             workspace_key=payload.workspace_key,
             repo_ref=resolved_ref,
             local_path=str(local_path),
+            branch_name=checked_out_branch,
             metadata=dict(payload.metadata),
         )
         self._workspaces[payload.workspace_key] = workspace
@@ -487,14 +484,10 @@ class GitHubScm:
             metadata=dict(payload.metadata),
         )
 
-    def create_pull_request(
-        self, payload: ScmPullRequestCreatePayload
-    ) -> ScmPullRequestReference:
+    def create_pull_request(self, payload: ScmPullRequestCreatePayload) -> ScmPullRequestReference:
         workspace = self._require_workspace(payload.workspace_key)
         if not workspace.repo_url:
-            raise RuntimeError(
-                f"workspace {payload.workspace_key!r} has no repo_url"
-            )
+            raise RuntimeError(f"workspace {payload.workspace_key!r} has no repo_url")
         _, owner, repo = _parse_repo_location(workspace.repo_url)
         body = self._compose_pr_body(payload.body, payload.pr_metadata)
         request_body = {
@@ -527,9 +520,7 @@ class GitHubScm:
             raise
 
         if not isinstance(response.body, dict):
-            raise RuntimeError(
-                f"unexpected create-PR response body: {response.body!r}"
-            )
+            raise RuntimeError(f"unexpected create-PR response body: {response.body!r}")
         return self._build_pull_request_reference(
             owner=owner,
             repo=repo,
@@ -538,13 +529,9 @@ class GitHubScm:
             body_data=response.body,
         )
 
-    def read_pr_feedback(
-        self, query: ScmReadPrFeedbackQuery
-    ) -> ScmReadPrFeedbackResult:
+    def read_pr_feedback(self, query: ScmReadPrFeedbackQuery) -> ScmReadPrFeedbackResult:
         if not query.pr_external_id:
-            raise RuntimeError(
-                "read_pr_feedback requires pr_external_id for GitHubScm"
-            )
+            raise RuntimeError("read_pr_feedback requires pr_external_id for GitHubScm")
         repo_url = self._resolve_query_repo_url(query)
         if not repo_url:
             raise RuntimeError(
@@ -639,9 +626,7 @@ class GitHubScm:
             if consumed >= after_offset_count:
                 # entire page (post-offset) consumed
                 if has_next:
-                    next_cursors[source] = _SourceCursor(
-                        page=str(cursor.page_int + 1), offset=0
-                    )
+                    next_cursors[source] = _SourceCursor(page=str(cursor.page_int + 1), offset=0)
                 else:
                     next_cursors[source] = _SourceCursor(page="*", offset=0)
             else:
@@ -714,13 +699,60 @@ class GitHubScm:
             return ref[len(prefix) :]
         return ref
 
+    def _checkout_branch(
+        self,
+        *,
+        local_path: Path,
+        branch_name: str,
+        token: str | None,
+    ) -> None:
+        remote_branch_ref = f"refs/remotes/{self._config.default_remote}/{branch_name}"
+        has_remote_branch = self._git_ref_exists(
+            local_path=local_path,
+            ref=remote_branch_ref,
+            token=token,
+        )
+        if has_remote_branch:
+            self._git_run(
+                [
+                    "git",
+                    "checkout",
+                    "-B",
+                    branch_name,
+                    f"{self._config.default_remote}/{branch_name}",
+                ],
+                cwd=str(local_path),
+                token=token,
+            )
+            return
+        self._git_run(
+            ["git", "checkout", branch_name],
+            cwd=str(local_path),
+            token=token,
+        )
+
+    def _git_ref_exists(
+        self,
+        *,
+        local_path: Path,
+        ref: str,
+        token: str | None,
+    ) -> bool:
+        try:
+            self._git_run(
+                ["git", "rev-parse", "--verify", ref],
+                cwd=str(local_path),
+                token=token,
+            )
+        except RuntimeError:
+            return False
+        return True
+
     def _require_workspace(self, workspace_key: str) -> ScmWorkspace:
         try:
             return self._workspaces[workspace_key]
         except KeyError as exc:
-            raise RuntimeError(
-                f"workspace not initialized: {workspace_key!r}"
-            ) from exc
+            raise RuntimeError(f"workspace not initialized: {workspace_key!r}") from exc
 
     def _build_branch_url(self, repo_url: str, branch_name: str) -> str | None:
         try:
@@ -729,9 +761,7 @@ class GitHubScm:
             return None
         return f"https://{host}/{owner}/{repo}/tree/{branch_name}"
 
-    def _compose_pr_body(
-        self, body: str | None, pr_metadata: ScmPullRequestMetadata
-    ) -> str:
+    def _compose_pr_body(self, body: str | None, pr_metadata: ScmPullRequestMetadata) -> str:
         footer = _encode_pr_metadata_footer(pr_metadata)
         if not body:
             return footer
@@ -748,9 +778,7 @@ class GitHubScm:
     ) -> ScmPullRequestReference:
         number = body_data.get("number")
         if number is None:
-            raise RuntimeError(
-                f"GitHub PR response is missing 'number': {body_data!r}"
-            )
+            raise RuntimeError(f"GitHub PR response is missing 'number': {body_data!r}")
         html_url = body_data.get("html_url")
         if not html_url:
             html_url = f"https://{_parse_repo_location(repo_url)[0]}/{owner}/{repo}/pull/{number}"
@@ -777,9 +805,7 @@ class GitHubScm:
         first = response.body[0]
         return first if isinstance(first, dict) else None
 
-    def _resolve_query_repo_url(
-        self, query: ScmReadPrFeedbackQuery
-    ) -> str | None:
+    def _resolve_query_repo_url(self, query: ScmReadPrFeedbackQuery) -> str | None:
         if query.repo_url:
             return query.repo_url
         if query.workspace_key:
@@ -788,9 +814,7 @@ class GitHubScm:
                 return workspace.repo_url
         return self._config.default_repo_url
 
-    def _parse_page_cursor(
-        self, page_cursor: str | None
-    ) -> dict[str, _SourceCursor]:
+    def _parse_page_cursor(self, page_cursor: str | None) -> dict[str, _SourceCursor]:
         if page_cursor is None:
             return {source: _SourceCursor.initial() for source in _FEEDBACK_SOURCES}
         result: dict[str, _SourceCursor] = {}
@@ -808,17 +832,13 @@ class GitHubScm:
                 result[source] = _SourceCursor.initial()
         return result
 
-    def _serialize_page_cursor(
-        self, cursors: Mapping[str, _SourceCursor]
-    ) -> str:
+    def _serialize_page_cursor(self, cursors: Mapping[str, _SourceCursor]) -> str:
         return ":".join(
             f"{source}@{cursors[source].page}@{cursors[source].offset}"
             for source in _FEEDBACK_SOURCES
         )
 
-    def _parse_since_cursor(
-        self, since_cursor: str | None
-    ) -> _FeedbackCursor | None:
+    def _parse_since_cursor(self, since_cursor: str | None) -> _FeedbackCursor | None:
         if not since_cursor:
             return None
         try:
@@ -837,9 +857,7 @@ class GitHubScm:
         per_page: int,
         since_cursor: _FeedbackCursor | None,
     ) -> tuple[list[Mapping[str, Any]], bool]:
-        path = self._source_endpoint(
-            owner=owner, repo=repo, pr_number=pr_number, source=source
-        )
+        path = self._source_endpoint(owner=owner, repo=repo, pr_number=pr_number, source=source)
         query: dict[str, str] = {
             "per_page": str(per_page),
             "page": str(page),
@@ -856,9 +874,7 @@ class GitHubScm:
         has_next = 'rel="next"' in link_header
         return items, has_next
 
-    def _source_endpoint(
-        self, *, owner: str, repo: str, pr_number: str, source: str
-    ) -> str:
+    def _source_endpoint(self, *, owner: str, repo: str, pr_number: str, source: str) -> str:
         if source == "issue":
             return f"/repos/{owner}/{repo}/issues/{pr_number}/comments"
         if source == "review_comment":
@@ -947,17 +963,13 @@ class GitHubScm:
             metadata=item_metadata,
             pr_metadata=sentinel_metadata,
         )
-        cursor = _FeedbackCursor(
-            updated_at=updated_at, source=source, numeric_id=numeric_id
-        )
+        cursor = _FeedbackCursor(updated_at=updated_at, source=source, numeric_id=numeric_id)
         return _LoadedFeedbackItem(cursor=cursor, feedback=feedback)
 
     def _format_comment_id(self, source: str, numeric_id: int) -> str:
         return f"{source}-{numeric_id}"
 
-    def _event_kind_for(
-        self, source: str, review_state: str | None
-    ) -> str:
+    def _event_kind_for(self, source: str, review_state: str | None) -> str:
         if source != "review":
             return "pr_comment"
         if review_state == "APPROVED":
@@ -973,9 +985,7 @@ class GitHubScm:
             return None
         return f"https://{host}/{owner}/{repo}/pull/{pr_number}"
 
-    def _build_unresolved_metadata(
-        self, query: ScmReadPrFeedbackQuery
-    ) -> ScmPullRequestMetadata:
+    def _build_unresolved_metadata(self, query: ScmReadPrFeedbackQuery) -> ScmPullRequestMetadata:
         return ScmPullRequestMetadata(
             execute_task_external_id="",
             workspace_key=query.workspace_key,
@@ -992,9 +1002,7 @@ class GitHubScm:
         query: ScmReadPrFeedbackQuery,
     ) -> ScmPullRequestMetadata | None:
         try:
-            response = self._http.request(
-                "GET", f"/repos/{owner}/{repo}/pulls/{pr_number}"
-            )
+            response = self._http.request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}")
         except GitHubApiError:
             return None
         if not isinstance(response.body, dict):
@@ -1003,6 +1011,7 @@ class GitHubScm:
         if not isinstance(body, str):
             return None
         return _decode_pr_metadata_footer(body)
+
 
 def build_github_scm_config(
     *,

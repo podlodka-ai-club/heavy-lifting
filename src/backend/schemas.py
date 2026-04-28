@@ -168,6 +168,7 @@ class ScmWorkspaceEnsurePayload(SchemaModel):
     repo_url: str | None = None
     workspace_key: str
     repo_ref: str | None = None
+    branch_name: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
 
 

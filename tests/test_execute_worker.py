@@ -27,6 +27,16 @@ class DuplicateBranchGuardMockScm(MockScm):
         return super().create_branch(payload)
 
 
+class EnsureWorkspaceRecorderMockScm(MockScm):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ensure_workspace_payloads = []
+
+    def ensure_workspace(self, payload):
+        self.ensure_workspace_payloads.append(payload.model_copy(deep=True))
+        return super().ensure_workspace(payload)
+
+
 class RecordingAgentRunner(LocalAgentRunner):
     def __init__(self) -> None:
         super().__init__()
@@ -282,6 +292,87 @@ def test_execute_worker_reuses_existing_pr_for_feedback_without_new_deliver(tmp_
         assert token_usage_entries[-1].task_id == feedback_task.id
 
     assert scm.create_branch_calls == [("repo-27", "task27/worker-2")]
+
+
+def test_execute_worker_requests_pr_feedback_workspace_on_existing_branch(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = EnsureWorkspaceRecorderMockScm()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=LocalAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-27",
+                context={"title": "Tracker task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-27",
+                context={"title": "Implement Worker 2"},
+                input_payload={
+                    "instructions": "Implement the execute worker orchestration.",
+                    "base_branch": "main",
+                    "branch_name": "task27/worker-2",
+                },
+            )
+        )
+
+    first_report = worker.poll_once()
+    assert first_report.processed_execute_tasks == 1
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        execute_task = session.get(Task, 2)
+        assert execute_task is not None
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                parent_id=execute_task.id,
+                tracker_name="mock",
+                external_task_id="comment-1",
+                external_parent_id=execute_task.pr_external_id,
+                repo_url=execute_task.repo_url,
+                repo_ref=execute_task.repo_ref,
+                workspace_key=execute_task.workspace_key,
+                branch_name=execute_task.branch_name,
+                pr_external_id=execute_task.pr_external_id,
+                pr_url=execute_task.pr_url,
+                input_payload={
+                    "instructions": "Address the first PR review comment.",
+                    "pr_feedback": {
+                        "pr_external_id": execute_task.pr_external_id,
+                        "comment_id": "comment-1",
+                        "body": "Please add worker tests.",
+                        "pr_url": execute_task.pr_url,
+                    },
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_pr_feedback_tasks == 1
+    assert len(scm.ensure_workspace_payloads) == 2
+    execute_payload, feedback_payload = scm.ensure_workspace_payloads
+    assert execute_payload.branch_name is None
+    assert feedback_payload.branch_name == "task27/worker-2"
 
 
 def test_execute_worker_skips_scm_artifacts_for_estimate_only_requests(tmp_path) -> None:
