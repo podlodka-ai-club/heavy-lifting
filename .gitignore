@@ -25,3 +25,9 @@ Thumbs.db
 .idea/
 .vscode/
 worklog/
+
+.env
+.env.*
+!.env.example
+
+temp/
