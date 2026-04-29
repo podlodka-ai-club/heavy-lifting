@@ -24,6 +24,7 @@ def test_get_openapi_json_describes_public_api() -> None:
     assert set(schema["paths"]) == {
         "/health",
         "/openapi.json",
+        "/settings",
         "/stats",
         "/tasks",
         "/tasks/{task_id}",
@@ -72,6 +73,12 @@ def test_openapi_json_describes_task_and_stats_responses() -> None:
     assert schema["paths"]["/stats"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/StatsResponse"}
+    assert schema["paths"]["/settings"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/SettingsResponse"}
+    assert schema["paths"]["/settings"]["put"]["requestBody"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/SettingsUpdateRequest"}
 
 
 def test_build_openapi_schema_returns_isolated_copy() -> None:

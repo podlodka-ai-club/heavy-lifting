@@ -6,6 +6,8 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "APP_NAME",
         "APP_HOST",
         "APP_PORT",
+        "RUNTIME_SETTINGS_PATH",
+        "AGENT_PROMPTS_DIR",
         "DATABASE_URL",
         "POSTGRES_HOST",
         "POSTGRES_PORT",
@@ -56,6 +58,8 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.app_name == "heavy-lifting-backend"
     assert settings.app_host == "0.0.0.0"
     assert settings.app_port == 8000
+    assert settings.runtime_settings_path == "var/runtime-settings.json"
+    assert settings.agent_prompts_dir == "prompts/agents"
     assert settings.postgres_host == "localhost"
     assert settings.postgres_port == 5432
     assert settings.postgres_db == "heavy_lifting"
@@ -105,6 +109,8 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("APP_NAME", "orchestrator")
     monkeypatch.setenv("APP_HOST", "127.0.0.1")
     monkeypatch.setenv("APP_PORT", "9001")
+    monkeypatch.setenv("RUNTIME_SETTINGS_PATH", "/tmp/heavy-lifting/settings.json")
+    monkeypatch.setenv("AGENT_PROMPTS_DIR", "/tmp/heavy-lifting/prompts")
     monkeypatch.setenv("POSTGRES_HOST", "db")
     monkeypatch.setenv("POSTGRES_PORT", "6543")
     monkeypatch.setenv("POSTGRES_DB", "orchestrator")
@@ -155,6 +161,8 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.app_name == "orchestrator"
     assert settings.app_host == "127.0.0.1"
     assert settings.app_port == 9001
+    assert settings.runtime_settings_path == "/tmp/heavy-lifting/settings.json"
+    assert settings.agent_prompts_dir == "/tmp/heavy-lifting/prompts"
     assert settings.postgres_host == "db"
     assert settings.postgres_port == 6543
     assert settings.postgres_db == "orchestrator"

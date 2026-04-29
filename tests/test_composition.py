@@ -257,6 +257,7 @@ def test_create_runtime_container_builds_cli_agent_runner_from_settings(monkeypa
         cli_agent_profile="backend",
         cli_agent_api_key_env_var="CUSTOM_API_KEY",
         cli_agent_base_url_env_var="CUSTOM_BASE_URL",
+        runtime_settings_path="/tmp/heavy-lifting/settings.json",
     )
 
     runtime = create_runtime_container(settings=settings)
@@ -270,6 +271,7 @@ def test_create_runtime_container_builds_cli_agent_runner_from_settings(monkeypa
     assert runtime.agent_runner.config.profile == "backend"
     assert runtime.agent_runner.config.api_key_env_var == "CUSTOM_API_KEY"
     assert runtime.agent_runner.config.base_url_env_var == "CUSTOM_BASE_URL"
+    assert runtime.agent_runner.config.runtime_settings_path == "/tmp/heavy-lifting/settings.json"
 
 
 def test_create_runtime_container_rejects_invalid_cli_runner_timeout(monkeypatch) -> None:

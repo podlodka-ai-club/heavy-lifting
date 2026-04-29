@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from backend.logging_setup import get_logger
 from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.schemas import TaskContext, TaskResultPayload, TokenUsagePayload
+from backend.services.runtime_settings import load_runtime_api_key
 from backend.services.token_costs import TokenCostService
 from backend.task_constants import TaskType
 from backend.task_context import EffectiveTaskContext
@@ -24,6 +27,7 @@ class CliAgentRunnerConfig:
     profile: str | None = None
     api_key_env_var: str | None = None
     base_url_env_var: str | None = None
+    runtime_settings_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -154,6 +158,7 @@ class CliAgentRunner:
             capture_output=True,
             text=True,
             timeout=self.config.timeout_seconds,
+            env=self._build_environment(),
         )
         payload = self._build_payload(
             request=request,
@@ -195,6 +200,14 @@ class CliAgentRunner:
         if self.config.model_hint:
             return self.config.model_hint
         return None
+
+    def _build_environment(self) -> dict[str, str]:
+        env = os.environ.copy()
+        if self.config.api_key_env_var and self.config.runtime_settings_path:
+            runtime_api_key = load_runtime_api_key(Path(self.config.runtime_settings_path))
+            if runtime_api_key:
+                env[self.config.api_key_env_var] = runtime_api_key
+        return env
 
     def _build_prompt(self, request: AgentRunRequest) -> str:
         context = request.task_context

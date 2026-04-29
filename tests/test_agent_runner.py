@@ -9,6 +9,7 @@ from backend.protocols.agent_runner import AgentRunRequest
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.services.context_builder import ContextBuilder
+from backend.services.runtime_settings import load_runtime_api_key
 from backend.task_constants import TaskType
 
 
@@ -162,6 +163,7 @@ def test_cli_agent_runner_exposes_stable_config_contract() -> None:
     assert runner.config.profile == "backend"
     assert runner.config.api_key_env_var == "OPENAI_API_KEY"
     assert runner.config.base_url_env_var == "OPENAI_BASE_URL"
+    assert runner.config.runtime_settings_path is None
 
 
 def test_cli_agent_runner_builds_command_from_config() -> None:
@@ -328,6 +330,87 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
             "base_url_env_var": "OPENAI_BASE_URL",
         },
     }
+
+
+def test_cli_agent_runner_uses_runtime_api_key_for_subprocess_env(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    task_context = _build_task_context(tmp_path)
+    runtime_settings_path = tmp_path / "runtime-settings.json"
+    runtime_settings_path.write_text('{"api_key": "sk-runtime"}', encoding="utf-8")
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=900,
+            api_key_env_var="OPENAI_API_KEY",
+            runtime_settings_path=str(runtime_settings_path),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    runner.run(
+        AgentRunRequest(
+            task_context=task_context,
+            workspace_path=str(tmp_path / "workspace"),
+        )
+    )
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["OPENAI_API_KEY"] == "sk-runtime"
+
+
+def test_load_runtime_api_key_ignores_corrupted_runtime_settings_json(tmp_path) -> None:
+    runtime_settings_path = tmp_path / "runtime-settings.json"
+    runtime_settings_path.write_text('{"broken"', encoding="utf-8")
+
+    assert load_runtime_api_key(runtime_settings_path) is None
+
+
+def test_cli_agent_runner_ignores_corrupted_runtime_api_key(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    task_context = _build_task_context(tmp_path)
+    runtime_settings_path = tmp_path / "runtime-settings.json"
+    runtime_settings_path.write_text('{"broken"', encoding="utf-8")
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=900,
+            api_key_env_var="OPENAI_API_KEY",
+            runtime_settings_path=str(runtime_settings_path),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    runner.run(
+        AgentRunRequest(
+            task_context=task_context,
+            workspace_path=str(tmp_path / "workspace"),
+        )
+    )
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["OPENAI_API_KEY"] == "sk-env"
 
 
 def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None:

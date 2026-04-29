@@ -31,6 +31,8 @@
 
 - `GET /health`
 - `GET /openapi.json`
+- `GET /settings`
+- `PUT /settings`
 - `GET /tasks`
 - `GET /tasks/<id>`
 - `GET /stats`
@@ -80,6 +82,27 @@ make demo
 Этот режим нужен только если вы хотите, чтобы `worker2` вызывал внешний CLI-агент. Для обычной локальной demo-проверки достаточно `local` runner по умолчанию.
 
 `make api` и отдельные `make worker1` / `make worker2` / `make worker3` теперь не рекомендуются для ручного полного mock flow: это разные процессы, а `MockTracker` и `MockScm` хранят состояние в памяти процесса. Эти команды оставлены для точечной отладки отдельных компонентов.
+
+### Frontend
+
+Минимальный React UI лежит в `frontend/`. Для локального запуска вместе с backend:
+
+```bash
+uv sync
+make api
+```
+
+Во втором терминале:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Vite поднимает UI на `http://127.0.0.1:5173` и проксирует `/settings` в Flask API на `http://127.0.0.1:8000`. Home page показывает caption `Heacy lifting` и ссылку на settings page. Settings page редактирует API key и agent prompts через REST.
+
+API key из settings page сохраняется в runtime-local JSON по пути `RUNTIME_SETTINGS_PATH` (`var/runtime-settings.json` по умолчанию). Этот путь gitignored. REST API не возвращает значение ключа, только признак наличия и источник (`runtime`, `env`, `none`).
 
 Поставить задачу в intake:
 
@@ -199,6 +222,8 @@ export POSTGRES_PASSWORD=heavy_lifting
 - переменная с API key, имя которой задается `CLI_AGENT_API_KEY_ENV_VAR`;
 - по умолчанию это `OPENAI_API_KEY`, поэтому чаще всего достаточно экспортировать именно ее;
 - если вы переопределяете `CLI_AGENT_API_KEY_ENV_VAR`, нужно экспортировать ключ уже под новым именем.
+
+Если API key сохранен через `PUT /settings`, `CliAgentRunner` передает его subprocess-у через env с именем `CLI_AGENT_API_KEY_ENV_VAR`. Env процесса остается fallback-источником, когда runtime key не сохранен.
 
 Для OpenAI-compatible инстанса с нестандартным endpoint дополнительно нужен base URL:
 

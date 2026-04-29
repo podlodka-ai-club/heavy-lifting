@@ -17,6 +17,7 @@ This directory holds durable project knowledge for the Heavy Lifting orchestrato
 - Read `contracts/task-handoff.md` when working on task schemas, worker routing, or delivery semantics.
 - Read `contracts/triage-routing.md` when working on intake classification, triage outcomes, or the MVP routing matrix.
 - Read `contracts/event-ingestion.md` when working on tracker comments, PR feedback ingestion, or monitor responsibilities.
+- Read `contracts/rest-api.md` when working on Flask REST endpoints or frontend API calls.
 - Read `vision/roadmap.md` to place the current MVP in the larger delivery plan.
 - Read `process/worklog.md` before starting implementation work so local execution notes follow the expected shape.
 - Read `integrations/linear.md` when configuring `TRACKER_ADAPTER=linear` or changing how the orchestrator talks to Linear.

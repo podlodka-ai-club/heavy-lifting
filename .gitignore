@@ -31,3 +31,4 @@ worklog/
 !.env.example
 
 temp/
+var/

@@ -56,6 +56,8 @@ class Settings:
     app_name: str
     app_host: str
     app_port: int
+    runtime_settings_path: str
+    agent_prompts_dir: str
     database_url: str
     postgres_host: str
     postgres_port: int
@@ -111,6 +113,8 @@ def get_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "heavy-lifting-backend"),
         app_host=os.getenv("APP_HOST", "0.0.0.0"),
         app_port=_get_int("APP_PORT", 8000),
+        runtime_settings_path=os.getenv("RUNTIME_SETTINGS_PATH", "var/runtime-settings.json"),
+        agent_prompts_dir=os.getenv("AGENT_PROMPTS_DIR", "prompts/agents"),
         database_url=_build_database_url(
             postgres_host=postgres_host,
             postgres_port=postgres_port,

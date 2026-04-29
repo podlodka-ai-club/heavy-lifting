@@ -37,6 +37,45 @@ def _cached_openapi_schema() -> dict[str, Any]:
                 required=["external_id"],
                 properties={"external_id": {"type": "string"}},
             ),
+            "AgentPromptSettings": _object_schema(
+                required=["name", "prompt", "source"],
+                properties={
+                    "name": {"type": "string"},
+                    "prompt": {"type": "string"},
+                    "source": {"type": "string", "enum": ["default", "runtime"]},
+                },
+            ),
+            "ApiKeySettings": _object_schema(
+                required=["configured", "source", "env_var"],
+                properties={
+                    "configured": {"type": "boolean"},
+                    "source": {"type": "string", "enum": ["runtime", "env", "none"]},
+                    "env_var": {"type": ["string", "null"]},
+                },
+            ),
+            "SettingsResponse": _object_schema(
+                required=["api_key", "agents"],
+                properties={
+                    "api_key": {"$ref": "#/components/schemas/ApiKeySettings"},
+                    "agents": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/AgentPromptSettings"},
+                    },
+                },
+            ),
+            "SettingsUpdateRequest": _object_schema(
+                required=[],
+                properties={
+                    "api_key": {
+                        "type": ["string", "null"],
+                        "description": "New API key. Empty string or null clears runtime key.",
+                    },
+                    "prompts": {
+                        "type": ["object", "null"],
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+            ),
             "Task": _task_schema(),
             "TaskResponse": _object_schema(
                 required=["task"],
@@ -148,6 +187,35 @@ def _cached_openapi_schema() -> dict[str, Any]:
                         },
                     },
                 }
+            },
+            "/settings": {
+                "get": {
+                    "summary": "Get runtime API key status and agent prompts",
+                    "operationId": "getSettings",
+                    "tags": ["settings"],
+                    "responses": {
+                        "200": _json_response("Runtime settings", "SettingsResponse"),
+                    },
+                },
+                "put": {
+                    "summary": "Update runtime API key and agent prompt overrides",
+                    "operationId": "updateSettings",
+                    "tags": ["settings"],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SettingsUpdateRequest"
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": _json_response("Updated runtime settings", "SettingsResponse"),
+                        "400": _json_response("Payload validation failed", "ErrorResponse"),
+                    },
+                },
             },
         },
         "components": components,

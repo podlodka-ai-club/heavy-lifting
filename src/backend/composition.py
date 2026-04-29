@@ -134,6 +134,7 @@ def _build_cli_agent_runner(settings: Settings) -> AgentRunnerProtocol:
             profile=settings.cli_agent_profile,
             api_key_env_var=settings.cli_agent_api_key_env_var,
             base_url_env_var=settings.cli_agent_base_url_env_var,
+            runtime_settings_path=settings.runtime_settings_path,
         )
     )
 
