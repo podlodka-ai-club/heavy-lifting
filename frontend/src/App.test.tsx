@@ -173,6 +173,68 @@ const economicsSnapshot = {
   data_gaps: ["infra_cost", "runner_hours", "external_accounting_import", "retry_waste"]
 };
 
+const retroTags = [
+  {
+    tag: "acceptance-missing",
+    count: 8,
+    severity_counts: { error: 5, warning: 2, info: 1 },
+    first_seen: "2026-04-28T10:00:00+00:00",
+    last_seen: "2026-04-30T12:00:00+00:00",
+    affected_tasks_count: 4
+  },
+  {
+    tag: "slow-ci",
+    count: 3,
+    severity_counts: { warning: 3 },
+    first_seen: "2026-04-29T10:00:00+00:00",
+    last_seen: "2026-04-30T11:00:00+00:00",
+    affected_tasks_count: 2
+  },
+  {
+    tag: "trace-note",
+    count: 1,
+    severity_counts: { info: 1 },
+    first_seen: "2026-04-30T09:00:00+00:00",
+    last_seen: "2026-04-30T09:00:00+00:00",
+    affected_tasks_count: 1
+  }
+];
+
+const retroEntries = [
+  {
+    id: 101,
+    task_id: 20,
+    root_id: 10,
+    task_type: "execute",
+    role: "DEV",
+    attempt: 1,
+    source: "agent",
+    category: "requirements",
+    tag: "acceptance-missing",
+    severity: "error",
+    message: "Acceptance criteria were missing before implementation.",
+    suggested_action: "Ask for concrete acceptance criteria before coding.",
+    metadata: null,
+    created_at: "2026-04-30T12:00:00+00:00"
+  },
+  {
+    id: 102,
+    task_id: 21,
+    root_id: 10,
+    task_type: "pr_feedback",
+    role: "REVIEW",
+    attempt: 1,
+    source: "review",
+    category: "requirements",
+    tag: "acceptance-missing",
+    severity: "warning",
+    message: "Reviewer had to infer expected behavior.",
+    suggested_action: null,
+    metadata: {},
+    created_at: "2026-04-30T12:10:00+00:00"
+  }
+];
+
 describe("App", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/");
@@ -192,6 +254,7 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "heavy-lifting" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Factory" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Money" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retro" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Настройки" })).toBeInTheDocument();
   });
 
@@ -355,6 +418,108 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Economics unavailable");
+  });
+
+  it("opens retro from the topbar and shows loading state", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Retro" }));
+
+    expect(screen.getByText(/ретроспектива/)).toBeInTheDocument();
+    expect(screen.getByText("Загружаю боль системы...")).toBeInTheDocument();
+  });
+
+  it("loads retro tags, selects a tag, and keeps composer local-only", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "/api/retro/tags") {
+        return jsonResponse({ tags: retroTags });
+      }
+      if (url === "/api/retro/entries?tag=acceptance-missing&limit=10") {
+        return jsonResponse({ entries: retroEntries });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/retro");
+
+    render(<App />);
+
+    const tagButton = await screen.findByRole("button", {
+      name: "acceptance-missing: 8 entries, severity: error"
+    });
+    expect(tagButton).toHaveClass("rt-sev-error");
+    expect(screen.getByRole("button", { name: "slow-ci: 3 entries, severity: warning" }))
+      .toHaveClass("rt-sev-warning");
+    expect(within(screen.getByLabelText("Pain tag cloud")).getByRole("list"))
+      .toBeInTheDocument();
+
+    await userEvent.click(tagButton);
+
+    expect(await screen.findByText("Acceptance criteria were missing before implementation."))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Ask for concrete acceptance criteria before coding\./))
+      .toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/retro/tags");
+    expect(fetchMock).toHaveBeenCalledWith("/api/retro/entries?tag=acceptance-missing&limit=10");
+
+    const composer = screen.getByPlaceholderText(
+      'Когда встречается "acceptance-missing", агент должен...'
+    );
+    await userEvent.type(composer, "stop and ask for acceptance criteria");
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить локально" }));
+
+    expect(screen.getByText("Черновик сохранен локально")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows explicit empty retro state", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ tags: [] })));
+    window.history.pushState({}, "", "/retro");
+
+    render(<App />);
+
+    expect(await screen.findByText("Нет данных. Агенты пока не жаловались."))
+      .toBeInTheDocument();
+  });
+
+  it("shows retro tag and entry loading errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ error: "Retro tags unavailable" }, 500))
+    );
+    window.history.pushState({}, "", "/retro");
+
+    const { unmount } = render(<App />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retro tags unavailable");
+    unmount();
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "/api/retro/tags") {
+        return jsonResponse({ tags: retroTags });
+      }
+      if (url === "/api/retro/entries?tag=acceptance-missing&limit=10") {
+        return jsonResponse({ error: "Retro entries unavailable" }, 500);
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "acceptance-missing: 8 entries, severity: error"
+      })
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retro entries unavailable");
+    expect(screen.getByText("Нет записей")).toBeInTheDocument();
   });
 
   it("loads prompts, switches selection, and saves edited content", async () => {

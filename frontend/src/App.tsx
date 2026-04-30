@@ -3,12 +3,23 @@ import { useEffect, useState } from "react";
 import { EconomicsPage } from "./pages/economics/EconomicsPage";
 import { FactoryPage } from "./pages/factory/FactoryPage";
 import { HomePage } from "./pages/HomePage";
+import { RetroPage } from "./pages/retro/RetroPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 
-type Route = "/" | "/factory" | "/economics" | "/settings";
+type Route =
+  | "/"
+  | "/factory"
+  | "/economics"
+  | "/retro"
+  | "/settings";
 
 function getRoute(pathname: string): Route {
-  if (pathname === "/settings" || pathname === "/factory" || pathname === "/economics") {
+  if (
+    pathname === "/settings" ||
+    pathname === "/factory" ||
+    pathname === "/economics" ||
+    pathname === "/retro"
+  ) {
     return pathname;
   }
 
@@ -51,6 +62,13 @@ export function App() {
             Money
           </button>
           <button
+            className={route === "/retro" ? "nav-link active" : "nav-link"}
+            type="button"
+            onClick={() => navigate("/retro")}
+          >
+            Retro
+          </button>
+          <button
             className={route === "/settings" ? "nav-link active" : "nav-link"}
             type="button"
             onClick={() => navigate("/settings")}
@@ -62,6 +80,7 @@ export function App() {
       {route === "/settings" ? <SettingsPage /> : null}
       {route === "/factory" ? <FactoryPage /> : null}
       {route === "/economics" ? <EconomicsPage /> : null}
+      {route === "/retro" ? <RetroPage /> : null}
       {route === "/" ? <HomePage /> : null}
     </div>
   );

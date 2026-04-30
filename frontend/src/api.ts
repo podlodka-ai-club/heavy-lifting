@@ -227,6 +227,47 @@ export async function generateMockRevenue(): Promise<MockRevenueResult> {
   return parseJsonResponse<MockRevenueResult>(response);
 }
 
+export type RetroTag = {
+  tag: string;
+  count: number;
+  severity_counts: Record<string, number>;
+  first_seen: string;
+  last_seen: string;
+  affected_tasks_count: number;
+};
+
+export type RetroEntry = {
+  id: number;
+  task_id: number;
+  root_id: number;
+  task_type: string;
+  role: string | null;
+  attempt: number;
+  source: string;
+  category: string | null;
+  tag: string;
+  severity: "error" | "warning" | "info" | string;
+  message: string;
+  suggested_action: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export async function listRetroTags(): Promise<RetroTag[]> {
+  const response = await fetch("/api/retro/tags");
+  const payload = await parseJsonResponse<{ tags: RetroTag[] }>(response);
+  return payload.tags;
+}
+
+export async function listRetroEntries(tag?: string, limit = 20): Promise<RetroEntry[]> {
+  const params = new URLSearchParams();
+  if (tag) params.set("tag", tag);
+  params.set("limit", String(limit));
+  const response = await fetch(`/api/retro/entries?${params}`);
+  const payload = await parseJsonResponse<{ entries: RetroEntry[] }>(response);
+  return payload.entries;
+}
+
 export async function upsertRevenue(
   rootTaskId: number,
   payload: RevenueUpsertPayload
