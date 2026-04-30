@@ -11,12 +11,20 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.bootstrap_db import bootstrap_schema
 from backend.db import build_engine, build_session_factory, get_session_factory, session_scope
-from backend.models import RevenueConfidence, RevenueSource, Task, TaskRevenue, TokenUsage
+from backend.models import (
+    AgentFeedbackEntry,
+    RevenueConfidence,
+    RevenueSource,
+    Task,
+    TaskRevenue,
+    TokenUsage,
+)
 from backend.repositories.task_repository import (
     TaskCreateParams,
     TaskRepository,
     TokenUsageCreateParams,
 )
+from backend.services.retro_service import RetroService
 from backend.task_constants import TaskStatus, TaskType
 
 DEMO_EXTERNAL_ID_PREFIX = "FRONTEND-DEMO-"
@@ -29,6 +37,7 @@ class FrontendDemoSeedResult:
     tasks_count: int
     token_usage_count: int
     revenue_count: int
+    retro_entries_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +58,17 @@ class StationTaskSpec:
     status: TaskStatus
     age_hours: int
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RetroFeedbackSpec:
+    task_slug: str
+    tag: str
+    category: str
+    severity: str
+    message: str
+    suggested_action: str
+    age_hours: int
 
 
 _CLOSED_ROOT_SPECS = (
@@ -128,6 +148,110 @@ _STATION_TASK_SPECS = (
     StationTaskSpec("deliver-active", TaskType.DELIVER, TaskStatus.PROCESSING, 2),
 )
 
+_RETRO_FEEDBACK_SPECS = (
+    RetroFeedbackSpec(
+        task_slug="billing-alerts-execute",
+        tag="acceptance-missing",
+        category="requirements",
+        severity="error",
+        message=(
+            "Implementation started before the acceptance criteria named the observable UI states."
+        ),
+        suggested_action="Ask for explicit acceptance criteria before editing source files.",
+        age_hours=72,
+    ),
+    RetroFeedbackSpec(
+        task_slug="execute-api-new",
+        tag="acceptance-missing",
+        category="requirements",
+        severity="warning",
+        message="The task needed a tighter definition of done for API response behavior.",
+        suggested_action="Turn vague expected behavior into concrete request/response examples.",
+        age_hours=44,
+    ),
+    RetroFeedbackSpec(
+        task_slug="feedback-blocked",
+        tag="acceptance-missing",
+        category="review",
+        severity="info",
+        message="Review feedback found assumptions that were not written in the task.",
+        suggested_action="Record assumptions in the worklog before implementation continues.",
+        age_hours=20,
+    ),
+    RetroFeedbackSpec(
+        task_slug="ops-console-feedback",
+        tag="slow-ci",
+        category="checks",
+        severity="warning",
+        message="Frontend and backend checks were rerun separately after a late routing fix.",
+        suggested_action="Run focused checks first, then one final combined verification pass.",
+        age_hours=66,
+    ),
+    RetroFeedbackSpec(
+        task_slug="deliver-active",
+        tag="slow-ci",
+        category="checks",
+        severity="info",
+        message="Build output was healthy but slow enough to hide the failing test signal.",
+        suggested_action="Keep the shortest failing command in the progress log.",
+        age_hours=18,
+    ),
+    RetroFeedbackSpec(
+        task_slug="execute-flaky-failed",
+        tag="flaky-tests",
+        category="testing",
+        severity="error",
+        message="A retry passed locally after the first test run failed on timing.",
+        suggested_action="Stabilize async waits instead of accepting a green rerun.",
+        age_hours=58,
+    ),
+    RetroFeedbackSpec(
+        task_slug="release-guard-feedback",
+        tag="flaky-tests",
+        category="testing",
+        severity="warning",
+        message="Animation state made the UI assertion timing-sensitive.",
+        suggested_action="Use reduced-motion test coverage for animated UI paths.",
+        age_hours=38,
+    ),
+    RetroFeedbackSpec(
+        task_slug="execute-docs-new",
+        tag="ambiguous-reqs",
+        category="requirements",
+        severity="warning",
+        message="The requested page concept mixed visual direction with missing data contracts.",
+        suggested_action="Separate visual concept requirements from backend data availability.",
+        age_hours=50,
+    ),
+    RetroFeedbackSpec(
+        task_slug="intake-queue",
+        tag="ambiguous-reqs",
+        category="intake",
+        severity="info",
+        message="The initial task omitted which unrelated local files were safe to ignore.",
+        suggested_action="List out-of-scope dirty files before the first edit.",
+        age_hours=12,
+    ),
+    RetroFeedbackSpec(
+        task_slug="execute-schema-failed",
+        tag="docker-fail",
+        category="environment",
+        severity="error",
+        message="Container bootstrap failed because the local database schema was older than code.",
+        suggested_action="Run the explicit bootstrap command before demo presentation setup.",
+        age_hours=30,
+    ),
+    RetroFeedbackSpec(
+        task_slug="execute-auth-new",
+        tag="auth-error",
+        category="integration",
+        severity="error",
+        message="A mocked auth path masked the real token validation error until review.",
+        suggested_action="Keep auth failures visible in mocked integration paths.",
+        age_hours=8,
+    ),
+)
+
 
 def seed_frontend_demo(
     *,
@@ -141,6 +265,7 @@ def seed_frontend_demo(
         created_tasks: list[Task] = []
         created_token_usage: list[TokenUsage] = []
         created_revenues: list[TaskRevenue] = []
+        created_retro_entries: list[AgentFeedbackEntry] = []
 
         for closed_root_spec in _CLOSED_ROOT_SPECS:
             tasks_by_type = _create_closed_root(
@@ -183,12 +308,22 @@ def seed_frontend_demo(
             task = _create_station_task(repository, spec=station_task_spec, now=now)
             created_tasks.append(task)
 
+        tasks_by_slug = {
+            task.external_task_id.removeprefix(DEMO_EXTERNAL_ID_PREFIX): task
+            for task in created_tasks
+            if task.external_task_id is not None
+        }
+        created_retro_entries.extend(
+            _create_retro_feedback(session, tasks_by_slug=tasks_by_slug, now=now)
+        )
+
         session.flush()
 
         return FrontendDemoSeedResult(
             tasks_count=len(created_tasks),
             token_usage_count=len(created_token_usage),
             revenue_count=len(created_revenues),
+            retro_entries_count=len(created_retro_entries),
         )
 
 
@@ -210,6 +345,7 @@ def _remove_existing_demo_rows(session: Session) -> None:
         ).scalars()
     )
 
+    session.execute(delete(AgentFeedbackEntry).where(AgentFeedbackEntry.task_id.in_(demo_task_ids)))
     session.execute(delete(TokenUsage).where(TokenUsage.task_id.in_(demo_task_ids)))
     if demo_root_ids:
         session.execute(delete(TaskRevenue).where(TaskRevenue.root_task_id.in_(demo_root_ids)))
@@ -310,6 +446,42 @@ def _create_station_task(
     return task
 
 
+def _create_retro_feedback(
+    session: Session,
+    *,
+    tasks_by_slug: dict[str, Task],
+    now: datetime,
+) -> list[AgentFeedbackEntry]:
+    service = RetroService(session)
+    entries: list[AgentFeedbackEntry] = []
+
+    for spec in _RETRO_FEEDBACK_SPECS:
+        task = tasks_by_slug[spec.task_slug]
+        created_entries = service.record_agent_feedback(
+            task=task,
+            result_metadata={
+                "agent_retro": [
+                    {
+                        "tag": spec.tag,
+                        "category": spec.category,
+                        "severity": spec.severity,
+                        "message": spec.message,
+                        "suggested_action": spec.suggested_action,
+                        "metadata": {
+                            "seed": "frontend-demo",
+                            "task_slug": spec.task_slug,
+                        },
+                    }
+                ]
+            },
+        )
+        for entry in created_entries:
+            entry.created_at = now - timedelta(hours=spec.age_hours)
+            entries.append(entry)
+
+    return entries
+
+
 def _task_params(
     *,
     task_type: TaskType,
@@ -371,7 +543,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "Frontend demo data is ready; "
         f"tasks={result.tasks_count}, "
         f"token_usage={result.token_usage_count}, "
-        f"revenues={result.revenue_count}"
+        f"revenues={result.revenue_count}, "
+        f"retro_entries={result.retro_entries_count}"
     )
     return 0
 

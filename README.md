@@ -131,7 +131,7 @@ make bootstrap-db
 make api
 ```
 
-Для презентационного frontend-сценария можно отдельно наполнить существующую БД curated demo data. Это не меняет поведение `make demo` и не запускает workers:
+Для презентационного frontend-сценария можно отдельно наполнить существующую БД curated demo data для Factory, Money и Retro. Это не меняет поведение `make demo` и не запускает workers:
 
 ```bash
 make demo-seed-frontend
