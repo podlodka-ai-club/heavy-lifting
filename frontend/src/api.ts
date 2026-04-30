@@ -60,13 +60,13 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 }
 
 export async function listPrompts(): Promise<Prompt[]> {
-  const response = await fetch("/prompts");
+  const response = await fetch("/api/prompts");
   const payload = await parseJsonResponse<PromptListResponse>(response);
   return payload.prompts;
 }
 
 export async function updatePrompt(promptKey: string, content: string): Promise<Prompt> {
-  const response = await fetch(`/prompts/${encodeURIComponent(promptKey)}`, {
+  const response = await fetch(`/api/prompts/${encodeURIComponent(promptKey)}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json"
@@ -78,6 +78,6 @@ export async function updatePrompt(promptKey: string, content: string): Promise<
 }
 
 export async function getFactorySnapshot(): Promise<FactorySnapshot> {
-  const response = await fetch("/factory");
+  const response = await fetch("/api/factory");
   return parseJsonResponse<FactorySnapshot>(response);
 }

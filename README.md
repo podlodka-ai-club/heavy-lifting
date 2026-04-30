@@ -113,7 +113,7 @@ curl -X POST http://127.0.0.1:8000/tasks/intake \
 
 ## Локальный frontend
 
-Frontend живет в `frontend/` и запускается через Vite. В стандартном локальном режиме он ходит в backend через dev proxy: запросы `/factory` и `/prompts` проксируются на `http://127.0.0.1:8000`, поэтому CORS для backend не нужен.
+Frontend живет в `frontend/` и запускается через Vite. В стандартном локальном режиме он ходит в backend через dev proxy: запросы `/api/*` проксируются на `http://127.0.0.1:8000` с удалением prefix `/api`, поэтому CORS для backend не нужен, а frontend route `/factory` можно открывать напрямую.
 
 Подготовить зависимости:
 

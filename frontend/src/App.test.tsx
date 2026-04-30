@@ -115,7 +115,7 @@ describe("App", () => {
 
   it("loads factory snapshot and renders live station data with explicit gaps", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (input.toString() === "/factory") {
+      if (input.toString() === "/api/factory") {
         return jsonResponse(factorySnapshot);
       }
 
@@ -143,7 +143,7 @@ describe("App", () => {
     expect(screen.getByText("Не показываем то, чего нет в API")).toBeInTheDocument();
     expect(screen.getByText("transition_history")).toBeInTheDocument();
     expect(screen.getByText("worker_capacity")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/factory");
+    expect(fetchMock).toHaveBeenCalledWith("/api/factory");
   });
 
   it("shows backend errors while loading factory", async () => {
@@ -159,11 +159,11 @@ describe("App", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
 
-      if (url === "/prompts" && !init) {
+      if (url === "/api/prompts" && !init) {
         return jsonResponse({ prompts });
       }
 
-      if (url === "/prompts/review" && init?.method === "PATCH") {
+      if (url === "/api/prompts/review" && init?.method === "PATCH") {
         return jsonResponse({
           prompt: {
             ...prompts[1],
@@ -191,7 +191,7 @@ describe("App", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/prompts/review",
+        "/api/prompts/review",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ content: "Updated REVIEW prompt" })
