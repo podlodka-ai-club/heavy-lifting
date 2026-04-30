@@ -1,0 +1,131 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  APP_IMAGE_REPOSITORY: ghcr.io/podlodka-ai-club/heavy-lifting
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: make lint
+
+      - name: Typecheck
+        run: make typecheck
+
+      - name: Test
+        run: make test
+
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build image
+        run: |
+          docker build \
+            --tag "${APP_IMAGE_REPOSITORY}:master" \
+            --tag "${APP_IMAGE_REPOSITORY}:sha-${GITHUB_SHA}" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "${APP_IMAGE_REPOSITORY}:master"
+          docker push "${APP_IMAGE_REPOSITORY}:sha-${GITHUB_SHA}"
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy to VPS
+        env:
+          APP_IMAGE: ghcr.io/podlodka-ai-club/heavy-lifting:sha-${{ github.sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
+        run: |
+          set -euo pipefail
+
+          SSH_TARGET="${VPS_USER}@${VPS_HOST}"
+          SSH_PORT="${VPS_PORT:-22}"
+
+          ssh -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p \"$VPS_APP_DIR\""
+          scp -P "$SSH_PORT" docker-compose.prod.yml "$SSH_TARGET:$VPS_APP_DIR/docker-compose.prod.yml"
+
+          ssh -p "$SSH_PORT" "$SSH_TARGET" "APP_IMAGE='$APP_IMAGE' VPS_APP_DIR='$VPS_APP_DIR' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          cd "$VPS_APP_DIR"
+          test -f .env.production
+
+          docker compose --env-file .env.production -f docker-compose.prod.yml pull
+          docker compose --env-file .env.production -f docker-compose.prod.yml run --rm bootstrap
+          docker compose --env-file .env.production -f docker-compose.prod.yml up -d --remove-orphans
+
+          APP_PORT=8000
+          while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+              APP_PORT=*)
+                APP_PORT="${line#APP_PORT=}"
+                APP_PORT="${APP_PORT%\"}"
+                APP_PORT="${APP_PORT#\"}"
+                APP_PORT="${APP_PORT%\'}"
+                APP_PORT="${APP_PORT#\'}"
+                APP_PORT="${APP_PORT:-8000}"
+                break
+                ;;
+            esac
+          done < .env.production
+
+          healthcheck_url="http://127.0.0.1:${APP_PORT}/health"
+          ready=0
+          attempt=1
+          while [ "$attempt" -le 30 ]; do
+            echo "Checking API readiness (${attempt}/30): ${healthcheck_url}"
+            if curl -fsS "$healthcheck_url"; then
+              ready=1
+              break
+            fi
+            sleep 2
+            attempt=$((attempt + 1))
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "API did not become ready before timeout" >&2
+            docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=100 api >&2 || true
+            exit 1
+          fi
+          REMOTE

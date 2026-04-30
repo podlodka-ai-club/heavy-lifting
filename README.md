@@ -162,6 +162,8 @@ make frontend-build
 - установленный `uv`;
 - Docker и Docker Compose для локального Postgres.
 
+Production-деплой на VPS через GHCR и Docker Compose описан в [docs/deploy/vps.md](docs/deploy/vps.md).
+
 Базовая установка:
 
 ```bash

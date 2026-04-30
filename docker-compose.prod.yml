@@ -1,0 +1,85 @@
+x-app: &app
+  image: ${APP_IMAGE:?APP_IMAGE is required}
+  env_file:
+    - .env.production
+  depends_on:
+    postgres:
+      condition: service_healthy
+  volumes:
+    - workspace_repos:/workspace/repos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - .env.production
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  bootstrap:
+    <<: *app
+    profiles:
+      - bootstrap
+    command: ["uv", "run", "heavy-lifting-bootstrap-db"]
+
+  api:
+    <<: *app
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    command:
+      [
+        "sh",
+        "-c",
+        "exec uv run gunicorn 'backend.api.app:create_app()' --bind 0.0.0.0:8000 --workers $${WEB_CONCURRENCY:-2} --timeout $${GUNICORN_TIMEOUT:-120}",
+      ]
+    restart: unless-stopped
+
+  worker1:
+    <<: *app
+    command:
+      [
+        "uv",
+        "run",
+        "python",
+        "-c",
+        "from backend.workers.fetch_worker import run; run()",
+      ]
+    restart: unless-stopped
+
+  worker2:
+    <<: *app
+    command:
+      [
+        "uv",
+        "run",
+        "python",
+        "-c",
+        "from backend.workers.execute_worker import run; run()",
+      ]
+    restart: unless-stopped
+
+  worker3:
+    <<: *app
+    command:
+      [
+        "uv",
+        "run",
+        "python",
+        "-c",
+        "from backend.workers.deliver_worker import run; run()",
+      ]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  workspace_repos:
