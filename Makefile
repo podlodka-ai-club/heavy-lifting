@@ -1,4 +1,4 @@
-.PHONY: install init install-git-hooks clean api worker1 worker2 worker3 demo lint typecheck test bootstrap-db init-db
+.PHONY: install init install-git-hooks clean api worker1 worker2 worker3 demo lint typecheck test bootstrap-db init-db frontend-install frontend-dev frontend-build frontend-test
 
 
 install: init
@@ -50,3 +50,15 @@ bootstrap-db:
 	uv run heavy-lifting-bootstrap-db
 
 init-db: bootstrap-db
+
+frontend-install:
+	cd frontend && npm ci
+
+frontend-dev:
+	cd frontend && npm run dev
+
+frontend-build:
+	cd frontend && npm run build
+
+frontend-test:
+	cd frontend && npm test

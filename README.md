@@ -34,11 +34,14 @@
 - `GET /tasks`
 - `GET /tasks/<id>`
 - `GET /stats`
+- `GET /prompts`
+- `PATCH /prompts/<prompt_key>`
 - `POST /tasks/intake`
 
 ## Структура репозитория
 
 - `src/backend` — код приложения;
+- `frontend` — локальное React-приложение для просмотра и редактирования настроек;
 - `tests` — тесты;
 - `docs/` — долговечная документация по системе и процессам;
 - `docs/vision/system.md` — актуальное vision и границы MVP;
@@ -106,6 +109,39 @@ curl -X POST http://127.0.0.1:8000/tasks/intake \
 ```
 
 Ожидаемый результат: `201 Created` и JSON с `external_id`. После этого `make demo` должен сам протащить задачу через `worker1 -> worker2 -> worker3`.
+
+## Локальный frontend
+
+Frontend живет в `frontend/` и запускается через Vite. В стандартном локальном режиме он ходит в backend через dev proxy: запросы `/prompts` проксируются на `http://127.0.0.1:8000`, поэтому CORS для backend не нужен.
+
+Подготовить зависимости:
+
+```bash
+make frontend-install
+```
+
+Запуск backend API:
+
+```bash
+export DATABASE_URL=postgresql://heavy_lifting:heavy_lifting@localhost:5432/heavy_lifting
+make bootstrap-db
+make api
+```
+
+Запуск frontend в отдельном терминале:
+
+```bash
+make frontend-dev
+```
+
+После запуска Vite откройте `http://127.0.0.1:5173`. Главная страница показывает `heavy-lifting`, а в настройках можно редактировать промты агентов из backend API.
+
+Проверки frontend:
+
+```bash
+make frontend-test
+make frontend-build
+```
 
 ## Локальная установка через `uv`
 
