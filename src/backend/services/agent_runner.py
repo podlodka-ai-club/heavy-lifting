@@ -24,6 +24,7 @@ class CliAgentRunnerConfig:
     profile: str | None = None
     api_key_env_var: str | None = None
     base_url_env_var: str | None = None
+    preview_chars: int = 1000
 
 
 @dataclass(slots=True)
@@ -339,12 +340,13 @@ class CliAgentRunner:
             return None
         return "\n".join(details)
 
-    def _build_preview(self, value: str | None, limit: int = 1000) -> str | None:
+    def _build_preview(self, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()
         if not normalized:
             return None
+        limit = self.config.preview_chars
         if len(normalized) <= limit:
             return normalized
         return normalized[: limit - 3] + "..."

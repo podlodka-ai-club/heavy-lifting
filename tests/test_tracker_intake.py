@@ -747,6 +747,8 @@ def test_build_tracker_intake_worker_uses_runtime_settings(session_factory) -> N
             get_settings(),
             tracker_poll_interval=12,
             pr_poll_interval=7,
+            tracker_fetch_limit=44,
+            pr_feedback_fetch_limit=11,
             tracker_adapter="mock",
         ),
         tracker=MockTracker(),
@@ -761,6 +763,8 @@ def test_build_tracker_intake_worker_uses_runtime_settings(session_factory) -> N
     assert worker.tracker_name == "mock"
     assert worker.poll_interval == 12
     assert worker.pr_poll_interval == 7
+    assert worker.fetch_limit == 44
+    assert worker.feedback_limit == 11
     assert worker.session_factory is session_factory
 
 

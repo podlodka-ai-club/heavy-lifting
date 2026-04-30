@@ -100,10 +100,11 @@ The MVP intentionally stays narrow:
 - explicit worker pipeline for intake, execution, and delivery;
 - protocol boundaries around tracker and SCM integrations;
 - local development support through `MockTracker` and `MockScm`;
-- durable persistence for orchestration tasks, token usage, and seeded default agent prompts;
+- durable persistence for orchestration tasks, token usage, seeded default agent prompts, and non-secret runtime settings;
 - machine-readable OpenAPI schema through `GET /openapi.json`;
 - read-only operational factory view through `GET /factory`;
 - prompt-management API for listing stored agent prompts, reading one prompt, and updating prompt content;
+- runtime-settings API for listing and updating persisted non-secret operational settings;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
 - selection of previously estimated small tracker tasks into one executable subtask through the tracker boundary contract, with duplicate parent selection blocked through tracker metadata.

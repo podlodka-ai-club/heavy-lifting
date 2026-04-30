@@ -135,12 +135,17 @@ Current MVP mapping:
 | Output JSON | `tasks.result_payload` |
 | Statistics database | `token_usage` table and stats endpoint |
 | Agent prompt defaults | `agent_prompts` table seeded from `prompts/agents/*.md` during DB bootstrap and exposed through `/prompts` API endpoints |
+| Runtime setting defaults | `application_settings` table seeded during DB bootstrap and exposed through `/settings` API endpoints |
 | Task watcher loop | Worker 1 |
 | Subagent launcher loop | Worker 2 |
 | Result processing loop | Worker 2 finalization and Worker 3 delivery |
 
 Default agent prompts are stored durably and can be listed, read, and edited through the API,
 but current runner behavior does not read prompts from the database.
+
+Runtime settings for non-secret operational values are also stored durably. Env values provide
+bootstrap defaults, persisted DB values take priority on process startup, and UI edits apply after
+API/worker restart.
 
 ## Backlog From Scheme
 

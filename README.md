@@ -35,6 +35,8 @@
 - `GET /tasks/<id>`
 - `GET /stats`
 - `GET /factory`
+- `GET /settings`
+- `PATCH /settings/<setting_key>`
 - `GET /prompts`
 - `PATCH /prompts/<prompt_key>`
 - `POST /tasks/intake`
@@ -113,7 +115,7 @@ curl -X POST http://127.0.0.1:8000/tasks/intake \
 
 ## Локальный frontend
 
-Frontend живет в `frontend/` и запускается через Vite. В стандартном локальном режиме он ходит в backend через dev proxy: запросы `/api/*` проксируются на `http://127.0.0.1:8000` с удалением prefix `/api`, поэтому CORS для backend не нужен, а frontend route `/factory` можно открывать напрямую.
+Frontend живет в `frontend/` и запускается через Vite. В стандартном локальном режиме он ходит в backend через dev proxy: запросы `/api/*` проксируются на `http://127.0.0.1:8000` с удалением prefix `/api`, поэтому CORS для backend не нужен, а frontend routes `/factory` и `/settings` можно открывать напрямую.
 
 Подготовить зависимости:
 
@@ -135,7 +137,7 @@ make api
 make frontend-dev
 ```
 
-После запуска Vite откройте `http://127.0.0.1:5173`. Главная страница показывает `heavy-lifting`, `/factory` показывает live factory map по backend snapshot, а в настройках можно редактировать промты агентов из backend API.
+После запуска Vite откройте `http://127.0.0.1:5173`. Главная страница показывает `heavy-lifting`, `/factory` показывает live factory map по backend snapshot, а в настройках можно редактировать runtime-настройки и промты агентов из backend API.
 
 Проверки frontend:
 
@@ -262,6 +264,7 @@ export OPENAI_API_KEY=replace-me
 - `CLI_AGENT_PROFILE` — сохраняется в metadata результата, но сейчас не мапится в CLI args;
 - `CLI_AGENT_API_KEY_ENV_VAR` — имя env с API key, по умолчанию `OPENAI_API_KEY`;
 - `CLI_AGENT_BASE_URL_ENV_VAR` — имя env с base URL, по умолчанию `OPENAI_BASE_URL`.
+- `CLI_AGENT_PREVIEW_CHARS` — длина stdout/stderr preview в metadata, по умолчанию `1000`.
 
 Пример расширенной настройки:
 
@@ -274,6 +277,27 @@ export CLI_AGENT_PROVIDER=openai
 export CLI_AGENT_MODEL=gpt-5.4
 export OPENAI_API_KEY=replace-me
 ```
+
+### Runtime-настройки в БД
+
+`make bootstrap-db` создает таблицу `application_settings` и предзаполняет шесть несекретных runtime-настроек:
+
+- `TRACKER_FETCH_LIMIT=100`
+- `PR_FEEDBACK_FETCH_LIMIT=100`
+- `LOCAL_AGENT_PROVIDER=openai`
+- `LOCAL_AGENT_MODEL=gpt-5.4`
+- `LOCAL_AGENT_NAME=local-placeholder-runner`
+- `CLI_AGENT_PREVIEW_CHARS=1000`
+
+Env-переменные используются как bootstrap defaults. После создания записей значение из БД имеет приоритет над env и редактируется через `/settings` во frontend или через API:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/settings/tracker_fetch_limit \
+  -H 'Content-Type: application/json' \
+  -d '{"value":"25"}'
+```
+
+Изменения runtime-настроек применяются после рестарта API и воркеров.
 
 ## Подготовка базы данных
 
@@ -291,7 +315,7 @@ uv run heavy-lifting-bootstrap-db
 
 Команда:
 
-- создает только таблицы `tasks` и `token_usage`;
+- создает MVP-таблицы `tasks`, `token_usage`, `agent_prompts` и `application_settings`;
 - безопасна для повторного запуска;
 - поддерживает разовый override подключения.
 

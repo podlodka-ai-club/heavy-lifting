@@ -184,6 +184,29 @@ h2 {
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.settings-tab {
+  background: rgba(23, 17, 11, 0.58);
+  border: 1px solid var(--edge-soft);
+  border-radius: 6px;
+  color: var(--muted);
+  font-weight: 800;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.settings-tab:hover,
+.settings-tab.active {
+  background: rgba(255, 131, 28, 0.1);
+  border-color: var(--edge);
+  color: var(--text);
+}
+
 .prompt-list {
   border-right: 1px solid var(--edge-soft);
   display: flex;
@@ -222,6 +245,7 @@ h2 {
   color: var(--muted);
 }
 
+.runtime-settings-panel,
 .prompt-editor,
 .hud-panel,
 .gaps-panel,
@@ -236,6 +260,42 @@ h2 {
 .prompt-editor {
   border-radius: 8px;
   padding: 18px;
+}
+
+.runtime-settings-panel {
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.runtime-settings-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.runtime-setting-row {
+  align-items: center;
+  background: rgba(23, 17, 11, 0.42);
+  border: 1px solid var(--edge-soft);
+  border-radius: 6px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px);
+  padding: 12px;
+}
+
+.runtime-setting-row span,
+.runtime-setting-row small {
+  display: block;
+}
+
+.runtime-setting-row strong {
+  overflow-wrap: anywhere;
+}
+
+.runtime-setting-row small {
+  color: var(--muted);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
 }
 
 .editor-header {
@@ -254,17 +314,26 @@ h2 {
   margin-bottom: 8px;
 }
 
+input,
 textarea {
   background: var(--field);
   border: 1px solid var(--edge);
   border-radius: 6px;
   color: var(--text);
-  min-height: 420px;
   padding: 12px;
-  resize: vertical;
   width: 100%;
 }
 
+input {
+  min-height: 42px;
+}
+
+textarea {
+  min-height: 420px;
+  resize: vertical;
+}
+
+input:focus,
 textarea:focus,
 button:focus-visible {
   outline: 3px solid rgba(110, 225, 255, 0.52);
@@ -844,6 +913,7 @@ button:focus-visible {
   }
 
   .settings-layout,
+  .runtime-setting-row,
   .station-grid {
     grid-template-columns: 1fr;
   }

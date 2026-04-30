@@ -112,8 +112,12 @@ def _build_github_scm(settings: Settings) -> ScmProtocol:
     return GitHubScm(config)
 
 
-def _build_local_agent_runner(_: Settings) -> AgentRunnerProtocol:
-    return LocalAgentRunner()
+def _build_local_agent_runner(settings: Settings) -> AgentRunnerProtocol:
+    return LocalAgentRunner(
+        provider=settings.local_agent_provider,
+        model=settings.local_agent_model,
+        name=settings.local_agent_name,
+    )
 
 
 def _build_cli_agent_runner(settings: Settings) -> AgentRunnerProtocol:
@@ -123,6 +127,8 @@ def _build_cli_agent_runner(settings: Settings) -> AgentRunnerProtocol:
         raise ValueError("CLI agent runner subcommand must not be empty")
     if settings.cli_agent_timeout_seconds <= 0:
         raise ValueError("CLI agent runner timeout must be greater than 0")
+    if settings.cli_agent_preview_chars <= 0:
+        raise ValueError("CLI agent runner preview chars must be greater than 0")
 
     return CliAgentRunner(
         config=CliAgentRunnerConfig(
@@ -134,6 +140,7 @@ def _build_cli_agent_runner(settings: Settings) -> AgentRunnerProtocol:
             profile=settings.cli_agent_profile,
             api_key_env_var=settings.cli_agent_api_key_env_var,
             base_url_env_var=settings.cli_agent_base_url_env_var,
+            preview_chars=settings.cli_agent_preview_chars,
         )
     )
 

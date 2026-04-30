@@ -4,6 +4,7 @@ from sqlalchemy.orm import configure_mappers
 from backend.db import build_engine
 from backend.models import (
     AgentPrompt,
+    ApplicationSetting,
     Base,
     Task,
     TokenUsage,
@@ -180,6 +181,63 @@ def test_agent_prompts_table_has_prompt_key_index_and_unique_constraint(tmp_path
 
     assert indexes["ix_agent_prompts_prompt_key"] == ("prompt_key",)
     assert unique_constraints["uq_agent_prompts_prompt_key"] == ("prompt_key",)
+
+
+def test_application_settings_table_contains_default_columns(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+
+    columns = {
+        column["name"]: column
+        for column in inspect(engine).get_columns(ApplicationSetting.__tablename__)
+    }
+
+    assert set(columns) == {
+        "id",
+        "setting_key",
+        "env_var",
+        "value_type",
+        "value",
+        "default_value",
+        "description",
+        "display_order",
+        "created_at",
+        "updated_at",
+    }
+    assert columns["id"]["primary_key"] == 1
+    assert columns["setting_key"]["nullable"] is False
+    assert columns["env_var"]["nullable"] is False
+    assert columns["value_type"]["nullable"] is False
+    assert columns["value"]["nullable"] is False
+    assert columns["default_value"]["nullable"] is False
+    assert columns["description"]["nullable"] is False
+    assert columns["display_order"]["nullable"] is False
+
+
+def test_application_settings_table_has_indexes_and_unique_constraint(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+
+    inspector = inspect(engine)
+    indexes = {
+        index["name"]: tuple(index["column_names"])
+        for index in inspector.get_indexes(ApplicationSetting.__tablename__)
+    }
+    unique_constraints = {
+        constraint["name"]: tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints(ApplicationSetting.__tablename__)
+    }
+    check_constraints = {
+        constraint["name"]: constraint["sqltext"]
+        for constraint in inspector.get_check_constraints(ApplicationSetting.__tablename__)
+    }
+
+    assert indexes["ix_application_settings_setting_key"] == ("setting_key",)
+    assert indexes["ix_application_settings_display_order"] == ("display_order",)
+    assert unique_constraints["uq_application_settings_setting_key"] == ("setting_key",)
+    assert check_constraints["ck_application_settings_value_type"] == (
+        "value_type IN ('int', 'string')"
+    )
 
 
 def test_task_and_token_usage_relationships_are_linked() -> None:

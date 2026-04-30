@@ -55,6 +55,24 @@ def _cached_openapi_schema() -> dict[str, Any]:
                 required=["content"],
                 properties={"content": {"type": "string"}},
             ),
+            "ApplicationSetting": _application_setting_schema(),
+            "ApplicationSettingResponse": _object_schema(
+                required=["setting"],
+                properties={"setting": {"$ref": "#/components/schemas/ApplicationSetting"}},
+            ),
+            "ApplicationSettingsListResponse": _object_schema(
+                required=["settings"],
+                properties={
+                    "settings": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/ApplicationSetting"},
+                    }
+                },
+            ),
+            "SettingUpdatePayload": _object_schema(
+                required=["value"],
+                properties={"value": {"type": "string"}},
+            ),
             "Task": _task_schema(),
             "TaskResponse": _object_schema(
                 required=["task"],
@@ -156,6 +174,43 @@ def _cached_openapi_schema() -> dict[str, Any]:
                         "200": _json_response("Updated agent prompt", "AgentPromptResponse"),
                         "400": _json_response("Payload validation failed", "ErrorResponse"),
                         "404": _json_response("Prompt was not found", "ErrorResponse"),
+                    },
+                },
+            },
+            "/settings": {
+                "get": {
+                    "summary": "List persisted runtime settings",
+                    "operationId": "listSettings",
+                    "tags": ["settings"],
+                    "responses": {
+                        "200": _json_response(
+                            "List of persisted runtime settings",
+                            "ApplicationSettingsListResponse",
+                        ),
+                    },
+                }
+            },
+            "/settings/{setting_key}": {
+                "patch": {
+                    "summary": "Update a persisted runtime setting",
+                    "operationId": "updateSetting",
+                    "tags": ["settings"],
+                    "parameters": [_setting_key_parameter()],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/SettingUpdatePayload"}
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": _json_response(
+                            "Updated runtime setting",
+                            "ApplicationSettingResponse",
+                        ),
+                        "400": _json_response("Payload validation failed", "ErrorResponse"),
+                        "404": _json_response("Setting was not found", "ErrorResponse"),
                     },
                 },
             },
@@ -291,6 +346,15 @@ def _prompt_key_parameter() -> dict[str, Any]:
     }
 
 
+def _setting_key_parameter() -> dict[str, Any]:
+    return {
+        "name": "setting_key",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1},
+    }
+
+
 def _agent_prompt_schema() -> dict[str, Any]:
     return _object_schema(
         required=[
@@ -306,6 +370,37 @@ def _agent_prompt_schema() -> dict[str, Any]:
             "prompt_key": {"type": "string"},
             "source_path": {"type": "string"},
             "content": {"type": "string"},
+            "created_at": {"type": "string", "format": "date-time"},
+            "updated_at": {"type": "string", "format": "date-time"},
+        },
+    )
+
+
+def _application_setting_schema() -> dict[str, Any]:
+    return _object_schema(
+        required=[
+            "id",
+            "setting_key",
+            "env_var",
+            "value_type",
+            "value",
+            "default_value",
+            "description",
+            "display_order",
+            "requires_restart",
+            "created_at",
+            "updated_at",
+        ],
+        properties={
+            "id": {"type": "integer"},
+            "setting_key": {"type": "string"},
+            "env_var": {"type": "string"},
+            "value_type": {"type": "string", "enum": ["int", "string"]},
+            "value": {"type": "string"},
+            "default_value": {"type": "string"},
+            "description": {"type": "string"},
+            "display_order": {"type": "integer"},
+            "requires_restart": {"type": "boolean", "const": True},
             "created_at": {"type": "string", "format": "date-time"},
             "updated_at": {"type": "string", "format": "date-time"},
         },

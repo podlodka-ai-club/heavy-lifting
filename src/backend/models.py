@@ -201,8 +201,49 @@ class AgentPrompt(Base):
     )
 
 
+class ApplicationSetting(Base):
+    __tablename__ = "application_settings"
+    __table_args__ = (
+        UniqueConstraint("setting_key", name="uq_application_settings_setting_key"),
+        CheckConstraint(
+            "value_type IN ('int', 'string')",
+            name="ck_application_settings_value_type",
+        ),
+        Index("ix_application_settings_setting_key", "setting_key"),
+        Index("ix_application_settings_display_order", "display_order"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    setting_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    env_var: Mapped[str] = mapped_column(String(100), nullable=False)
+    value_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    default_value: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    display_order: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        onupdate=_utc_now,
+        server_default=func.now(),
+    )
+
+
 __all__ = [
     "AgentPrompt",
+    "ApplicationSetting",
     "Base",
     "TASK_STATUS_VALUES",
     "TASK_TYPE_VALUES",

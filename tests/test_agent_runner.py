@@ -151,6 +151,7 @@ def test_cli_agent_runner_exposes_stable_config_contract() -> None:
             profile="backend",
             api_key_env_var="OPENAI_API_KEY",
             base_url_env_var="OPENAI_BASE_URL",
+            preview_chars=250,
         )
     )
 
@@ -162,6 +163,20 @@ def test_cli_agent_runner_exposes_stable_config_contract() -> None:
     assert runner.config.profile == "backend"
     assert runner.config.api_key_env_var == "OPENAI_API_KEY"
     assert runner.config.base_url_env_var == "OPENAI_BASE_URL"
+    assert runner.config.preview_chars == 250
+
+
+def test_cli_agent_runner_uses_configured_preview_limit() -> None:
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=900,
+            preview_chars=8,
+        )
+    )
+
+    assert runner._build_preview("abcdefghijklmnop") == "abcde..."
 
 
 def test_cli_agent_runner_builds_command_from_config() -> None:

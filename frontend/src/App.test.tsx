@@ -40,6 +40,35 @@ const prompts = [
   }
 ];
 
+const runtimeSettings = [
+  {
+    id: 1,
+    setting_key: "tracker_fetch_limit",
+    env_var: "TRACKER_FETCH_LIMIT",
+    value_type: "int",
+    value: "100",
+    default_value: "100",
+    description: "Maximum tracker tasks fetched by worker1 in one poll.",
+    display_order: 10,
+    requires_restart: true,
+    created_at: "2026-01-01T00:00:00+00:00",
+    updated_at: "2026-01-01T00:00:00+00:00"
+  },
+  {
+    id: 2,
+    setting_key: "local_agent_model",
+    env_var: "LOCAL_AGENT_MODEL",
+    value_type: "string",
+    value: "gpt-5.4",
+    default_value: "gpt-5.4",
+    description: "Model recorded by the local placeholder agent runner.",
+    display_order: 40,
+    requires_restart: true,
+    created_at: "2026-01-01T00:00:00+00:00",
+    updated_at: "2026-01-01T00:00:00+00:00"
+  }
+];
+
 const factorySnapshot = {
   generated_at: "2026-04-30T12:00:00+00:00",
   stations: [
@@ -187,6 +216,10 @@ describe("App", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
 
+      if (url === "/api/settings" && !init) {
+        return jsonResponse({ settings: runtimeSettings });
+      }
+
       if (url === "/api/prompts" && !init) {
         return jsonResponse({ prompts });
       }
@@ -207,6 +240,7 @@ describe("App", () => {
 
     render(<App />);
 
+    await userEvent.click(await screen.findByRole("tab", { name: "Промты" }));
     const editor = await screen.findByLabelText("Content");
     expect(editor).toHaveValue("DEV prompt");
 
@@ -227,6 +261,54 @@ describe("App", () => {
       )
     );
     expect(await screen.findByText("Сохранено")).toBeInTheDocument();
+  });
+
+  it("loads runtime settings and saves edited values", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+
+      if (url === "/api/settings" && !init) {
+        return jsonResponse({ settings: runtimeSettings });
+      }
+
+      if (url === "/api/prompts" && !init) {
+        return jsonResponse({ prompts });
+      }
+
+      if (url === "/api/settings/tracker_fetch_limit" && init?.method === "PATCH") {
+        return jsonResponse({
+          setting: {
+            ...runtimeSettings[0],
+            value: "25"
+          }
+        });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/settings");
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Runtime settings" })).toBeInTheDocument();
+    expect(screen.getByText("tracker_fetch_limit")).toBeInTheDocument();
+    const fetchLimitInput = screen.getByDisplayValue("100");
+
+    await userEvent.clear(fetchLimitInput);
+    await userEvent.type(fetchLimitInput, "25");
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings/tracker_fetch_limit",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ value: "25" })
+        })
+      )
+    );
+    expect(await screen.findByText(/Перезапустите процессы/)).toBeInTheDocument();
   });
 
   it("shows backend errors while loading prompts", async () => {
