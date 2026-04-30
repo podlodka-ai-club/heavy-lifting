@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from sqlalchemy import inspect
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from backend.application_settings import DEFAULT_APPLICATION_SETTINGS
 from backend.db import build_engine
@@ -54,6 +54,32 @@ def bootstrap_schema(database_url: str | None = None) -> tuple[str, ...]:
     return tuple(
         table_name for table_name in MVP_SCHEMA_TABLES if table_name not in existing_tables
     )
+
+
+def ensure_mvp_schema(session_factory: sessionmaker[Session]) -> tuple[str, ...]:
+    with session_factory() as session:
+        engine = session.get_bind()
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+        Base.metadata.create_all(engine, tables=list(MVP_SCHEMA_METADATA))
+        seed_default_agent_prompts(session)
+        seed_default_application_settings(session)
+        session.commit()
+
+    return tuple(
+        table_name for table_name in MVP_SCHEMA_TABLES if table_name not in existing_tables
+    )
+
+
+def ensure_application_settings_schema(session_factory: sessionmaker[Session]) -> bool:
+    with session_factory() as session:
+        engine = session.get_bind()
+        existing_tables = set(inspect(engine).get_table_names())
+        Base.metadata.tables[ApplicationSetting.__tablename__].create(engine, checkfirst=True)
+        seed_default_application_settings(session)
+        session.commit()
+
+    return ApplicationSetting.__tablename__ not in existing_tables
 
 
 def seed_default_agent_prompts(

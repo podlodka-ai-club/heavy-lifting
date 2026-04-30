@@ -408,6 +408,35 @@ describe("App", () => {
     expect(await screen.findByText("Сохранено")).toBeInTheDocument();
   });
 
+  it("keeps prompt editor usable when runtime settings return an HTML error", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+
+      if (url === "/api/settings") {
+        return htmlResponse("<html><body>Internal Server Error</body></html>", 500);
+      }
+
+      if (url === "/api/prompts") {
+        return jsonResponse({ prompts });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/settings");
+
+    render(<App />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Runtime settings: Backend request failed (500 Internal Server Error)"
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "Промты" }));
+
+    expect(await screen.findByLabelText("Content")).toHaveValue("DEV prompt");
+    expect(screen.getByRole("button", { name: /review/ })).toBeInTheDocument();
+  });
+
   it("loads runtime settings and saves edited values", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -489,6 +518,16 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: {
       "Content-Type": "application/json"
+    }
+  });
+}
+
+function htmlResponse(body: string, status: number): Response {
+  return new Response(body, {
+    status,
+    statusText: "Internal Server Error",
+    headers: {
+      "Content-Type": "text/html"
     }
   });
 }

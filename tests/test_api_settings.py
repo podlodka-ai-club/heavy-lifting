@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from sqlalchemy import inspect
 
 from backend.adapters.mock_scm import MockScm
 from backend.adapters.mock_tracker import MockTracker
@@ -22,46 +23,79 @@ def session_factory(tmp_path):
 
 
 def test_get_settings_lists_runtime_settings_ordered_by_display_order(session_factory) -> None:
-    first, second = _seed_settings(session_factory)
     app = create_app(runtime=_runtime(), session_factory=session_factory)
 
     response = app.test_client().get("/settings")
 
     assert response.status_code == 200
-    assert response.get_json() == {
-        "settings": [
-            {
-                "id": first.id,
-                "setting_key": "tracker_fetch_limit",
-                "env_var": "TRACKER_FETCH_LIMIT",
-                "value_type": "int",
-                "value": "100",
-                "default_value": "100",
-                "description": "Fetch limit",
-                "display_order": 10,
-                "requires_restart": True,
-                "created_at": first.created_at.isoformat(),
-                "updated_at": first.updated_at.isoformat(),
-            },
-            {
-                "id": second.id,
-                "setting_key": "local_agent_model",
-                "env_var": "LOCAL_AGENT_MODEL",
-                "value_type": "string",
-                "value": "gpt-5.4",
-                "default_value": "gpt-5.4",
-                "description": "Local model",
-                "display_order": 40,
-                "requires_restart": True,
-                "created_at": second.created_at.isoformat(),
-                "updated_at": second.updated_at.isoformat(),
-            },
-        ]
-    }
+    payload = response.get_json()
+    assert payload is not None
+    assert [setting["setting_key"] for setting in payload["settings"]] == [
+        "tracker_fetch_limit",
+        "pr_feedback_fetch_limit",
+        "local_agent_provider",
+        "local_agent_model",
+        "local_agent_name",
+        "cli_agent_preview_chars",
+    ]
+    assert [setting["value"] for setting in payload["settings"]] == [
+        "100",
+        "100",
+        "openai",
+        "gpt-5.4",
+        "local-placeholder-runner",
+        "1000",
+    ]
+
+
+def test_get_settings_bootstraps_missing_application_settings_table(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'existing.db'}")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            table
+            for table_name, table in Base.metadata.tables.items()
+            if table_name != ApplicationSetting.__tablename__
+        ],
+    )
+    session_factory = build_session_factory(engine)
+    app = create_app(runtime=_runtime(), session_factory=session_factory)
+
+    response = app.test_client().get("/settings")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert [setting["setting_key"] for setting in payload["settings"]] == [
+        "tracker_fetch_limit",
+        "pr_feedback_fetch_limit",
+        "local_agent_provider",
+        "local_agent_model",
+        "local_agent_name",
+        "cli_agent_preview_chars",
+    ]
+    assert ApplicationSetting.__tablename__ in inspect(engine).get_table_names()
+
+
+def test_create_app_does_not_bootstrap_settings_until_settings_route(monkeypatch) -> None:
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        "backend.api.routes.settings.ensure_application_settings_schema",
+        lambda session_factory: calls.append(session_factory),
+    )
+
+    app = create_app(runtime=_runtime(), session_factory=object())
+
+    assert calls == []
+
+    response = app.test_client().get("/openapi.json")
+
+    assert response.status_code == 200
+    assert calls == []
 
 
 def test_patch_setting_updates_value_by_key(session_factory) -> None:
-    first, _ = _seed_settings(session_factory)
     app = create_app(runtime=_runtime(), session_factory=session_factory)
 
     response = app.test_client().patch(
@@ -72,7 +106,6 @@ def test_patch_setting_updates_value_by_key(session_factory) -> None:
     assert response.status_code == 200
     payload = response.get_json()
     assert payload is not None
-    assert payload["setting"]["id"] == first.id
     assert payload["setting"]["setting_key"] == "tracker_fetch_limit"
     assert payload["setting"]["value"] == "25"
 
@@ -105,7 +138,6 @@ def test_setting_endpoint_returns_json_404_for_missing_setting(session_factory) 
     ],
 )
 def test_patch_setting_returns_json_400_for_invalid_payload(session_factory, payload) -> None:
-    _seed_settings(session_factory)
     app = create_app(runtime=_runtime(), session_factory=session_factory)
 
     response = app.test_client().patch("/settings/tracker_fetch_limit", json=payload)
@@ -116,7 +148,6 @@ def test_patch_setting_returns_json_400_for_invalid_payload(session_factory, pay
 
 @pytest.mark.parametrize("value", ["0", "-1", "not-int"])
 def test_patch_setting_rejects_invalid_int_value(session_factory, value) -> None:
-    _seed_settings(session_factory)
     app = create_app(runtime=_runtime(), session_factory=session_factory)
 
     response = app.test_client().patch("/settings/tracker_fetch_limit", json={"value": value})
@@ -126,7 +157,6 @@ def test_patch_setting_rejects_invalid_int_value(session_factory, value) -> None
 
 
 def test_patch_setting_rejects_empty_string_value(session_factory) -> None:
-    _seed_settings(session_factory)
     app = create_app(runtime=_runtime(), session_factory=session_factory)
 
     response = app.test_client().patch("/settings/local_agent_model", json={"value": " "})

@@ -6,6 +6,7 @@ from typing import Any, cast
 from flask import Blueprint, current_app, jsonify, request
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.bootstrap_db import ensure_application_settings_schema
 from backend.db import create_session, get_session_factory
 from backend.models import ApplicationSetting
 
@@ -45,6 +46,7 @@ def _build_session() -> Session:
 
 @settings_blueprint.get("/settings")
 def list_settings():
+    _ensure_settings_schema()
     session = _build_session()
     try:
         settings = (
@@ -65,6 +67,7 @@ def update_setting(setting_key: str):
     if not isinstance(payload_data, dict) or not isinstance(payload_data.get("value"), str):
         return jsonify({"error": "Invalid setting update payload"}), 400
 
+    _ensure_settings_schema()
     session = _build_session()
     try:
         setting = (
@@ -108,6 +111,14 @@ def _validate_setting_value(value_type: str, value: str) -> str | None:
         return None
 
     return "Unsupported setting value type"
+
+
+def _ensure_settings_schema() -> None:
+    session_factory = cast(
+        sessionmaker[Session],
+        current_app.extensions.get("session_factory") or get_session_factory(),
+    )
+    ensure_application_settings_schema(session_factory)
 
 
 __all__ = ["settings_blueprint"]

@@ -32,7 +32,7 @@ export function SettingsPage() {
       setError("");
 
       try {
-        const [loadedRuntimeSettings, loadedPrompts] = await Promise.all([
+        const [runtimeResult, promptsResult] = await Promise.allSettled([
           listRuntimeSettings(),
           listPrompts()
         ]);
@@ -41,20 +41,36 @@ export function SettingsPage() {
           return;
         }
 
-        setRuntimeSettings(loadedRuntimeSettings);
-        setRuntimeDrafts(
-          Object.fromEntries(
-            loadedRuntimeSettings.map((setting) => [setting.setting_key, setting.value])
-          )
-        );
-        setPrompts(loadedPrompts);
-        setLoadState("loaded");
-
-        const firstPrompt = loadedPrompts[0];
-        if (firstPrompt) {
-          setSelectedKey(firstPrompt.prompt_key);
-          setDraftContent(firstPrompt.content);
+        if (runtimeResult.status === "fulfilled") {
+          setRuntimeSettings(runtimeResult.value);
+          setRuntimeDrafts(
+            Object.fromEntries(
+              runtimeResult.value.map((setting) => [setting.setting_key, setting.value])
+            )
+          );
         }
+
+        if (promptsResult.status === "fulfilled") {
+          setPrompts(promptsResult.value);
+
+          const firstPrompt = promptsResult.value[0];
+          if (firstPrompt) {
+            setSelectedKey(firstPrompt.prompt_key);
+            setDraftContent(firstPrompt.content);
+          }
+        }
+
+        const errors = [
+          runtimeResult.status === "rejected"
+            ? `Runtime settings: ${formatLoadError(runtimeResult.reason)}`
+            : null,
+          promptsResult.status === "rejected"
+            ? `Prompts: ${formatLoadError(promptsResult.reason)}`
+            : null
+        ].filter((message): message is string => message !== null);
+
+        setLoadState(errors.length === 2 ? "error" : "loaded");
+        setError(errors.join(" "));
       } catch (loadError) {
         if (cancelled) {
           return;
@@ -296,4 +312,8 @@ export function SettingsPage() {
       ) : null}
     </main>
   );
+}
+
+function formatLoadError(loadError: unknown): string {
+  return loadError instanceof Error ? loadError.message : "Не удалось загрузить настройки";
 }

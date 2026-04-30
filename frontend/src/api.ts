@@ -132,7 +132,18 @@ type RuntimeSettingResponse = {
 };
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as T | { error?: string };
+  const rawBody = await response.text();
+  let payload: T | { error?: string } | null = null;
+
+  if (rawBody) {
+    try {
+      payload = JSON.parse(rawBody) as T | { error?: string };
+    } catch {
+      if (response.ok) {
+        throw new Error("Backend returned invalid JSON");
+      }
+    }
+  }
 
   if (!response.ok) {
     const message =
@@ -141,11 +152,19 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
       "error" in payload &&
       typeof payload.error === "string"
         ? payload.error
-        : "Backend request failed";
+        : buildHttpErrorMessage(response, rawBody);
     throw new Error(message);
   }
 
   return payload as T;
+}
+
+function buildHttpErrorMessage(response: Response, rawBody: string): string {
+  const statusText = response.statusText ? ` ${response.statusText}` : "";
+  const bodyPreview = rawBody.replace(/\s+/g, " ").trim().slice(0, 160);
+  return bodyPreview
+    ? `Backend request failed (${response.status}${statusText}): ${bodyPreview}`
+    : `Backend request failed (${response.status}${statusText})`;
 }
 
 export async function listPrompts(): Promise<Prompt[]> {
