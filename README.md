@@ -34,6 +34,7 @@
 - `GET /tasks`
 - `GET /tasks/<id>`
 - `GET /stats`
+- `GET /factory`
 - `GET /prompts`
 - `PATCH /prompts/<prompt_key>`
 - `POST /tasks/intake`
@@ -112,7 +113,7 @@ curl -X POST http://127.0.0.1:8000/tasks/intake \
 
 ## Локальный frontend
 
-Frontend живет в `frontend/` и запускается через Vite. В стандартном локальном режиме он ходит в backend через dev proxy: запросы `/prompts` проксируются на `http://127.0.0.1:8000`, поэтому CORS для backend не нужен.
+Frontend живет в `frontend/` и запускается через Vite. В стандартном локальном режиме он ходит в backend через dev proxy: запросы `/factory` и `/prompts` проксируются на `http://127.0.0.1:8000`, поэтому CORS для backend не нужен.
 
 Подготовить зависимости:
 
@@ -134,7 +135,7 @@ make api
 make frontend-dev
 ```
 
-После запуска Vite откройте `http://127.0.0.1:5173`. Главная страница показывает `heavy-lifting`, а в настройках можно редактировать промты агентов из backend API.
+После запуска Vite откройте `http://127.0.0.1:5173`. Главная страница показывает `heavy-lifting`, `/factory` показывает live factory map по backend snapshot, а в настройках можно редактировать промты агентов из backend API.
 
 Проверки frontend:
 

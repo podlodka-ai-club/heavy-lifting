@@ -1,13 +1,34 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { listPrompts, Prompt, updatePrompt } from "./api";
+import {
+  FactorySnapshot,
+  FactoryStation,
+  getFactorySnapshot,
+  listPrompts,
+  Prompt,
+  updatePrompt
+} from "./api";
 
-type Route = "/" | "/settings";
+type Route = "/" | "/factory" | "/settings";
 type LoadState = "idle" | "loading" | "loaded" | "error";
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+const stationMeta: Record<
+  FactoryStation["name"],
+  { label: string; title: string; shortLabel: string }
+> = {
+  fetch: { label: "FETCH", title: "tracker intake", shortLabel: "fetch" },
+  execute: { label: "EXECUTE", title: "triage · runner · workspace", shortLabel: "execute" },
+  pr_feedback: { label: "PR_FEEDBACK", title: "review response", shortLabel: "pr feedback" },
+  deliver: { label: "DELIVER", title: "tracker delivery", shortLabel: "deliver" }
+};
+
 function getRoute(pathname: string): Route {
-  return pathname === "/settings" ? "/settings" : "/";
+  if (pathname === "/settings" || pathname === "/factory") {
+    return pathname;
+  }
+
+  return "/";
 }
 
 export function App() {
@@ -32,6 +53,13 @@ export function App() {
         </button>
         <nav aria-label="Основная навигация">
           <button
+            className={route === "/factory" ? "nav-link active" : "nav-link"}
+            type="button"
+            onClick={() => navigate("/factory")}
+          >
+            Factory
+          </button>
+          <button
             className={route === "/settings" ? "nav-link active" : "nav-link"}
             type="button"
             onClick={() => navigate("/settings")}
@@ -40,7 +68,9 @@ export function App() {
           </button>
         </nav>
       </header>
-      {route === "/settings" ? <SettingsPage /> : <HomePage />}
+      {route === "/settings" ? <SettingsPage /> : null}
+      {route === "/factory" ? <FactoryPage /> : null}
+      {route === "/" ? <HomePage /> : null}
     </div>
   );
 }
@@ -51,9 +81,192 @@ function HomePage() {
       <p className="eyebrow">MVP orchestrator</p>
       <h1>heavy-lifting</h1>
       <p className="intro">
-        Локальная панель для работы с настройками backend-оркестратора.
+        Локальная панель для наблюдения за factory flow и редактирования настроек
+        backend-оркестратора.
       </p>
     </main>
+  );
+}
+
+function FactoryPage() {
+  const [snapshot, setSnapshot] = useState<FactorySnapshot | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>("idle");
+  const [error, setError] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFactory() {
+      setLoadState("loading");
+      setError("");
+
+      try {
+        const loadedSnapshot = await getFactorySnapshot();
+
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshot(loadedSnapshot);
+        setLoadState("loaded");
+      } catch (loadError) {
+        if (cancelled) {
+          return;
+        }
+
+        setLoadState("error");
+        setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить factory");
+      }
+    }
+
+    void loadFactory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const totalWip = snapshot?.stations.reduce((sum, station) => sum + station.wip_count, 0) ?? 0;
+  const totalFailed =
+    snapshot?.stations.reduce((sum, station) => sum + station.failed_count, 0) ?? 0;
+  const totalActive =
+    snapshot?.stations.reduce((sum, station) => sum + station.active_count, 0) ?? 0;
+
+  return (
+    <main className="page factory-page">
+      <section className="factory-hud" aria-label="Factory summary">
+        <div className="hud-panel hud-main">
+          <p className="eyebrow">heavy-lifting · factory command map</p>
+          <h1>Factory Flow</h1>
+          <p className="intro">
+            Live snapshot из `/factory`: станции, очереди, активная работа, ошибки и честные
+            data gaps без синтетических метрик.
+          </p>
+        </div>
+        <div className="hud-panel hud-card">
+          <span className="mono-label">Current bottleneck</span>
+          <strong>{snapshot?.bottleneck?.station ?? "none"}</strong>
+          <span className="muted">
+            {snapshot?.bottleneck ? `WIP ${snapshot.bottleneck.wip_count}` : "No WIP"}
+          </span>
+        </div>
+      </section>
+
+      {loadState === "loading" ? <p className="factory-loading">Загрузка factory...</p> : null}
+      {error ? (
+        <p className="status-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      {snapshot ? (
+        <>
+          <section className="factory-telemetry" aria-label="Factory telemetry">
+            <span>
+              <strong>GET /factory</strong>
+            </span>
+            <span>generated_at={formatDateTime(snapshot.generated_at)}</span>
+            <span>wip={totalWip}</span>
+            <span>active={totalActive}</span>
+            <span>failed={totalFailed}</span>
+          </section>
+
+          <section className="factory-map" aria-label="Factory station map">
+            <div className="orchestrator-node">
+              <span className="mono-label">ORCHESTRATOR</span>
+              <strong>handoff control</strong>
+            </div>
+
+            <div className="factory-line" aria-hidden="true" />
+
+            <div className="station-grid">
+              {snapshot.stations.map((station) => (
+                <StationCard
+                  isBottleneck={snapshot.bottleneck?.station === station.name}
+                  key={station.name}
+                  station={station}
+                />
+              ))}
+            </div>
+          </section>
+
+          <section className="gaps-panel" aria-label="Data gaps">
+            <div>
+              <p className="eyebrow">Data gaps</p>
+              <h2>Не показываем то, чего нет в API</h2>
+            </div>
+            <ul>
+              {snapshot.data_gaps.map((gap) => (
+                <li key={gap}>{gap}</li>
+              ))}
+            </ul>
+          </section>
+        </>
+      ) : null}
+    </main>
+  );
+}
+
+function StationCard({
+  station,
+  isBottleneck
+}: {
+  station: FactoryStation;
+  isBottleneck: boolean;
+}) {
+  const meta = stationMeta[station.name];
+
+  return (
+    <article
+      className={`station-card station-${station.name}${isBottleneck ? " bottleneck" : ""}`}
+      aria-label={`${meta.shortLabel} station`}
+    >
+      <div className="station-topline">
+        <span className="mono-label">{meta.label}</span>
+        {isBottleneck ? <span className="hot-badge">BOTTLENECK</span> : null}
+      </div>
+      <h2>{meta.title}</h2>
+      <div className="wip-meter" aria-label={`${meta.shortLabel} WIP ${station.wip_count}`}>
+        <span
+          style={{
+            minWidth: station.wip_count > 0 ? "3px" : "0",
+            width: `${Math.min(100, station.wip_count * 12)}%`
+          }}
+        />
+      </div>
+      <div className="metric-grid">
+        <Metric label="WIP" value={station.wip_count} />
+        <Metric label="Queue" value={station.queue_count} />
+        <Metric label="Active" value={station.active_count} />
+        <Metric label="Failed" tone={station.failed_count > 0 ? "bad" : "normal"} value={station.failed_count} />
+        <Metric label="Oldest q" value={formatAge(station.oldest_queue_age_seconds)} />
+        <Metric label="Oldest a" value={formatAge(station.oldest_active_age_seconds)} />
+      </div>
+      <div className="status-strip" aria-label={`${meta.shortLabel} status counts`}>
+        <span>new {station.counts_by_status.new}</span>
+        <span>processing {station.counts_by_status.processing}</span>
+        <span>done {station.counts_by_status.done}</span>
+        <span>failed {station.counts_by_status.failed}</span>
+        <span>total {station.total_count}</span>
+      </div>
+    </article>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  tone = "normal"
+}: {
+  label: string;
+  value: number | string;
+  tone?: "normal" | "bad";
+}) {
+  return (
+    <span className="metric">
+      <span className="metric-label">{label}</span>
+      <strong className={tone === "bad" ? "metric-value bad" : "metric-value"}>{value}</strong>
+    </span>
   );
 }
 
@@ -155,7 +368,11 @@ function SettingsPage() {
       </div>
 
       {loadState === "loading" ? <p className="muted">Загрузка...</p> : null}
-      {error ? <p className="status-error" role="alert">{error}</p> : null}
+      {error ? (
+        <p className="status-error" role="alert">
+          {error}
+        </p>
+      ) : null}
       {loadState === "loaded" && prompts.length === 0 ? (
         <p className="muted">Промты не найдены.</p>
       ) : null}
@@ -182,7 +399,11 @@ function SettingsPage() {
                 <h2>{selectedPrompt?.prompt_key}</h2>
                 <p className="muted">{selectedPrompt?.source_path}</p>
               </div>
-              <button className="primary-button" type="submit" disabled={!hasChanges || saveState === "saving"}>
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={!hasChanges || saveState === "saving"}
+              >
                 {saveState === "saving" ? "Сохранение..." : "Сохранить"}
               </button>
             </div>
@@ -204,4 +425,35 @@ function SettingsPage() {
       ) : null}
     </main>
   );
+}
+
+function formatAge(seconds: number | null): string {
+  if (seconds === null) {
+    return "none";
+  }
+
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("ru-RU", {
+    dateStyle: "short",
+    timeStyle: "medium"
+  });
 }

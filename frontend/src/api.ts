@@ -7,6 +7,33 @@ export type Prompt = {
   updated_at: string;
 };
 
+export type FactoryStation = {
+  name: "fetch" | "execute" | "pr_feedback" | "deliver";
+  counts_by_status: {
+    new: number;
+    processing: number;
+    done: number;
+    failed: number;
+  };
+  total_count: number;
+  wip_count: number;
+  queue_count: number;
+  active_count: number;
+  failed_count: number;
+  oldest_queue_age_seconds: number | null;
+  oldest_active_age_seconds: number | null;
+};
+
+export type FactorySnapshot = {
+  generated_at: string;
+  stations: FactoryStation[];
+  bottleneck: {
+    station: FactoryStation["name"];
+    wip_count: number;
+  } | null;
+  data_gaps: string[];
+};
+
 type PromptListResponse = {
   prompts: Prompt[];
 };
@@ -48,4 +75,9 @@ export async function updatePrompt(promptKey: string, content: string): Promise<
   });
   const payload = await parseJsonResponse<PromptResponse>(response);
   return payload.prompt;
+}
+
+export async function getFactorySnapshot(): Promise<FactorySnapshot> {
+  const response = await fetch("/factory");
+  return parseJsonResponse<FactorySnapshot>(response);
 }
