@@ -89,6 +89,26 @@ def _cached_openapi_schema() -> dict[str, Any]:
             ),
             "StatsResponse": _stats_schema(),
             "FactoryResponse": _factory_schema(),
+            "RetroEntry": _retro_entry_schema(),
+            "RetroEntriesResponse": _object_schema(
+                required=["entries"],
+                properties={
+                    "entries": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/RetroEntry"},
+                    }
+                },
+            ),
+            "RetroTagAggregate": _retro_tag_aggregate_schema(),
+            "RetroTagsResponse": _object_schema(
+                required=["tags"],
+                properties={
+                    "tags": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/RetroTagAggregate"},
+                    }
+                },
+            ),
         }
     )
 
@@ -129,6 +149,46 @@ def _cached_openapi_schema() -> dict[str, Any]:
                         "200": _json_response(
                             "Factory station aggregates",
                             "FactoryResponse",
+                        ),
+                    },
+                }
+            },
+            "/retro/entries": {
+                "get": {
+                    "summary": "List persisted agent retro feedback entries",
+                    "operationId": "listRetroEntries",
+                    "tags": ["retro"],
+                    "parameters": [
+                        _query_parameter(
+                            "task_type",
+                            {"type": "string", "enum": _enum_values(TaskType)},
+                        ),
+                        _query_parameter("tag", {"type": "string"}),
+                        _query_parameter("severity", {"type": "string"}),
+                        _query_parameter("source", {"type": "string", "enum": ["agent"]}),
+                        _query_parameter(
+                            "limit",
+                            {"type": "integer", "minimum": 1, "maximum": 1000},
+                        ),
+                    ],
+                    "responses": {
+                        "200": _json_response(
+                            "Persisted retro feedback entries",
+                            "RetroEntriesResponse",
+                        ),
+                        "400": _json_response("Filter validation failed", "ErrorResponse"),
+                    },
+                }
+            },
+            "/retro/tags": {
+                "get": {
+                    "summary": "List retro tag aggregates",
+                    "operationId": "listRetroTags",
+                    "tags": ["retro"],
+                    "responses": {
+                        "200": _json_response(
+                            "Retro tag aggregates",
+                            "RetroTagsResponse",
                         ),
                     },
                 }
@@ -355,6 +415,15 @@ def _setting_key_parameter() -> dict[str, Any]:
     }
 
 
+def _query_parameter(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": name,
+        "in": "query",
+        "required": False,
+        "schema": schema,
+    }
+
+
 def _agent_prompt_schema() -> dict[str, Any]:
     return _object_schema(
         required=[
@@ -403,6 +472,67 @@ def _application_setting_schema() -> dict[str, Any]:
             "requires_restart": {"type": "boolean", "const": True},
             "created_at": {"type": "string", "format": "date-time"},
             "updated_at": {"type": "string", "format": "date-time"},
+        },
+    )
+
+
+def _retro_entry_schema() -> dict[str, Any]:
+    return _object_schema(
+        required=[
+            "id",
+            "task_id",
+            "root_id",
+            "task_type",
+            "role",
+            "attempt",
+            "source",
+            "category",
+            "tag",
+            "severity",
+            "message",
+            "suggested_action",
+            "metadata",
+            "created_at",
+        ],
+        properties={
+            "id": {"type": "integer"},
+            "task_id": {"type": "integer"},
+            "root_id": {"type": "integer"},
+            "task_type": {"type": "string", "enum": _enum_values(TaskType)},
+            "role": {"type": ["string", "null"]},
+            "attempt": {"type": "integer", "minimum": 0},
+            "source": {"type": "string", "enum": ["agent"]},
+            "category": {"type": "string"},
+            "tag": {"type": "string"},
+            "severity": {"type": "string"},
+            "message": {"type": "string"},
+            "suggested_action": {"type": ["string", "null"]},
+            "metadata": {"type": "object", "additionalProperties": True},
+            "created_at": {"type": "string", "format": "date-time"},
+        },
+    )
+
+
+def _retro_tag_aggregate_schema() -> dict[str, Any]:
+    return _object_schema(
+        required=[
+            "tag",
+            "count",
+            "severity_counts",
+            "first_seen",
+            "last_seen",
+            "affected_tasks_count",
+        ],
+        properties={
+            "tag": {"type": "string"},
+            "count": {"type": "integer", "minimum": 0},
+            "severity_counts": {
+                "type": "object",
+                "additionalProperties": {"type": "integer", "minimum": 0},
+            },
+            "first_seen": {"type": "string", "format": "date-time"},
+            "last_seen": {"type": "string", "format": "date-time"},
+            "affected_tasks_count": {"type": "integer", "minimum": 0},
         },
     )
 

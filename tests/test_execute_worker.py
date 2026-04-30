@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from backend.adapters.mock_scm import MockScm
 from backend.db import build_engine, build_session_factory, session_scope
-from backend.models import Base, Task, TokenUsage
+from backend.models import AgentFeedbackEntry, Base, Task, TokenUsage
 from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
 from backend.schemas import TaskLink, TaskResultPayload
@@ -108,6 +108,21 @@ class FailedCliAgentRunner:
         )
 
 
+class RetroAgentRunner:
+    def __init__(self, metadata):
+        self.metadata = metadata
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary="Retro run completed.",
+                metadata=self.metadata,
+            )
+        )
+
+
 def test_execute_worker_processes_execute_task_and_creates_deliver(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     agent_runner = RecordingAgentRunner()
@@ -188,6 +203,144 @@ def test_execute_worker_processes_execute_task_and_creates_deliver(tmp_path) -> 
         token_usage_entries = session.query(TokenUsage).all()
         assert len(token_usage_entries) == 1
         assert token_usage_entries[0].task_id == execute_task.id
+
+
+def test_execute_worker_persists_valid_agent_retro_feedback(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RetroAgentRunner(
+            {
+                "agent_retro": [
+                    {
+                        "tag": "missing-tests",
+                        "category": "testing",
+                        "severity": "warning",
+                        "message": "Regression coverage was missing.",
+                        "suggested_action": "Add regression coverage.",
+                        "metadata": {"source_step": "execute"},
+                    }
+                ]
+            }
+        ),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-RETRO",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-retro",
+                context={"title": "Tracker task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-RETRO",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-retro",
+                context={"title": "Implement retro persistence"},
+                input_payload={
+                    "instructions": "Run with retro metadata.",
+                    "base_branch": "main",
+                    "branch_name": "task-retro/run",
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 1
+    assert report.failed_execute_tasks == 0
+    with session_scope(session_factory=session_factory) as session:
+        entries = session.query(AgentFeedbackEntry).all()
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.task_id == 2
+        assert entry.root_id == 1
+        assert entry.task_type == TaskType.EXECUTE
+        assert entry.role is None
+        assert entry.attempt == 1
+        assert entry.source == "agent"
+        assert entry.category == "testing"
+        assert entry.tag == "missing-tests"
+        assert entry.severity == "warning"
+        assert entry.message == "Regression coverage was missing."
+        assert entry.suggested_action == "Add regression coverage."
+        assert entry.entry_metadata == {"source_step": "execute"}
+
+
+def test_execute_worker_ignores_invalid_agent_retro_feedback(tmp_path, caplog) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RetroAgentRunner(
+            {
+                "agent_retro": [
+                    {
+                        "tag": "valid-tag",
+                        "message": "This one should be kept.",
+                    },
+                    {
+                        "tag": "Not A Slug",
+                        "severity": "warning",
+                        "message": "Invalid slug should be rejected.",
+                    },
+                ]
+            }
+        ),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-invalid-retro",
+                context={"title": "Tracker task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-invalid-retro",
+                context={"title": "Run"},
+                input_payload={"branch_name": "task-retro/invalid"},
+            )
+        )
+
+    caplog.set_level("WARNING")
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 1
+    assert report.failed_execute_tasks == 0
+    with session_scope(session_factory=session_factory) as session:
+        entries = session.query(AgentFeedbackEntry).all()
+        assert len(entries) == 1
+        assert entries[0].tag == "valid-tag"
+
+    warning_events = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("event") == "agent_retro_item_invalid"
+    ]
+    assert len(warning_events) == 1
+    assert warning_events[0]["task_id"] == 2
 
 
 def test_execute_worker_reuses_existing_pr_for_feedback_without_new_deliver(tmp_path) -> None:

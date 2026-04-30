@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 
 from backend.application_settings import DEFAULT_APPLICATION_SETTINGS
 from backend.db import build_engine
-from backend.models import AgentPrompt, ApplicationSetting, Base, Task, TokenUsage
+from backend.models import (
+    AgentFeedbackEntry,
+    AgentPrompt,
+    ApplicationSetting,
+    Base,
+    Task,
+    TokenUsage,
+)
 
 DEFAULT_AGENT_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "agents"
 
@@ -18,12 +25,14 @@ MVP_SCHEMA_TABLES = (
     TokenUsage.__tablename__,
     AgentPrompt.__tablename__,
     ApplicationSetting.__tablename__,
+    AgentFeedbackEntry.__tablename__,
 )
 MVP_SCHEMA_METADATA = (
     Base.metadata.tables[Task.__tablename__],
     Base.metadata.tables[TokenUsage.__tablename__],
     Base.metadata.tables[AgentPrompt.__tablename__],
     Base.metadata.tables[ApplicationSetting.__tablename__],
+    Base.metadata.tables[AgentFeedbackEntry.__tablename__],
 )
 
 

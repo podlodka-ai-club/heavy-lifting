@@ -155,5 +155,5 @@ def test_main_accepts_database_url_override(tmp_path, capsys) -> None:
     assert exit_code == 0
     assert (
         "MVP schema is ready; created tables: tasks, token_usage, "
-        "agent_prompts, application_settings"
+        "agent_prompts, application_settings, agent_feedback_entries"
     ) in stdout
