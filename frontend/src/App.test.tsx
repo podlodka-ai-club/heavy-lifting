@@ -85,6 +85,7 @@ const factorySnapshot = {
 describe("App", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/");
+    mockReducedMotion(false);
   });
 
   afterEach(() => {
@@ -129,21 +130,48 @@ describe("App", () => {
     expect(await screen.findByText(/generated_at=/)).toBeInTheDocument();
     expect(screen.getByText("Current bottleneck")).toBeInTheDocument();
     expect(screen.getByText("WIP 3")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Factory handoff routes" })).toBeInTheDocument();
+    expect(screen.getByLabelText("fetch payload marker")).toBeInTheDocument();
+    expect(screen.getByLabelText("execute payload marker")).toBeInTheDocument();
+    expect(document.querySelectorAll("animateMotion")).toHaveLength(2);
 
     const executeStation = screen.getByLabelText("execute station");
+    expect(executeStation).toHaveClass("bottleneck");
     expect(within(executeStation).getByText("BOTTLENECK")).toBeInTheDocument();
     expect(within(executeStation).getByText("1h 1m")).toBeInTheDocument();
     expect(within(executeStation).getByText("3m")).toBeInTheDocument();
     expect(within(executeStation).getByText("failed 1")).toBeInTheDocument();
+    expect(executeStation.querySelector(".station-machine")).not.toBeNull();
 
     const feedbackStation = screen.getByLabelText("pr feedback station");
     const zeroWipMeter = within(feedbackStation).getByLabelText("pr feedback WIP 0");
     expect(zeroWipMeter.firstElementChild).toHaveStyle({ minWidth: "0", width: "0%" });
+    expect(screen.queryByLabelText("pr feedback payload marker")).not.toBeInTheDocument();
 
     expect(screen.getByText("Не показываем то, чего нет в API")).toBeInTheDocument();
     expect(screen.getByText("transition_history")).toBeInTheDocument();
     expect(screen.getByText("worker_capacity")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/factory");
+  });
+
+  it("keeps payload markers static when reduced motion is preferred", async () => {
+    mockReducedMotion(true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        input.toString() === "/api/factory"
+          ? jsonResponse(factorySnapshot)
+          : jsonResponse({ error: "not found" }, 404)
+      )
+    );
+    window.history.pushState({}, "", "/factory");
+
+    render(<App />);
+
+    const fetchMarker = await screen.findByLabelText("fetch payload marker");
+    expect(fetchMarker).toHaveAttribute("cx", "178");
+    expect(fetchMarker).toHaveAttribute("cy", "334");
+    expect(document.querySelector("animateMotion")).not.toBeInTheDocument();
   });
 
   it("shows backend errors while loading factory", async () => {
@@ -236,4 +264,20 @@ function jsonResponse(body: unknown, status = 200): Response {
       "Content-Type": "application/json"
     }
   });
+}
+
+function mockReducedMotion(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    }))
+  );
 }

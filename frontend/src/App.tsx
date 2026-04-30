@@ -92,6 +92,7 @@ function FactoryPage() {
   const [snapshot, setSnapshot] = useState<FactorySnapshot | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [error, setError] = useState<string>("");
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     let cancelled = false;
@@ -172,12 +173,19 @@ function FactoryPage() {
           </section>
 
           <section className="factory-map" aria-label="Factory station map">
+            <FactoryRoutes
+              prefersReducedMotion={prefersReducedMotion}
+              stations={snapshot.stations}
+            />
+
             <div className="orchestrator-node">
+              <div className="orchestrator-core" aria-hidden="true">
+                <span />
+                <span />
+              </div>
               <span className="mono-label">ORCHESTRATOR</span>
               <strong>handoff control</strong>
             </div>
-
-            <div className="factory-line" aria-hidden="true" />
 
             <div className="station-grid">
               {snapshot.stations.map((station) => (
@@ -207,6 +215,109 @@ function FactoryPage() {
   );
 }
 
+function FactoryRoutes({
+  stations,
+  prefersReducedMotion
+}: {
+  stations: FactoryStation[];
+  prefersReducedMotion: boolean;
+}) {
+  const stationsWithWip = new Set(
+    stations.filter((station) => station.wip_count > 0).map((station) => station.name)
+  );
+
+  return (
+    <svg
+      className="factory-routes"
+      viewBox="0 0 1000 620"
+      role="img"
+      aria-label="Factory handoff routes"
+    >
+      <path className="handoff-route route-fetch" d="M500 108 C410 168 285 238 178 334" />
+      <path className="handoff-route route-execute" d="M500 108 C470 222 426 316 358 410" />
+      <path className="handoff-route route-pr_feedback" d="M500 108 C574 224 642 316 730 408" />
+      <path className="handoff-route route-deliver" d="M500 108 C626 170 746 248 852 342" />
+
+      {stationsWithWip.has("fetch") ? (
+        <circle
+          className="payload-marker payload-fetch"
+          cx={prefersReducedMotion ? 178 : undefined}
+          cy={prefersReducedMotion ? 334 : undefined}
+          r="8"
+          aria-label="fetch payload marker"
+        >
+          {prefersReducedMotion ? null : (
+            <animateMotion dur="9s" repeatCount="indefinite" path="M500 108 C410 168 285 238 178 334" />
+          )}
+        </circle>
+      ) : null}
+      {stationsWithWip.has("execute") ? (
+        <circle
+          className="payload-marker payload-execute"
+          cx={prefersReducedMotion ? 358 : undefined}
+          cy={prefersReducedMotion ? 410 : undefined}
+          r="9"
+          aria-label="execute payload marker"
+        >
+          {prefersReducedMotion ? null : (
+            <animateMotion dur="7s" repeatCount="indefinite" path="M500 108 C470 222 426 316 358 410" />
+          )}
+        </circle>
+      ) : null}
+      {stationsWithWip.has("pr_feedback") ? (
+        <circle
+          className="payload-marker payload-pr_feedback"
+          cx={prefersReducedMotion ? 730 : undefined}
+          cy={prefersReducedMotion ? 408 : undefined}
+          r="8"
+          aria-label="pr feedback payload marker"
+        >
+          {prefersReducedMotion ? null : (
+            <animateMotion dur="8s" repeatCount="indefinite" path="M500 108 C574 224 642 316 730 408" />
+          )}
+        </circle>
+      ) : null}
+      {stationsWithWip.has("deliver") ? (
+        <circle
+          className="payload-marker payload-deliver"
+          cx={prefersReducedMotion ? 852 : undefined}
+          cy={prefersReducedMotion ? 342 : undefined}
+          r="8"
+          aria-label="deliver payload marker"
+        >
+          {prefersReducedMotion ? null : (
+            <animateMotion dur="10s" repeatCount="indefinite" path="M500 108 C626 170 746 248 852 342" />
+          )}
+        </circle>
+      ) : null}
+    </svg>
+  );
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
+    Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
+  );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mediaQuery) {
+      return;
+    }
+
+    setPrefersReducedMotion(mediaQuery.matches);
+
+    const onChange = (event: MediaQueryListEvent) => {
+      setPrefersReducedMotion(event.matches);
+    };
+
+    mediaQuery.addEventListener("change", onChange);
+    return () => mediaQuery.removeEventListener("change", onChange);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
 function StationCard({
   station,
   isBottleneck
@@ -224,6 +335,18 @@ function StationCard({
       <div className="station-topline">
         <span className="mono-label">{meta.label}</span>
         {isBottleneck ? <span className="hot-badge">BOTTLENECK</span> : null}
+      </div>
+      <div className="station-machine" aria-hidden="true">
+        <div className="machine-cube">
+          <span className="cube-top" />
+          <span className="cube-front" />
+          <span className="cube-side" />
+        </div>
+        <div className="machine-stack">
+          {Array.from({ length: Math.min(station.wip_count, 5) }, (_, index) => (
+            <span key={index} />
+          ))}
+        </div>
       </div>
       <h2>{meta.title}</h2>
       <div className="wip-meter" aria-label={`${meta.shortLabel} WIP ${station.wip_count}`}>
