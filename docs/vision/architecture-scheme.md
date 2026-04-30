@@ -134,9 +134,13 @@ Current MVP mapping:
 | Input JSON | `tasks.input_payload`, task context schemas |
 | Output JSON | `tasks.result_payload` |
 | Statistics database | `token_usage` table and stats endpoint |
+| Agent prompt defaults | `agent_prompts` table seeded from `prompts/agents/*.md` during DB bootstrap |
 | Task watcher loop | Worker 1 |
 | Subagent launcher loop | Worker 2 |
 | Result processing loop | Worker 2 finalization and Worker 3 delivery |
+
+Default agent prompts are stored durably for future prompt-management work, but current runner
+behavior does not read prompts from the database.
 
 ## Backlog From Scheme
 

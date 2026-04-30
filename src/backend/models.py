@@ -16,6 +16,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -174,7 +175,34 @@ class TokenUsage(Base):
     task: Mapped[Task] = relationship(back_populates="token_usage_entries")
 
 
+class AgentPrompt(Base):
+    __tablename__ = "agent_prompts"
+    __table_args__ = (
+        UniqueConstraint("prompt_key", name="uq_agent_prompts_prompt_key"),
+        Index("ix_agent_prompts_prompt_key", "prompt_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prompt_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        onupdate=_utc_now,
+        server_default=func.now(),
+    )
+
+
 __all__ = [
+    "AgentPrompt",
     "Base",
     "TASK_STATUS_VALUES",
     "TASK_TYPE_VALUES",
