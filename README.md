@@ -131,6 +131,14 @@ make bootstrap-db
 make api
 ```
 
+Для презентационного frontend-сценария можно отдельно наполнить существующую БД curated demo data. Это не меняет поведение `make demo` и не запускает workers:
+
+```bash
+make demo-seed-frontend
+```
+
+Повторный запуск idempotent: seed пересоздает только собственные строки `FRONTEND-DEMO-*`, не трогая остальные задачи.
+
 Запуск frontend в отдельном терминале:
 
 ```bash

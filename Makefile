@@ -1,4 +1,4 @@
-.PHONY: install init install-git-hooks clean api worker1 worker2 worker3 demo lint typecheck test bootstrap-db init-db frontend-install frontend-dev frontend-build frontend-test
+.PHONY: install init install-git-hooks clean api worker1 worker2 worker3 demo demo-seed-frontend lint typecheck test bootstrap-db init-db frontend-install frontend-dev frontend-build frontend-test
 
 
 install: init
@@ -36,6 +36,9 @@ worker3:
 
 demo:
 	uv run heavy-lifting-demo
+
+demo-seed-frontend:
+	uv run heavy-lifting-seed-frontend-demo
 
 lint:
 	@if [ -d tests ]; then uv run ruff check src/backend tests; else uv run ruff check src/backend; fi
