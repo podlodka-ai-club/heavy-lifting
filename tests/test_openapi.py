@@ -24,6 +24,8 @@ def test_get_openapi_json_describes_public_api() -> None:
     assert set(schema["paths"]) == {
         "/health",
         "/openapi.json",
+        "/prompts",
+        "/prompts/{prompt_key}",
         "/stats",
         "/tasks",
         "/tasks/{task_id}",
@@ -72,6 +74,31 @@ def test_openapi_json_describes_task_and_stats_responses() -> None:
     assert schema["paths"]["/stats"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/StatsResponse"}
+
+
+def test_openapi_json_describes_prompt_endpoints() -> None:
+    app = create_app(runtime=_runtime())
+
+    schema = app.test_client().get("/openapi.json").get_json()
+
+    assert schema is not None
+    components = schema["components"]["schemas"]
+    assert components["AgentPrompt"]["required"] == [
+        "id",
+        "prompt_key",
+        "source_path",
+        "content",
+        "created_at",
+        "updated_at",
+    ]
+    assert schema["paths"]["/prompts"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/AgentPromptsListResponse"}
+    prompt_path = schema["paths"]["/prompts/{prompt_key}"]
+    assert set(prompt_path) == {"get", "patch"}
+    assert prompt_path["patch"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/PromptUpdatePayload"
+    }
 
 
 def test_build_openapi_schema_returns_isolated_copy() -> None:

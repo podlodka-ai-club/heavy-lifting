@@ -59,7 +59,6 @@ def seed_default_agent_prompts(
             continue
 
         prompt.source_path = source_path
-        prompt.content = content
 
 
 def build_parser() -> argparse.ArgumentParser:

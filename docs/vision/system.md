@@ -100,6 +100,7 @@ The MVP intentionally stays narrow:
 - local development support through `MockTracker` and `MockScm`;
 - durable persistence for orchestration tasks, token usage, and seeded default agent prompts;
 - machine-readable OpenAPI schema through `GET /openapi.json`;
+- prompt-management API for listing stored agent prompts, reading one prompt, and updating prompt content;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
 - selection of previously estimated small tracker tasks into one executable subtask through the tracker boundary contract, with duplicate parent selection blocked through tracker metadata.

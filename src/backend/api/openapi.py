@@ -37,6 +37,24 @@ def _cached_openapi_schema() -> dict[str, Any]:
                 required=["external_id"],
                 properties={"external_id": {"type": "string"}},
             ),
+            "AgentPrompt": _agent_prompt_schema(),
+            "AgentPromptResponse": _object_schema(
+                required=["prompt"],
+                properties={"prompt": {"$ref": "#/components/schemas/AgentPrompt"}},
+            ),
+            "AgentPromptsListResponse": _object_schema(
+                required=["prompts"],
+                properties={
+                    "prompts": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/AgentPrompt"},
+                    }
+                },
+            ),
+            "PromptUpdatePayload": _object_schema(
+                required=["content"],
+                properties={"content": {"type": "string"}},
+            ),
             "Task": _task_schema(),
             "TaskResponse": _object_schema(
                 required=["task"],
@@ -82,6 +100,50 @@ def _cached_openapi_schema() -> dict[str, Any]:
                         "200": _json_response("Task and token usage aggregates", "StatsResponse"),
                     },
                 }
+            },
+            "/prompts": {
+                "get": {
+                    "summary": "List stored agent prompts",
+                    "operationId": "listPrompts",
+                    "tags": ["prompts"],
+                    "responses": {
+                        "200": _json_response(
+                            "List of stored agent prompts",
+                            "AgentPromptsListResponse",
+                        ),
+                    },
+                }
+            },
+            "/prompts/{prompt_key}": {
+                "get": {
+                    "summary": "Get a stored agent prompt",
+                    "operationId": "getPrompt",
+                    "tags": ["prompts"],
+                    "parameters": [_prompt_key_parameter()],
+                    "responses": {
+                        "200": _json_response("Stored agent prompt", "AgentPromptResponse"),
+                        "404": _json_response("Prompt was not found", "ErrorResponse"),
+                    },
+                },
+                "patch": {
+                    "summary": "Update stored agent prompt content",
+                    "operationId": "updatePrompt",
+                    "tags": ["prompts"],
+                    "parameters": [_prompt_key_parameter()],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/PromptUpdatePayload"}
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": _json_response("Updated agent prompt", "AgentPromptResponse"),
+                        "400": _json_response("Payload validation failed", "ErrorResponse"),
+                        "404": _json_response("Prompt was not found", "ErrorResponse"),
+                    },
+                },
             },
             "/tasks": {
                 "get": {
@@ -204,6 +266,36 @@ def _object_schema(
         "properties": properties,
         "additionalProperties": additional_properties,
     }
+
+
+def _prompt_key_parameter() -> dict[str, Any]:
+    return {
+        "name": "prompt_key",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1},
+    }
+
+
+def _agent_prompt_schema() -> dict[str, Any]:
+    return _object_schema(
+        required=[
+            "id",
+            "prompt_key",
+            "source_path",
+            "content",
+            "created_at",
+            "updated_at",
+        ],
+        properties={
+            "id": {"type": "integer"},
+            "prompt_key": {"type": "string"},
+            "source_path": {"type": "string"},
+            "content": {"type": "string"},
+            "created_at": {"type": "string", "format": "date-time"},
+            "updated_at": {"type": "string", "format": "date-time"},
+        },
+    )
 
 
 def _task_schema() -> dict[str, Any]:

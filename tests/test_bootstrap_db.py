@@ -51,7 +51,7 @@ def test_bootstrap_schema_seeds_default_agent_prompts(tmp_path) -> None:
     ]
 
 
-def test_bootstrap_schema_seeds_agent_prompts_idempotently(tmp_path) -> None:
+def test_bootstrap_schema_preserves_existing_agent_prompt_content(tmp_path) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'app.db'}"
     expected_prompt_paths = sorted(DEFAULT_AGENT_PROMPTS_DIR.glob("*.md"))
 
@@ -65,7 +65,7 @@ def test_bootstrap_schema_seeds_agent_prompts_idempotently(tmp_path) -> None:
             .filter(AgentPrompt.prompt_key == first_prompt_path.stem)
             .one()
         )
-        prompt.content = "outdated prompt"
+        prompt.content = "custom user-edited prompt"
         prompt.source_path = "outdated/path.md"
         session.commit()
 
@@ -80,7 +80,7 @@ def test_bootstrap_schema_seeds_agent_prompts_idempotently(tmp_path) -> None:
         )
 
     assert prompt_count == len(expected_prompt_paths)
-    assert prompt.content == first_prompt_path.read_text(encoding="utf-8")
+    assert prompt.content == "custom user-edited prompt"
     assert prompt.source_path == f"prompts/agents/{first_prompt_path.name}"
 
 
