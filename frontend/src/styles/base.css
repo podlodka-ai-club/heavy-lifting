@@ -1,0 +1,62 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at 52% 26%, rgba(255, 112, 22, 0.12), transparent 36%),
+    radial-gradient(ellipse at 16% 86%, rgba(255, 177, 63, 0.08), transparent 28%),
+    linear-gradient(180deg, #020201 0%, var(--bg) 58%, #100b06 100%);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(30deg, transparent 0 47px, rgba(255, 129, 25, 0.05) 48px 49px, transparent 50px 96px),
+    linear-gradient(150deg, transparent 0 47px, rgba(255, 129, 25, 0.05) 48px 49px, transparent 50px 96px),
+    linear-gradient(30deg, transparent 0 191px, rgba(255, 167, 56, 0.1) 192px 194px, transparent 195px 384px),
+    linear-gradient(150deg, transparent 0 191px, rgba(255, 167, 56, 0.1) 192px 194px, transparent 195px 384px);
+  opacity: 0.82;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: clamp(2.2rem, 4vw, 4.7rem);
+  line-height: 1;
+  margin-bottom: 16px;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin-bottom: 4px;
+}
+
+textarea:focus,
+button:focus-visible {
+  outline: 3px solid rgba(110, 225, 255, 0.52);
+  outline-offset: 2px;
+}

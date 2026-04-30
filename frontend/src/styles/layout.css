@@ -1,0 +1,145 @@
+.app-shell {
+  min-height: 100vh;
+}
+
+.topbar {
+  align-items: center;
+  background: rgba(12, 9, 6, 0.88);
+  border-bottom: 1px solid var(--edge);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+  display: flex;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.topbar nav {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.brand-link,
+.nav-link {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+}
+
+.brand-link {
+  font-family: var(--mono);
+  font-weight: 800;
+  padding: 8px 0;
+}
+
+.nav-link {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted-strong);
+  padding: 8px 12px;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  background: rgba(255, 131, 28, 0.11);
+  border-color: var(--edge-soft);
+  color: var(--orange-2);
+}
+
+.page {
+  margin: 0 auto;
+  max-width: 1200px;
+  padding: 48px 28px;
+}
+
+.page-narrow {
+  max-width: 780px;
+}
+
+.eyebrow,
+.mono-label {
+  color: var(--orange-2);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+}
+
+.intro {
+  color: var(--muted-strong);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 720px;
+}
+
+.section-heading {
+  margin-bottom: 24px;
+}
+
+.section-heading h1 {
+  font-size: 2rem;
+  line-height: 1.15;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.hud-panel,
+.gaps-panel,
+.station-card,
+.orchestrator-node,
+.prompt-editor {
+  background:
+    linear-gradient(180deg, rgba(43, 33, 22, 0.88), rgba(15, 11, 7, 0.94));
+  border: 1px solid var(--edge);
+  box-shadow: 0 18px 42px var(--shadow), inset 0 1px 0 rgba(255, 177, 63, 0.13);
+}
+
+.primary-button {
+  background: linear-gradient(180deg, var(--orange-2), var(--orange));
+  border: 1px solid rgba(255, 210, 63, 0.45);
+  border-radius: 6px;
+  color: #120804;
+  font-weight: 800;
+  min-height: 40px;
+  padding: 8px 14px;
+  white-space: nowrap;
+}
+
+.primary-button:disabled {
+  background: #624c32;
+  border-color: #624c32;
+  color: #ba9b6a;
+}
+
+.status-ok {
+  color: var(--green);
+  margin: 12px 0 0;
+}
+
+.status-error {
+  background: rgba(224, 75, 48, 0.12);
+  border: 1px solid rgba(224, 75, 48, 0.55);
+  border-radius: 6px;
+  color: #ffb0a4;
+  padding: 10px 12px;
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 18px;
+  }
+
+  .page {
+    padding: 32px 18px;
+  }
+}
