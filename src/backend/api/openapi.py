@@ -70,6 +70,7 @@ def _cached_openapi_schema() -> dict[str, Any]:
                 },
             ),
             "StatsResponse": _stats_schema(),
+            "FactoryResponse": _factory_schema(),
         }
     )
 
@@ -98,6 +99,19 @@ def _cached_openapi_schema() -> dict[str, Any]:
                     "tags": ["stats"],
                     "responses": {
                         "200": _json_response("Task and token usage aggregates", "StatsResponse"),
+                    },
+                }
+            },
+            "/factory": {
+                "get": {
+                    "summary": "Get operational factory station metrics",
+                    "operationId": "getFactory",
+                    "tags": ["stats"],
+                    "responses": {
+                        "200": _json_response(
+                            "Factory station aggregates",
+                            "FactoryResponse",
+                        ),
                     },
                 }
             },
@@ -434,6 +448,88 @@ def _stats_schema() -> dict[str, Any]:
                     },
                 },
             ),
+        },
+    )
+
+
+def _factory_schema() -> dict[str, Any]:
+    nullable_age = {"type": ["integer", "null"], "minimum": 0}
+    nullable_bottleneck = {
+        "anyOf": [
+            _object_schema(
+                required=["station", "wip_count"],
+                properties={
+                    "station": {
+                        "type": "string",
+                        "enum": ["fetch", "execute", "pr_feedback", "deliver"],
+                    },
+                    "wip_count": {"type": "integer", "minimum": 1},
+                },
+            ),
+            {"type": "null"},
+        ]
+    }
+
+    station_schema = _object_schema(
+        required=[
+            "name",
+            "counts_by_status",
+            "total_count",
+            "wip_count",
+            "queue_count",
+            "active_count",
+            "failed_count",
+            "oldest_queue_age_seconds",
+            "oldest_active_age_seconds",
+        ],
+        properties={
+            "name": {
+                "type": "string",
+                "enum": ["fetch", "execute", "pr_feedback", "deliver"],
+            },
+            "counts_by_status": {
+                "type": "object",
+                "required": _enum_values(TaskStatus),
+                "properties": {
+                    status: {"type": "integer", "minimum": 0}
+                    for status in _enum_values(TaskStatus)
+                },
+                "additionalProperties": False,
+            },
+            "total_count": {"type": "integer", "minimum": 0},
+            "wip_count": {"type": "integer", "minimum": 0},
+            "queue_count": {"type": "integer", "minimum": 0},
+            "active_count": {"type": "integer", "minimum": 0},
+            "failed_count": {"type": "integer", "minimum": 0},
+            "oldest_queue_age_seconds": nullable_age,
+            "oldest_active_age_seconds": nullable_age,
+        },
+    )
+
+    return _object_schema(
+        required=["generated_at", "stations", "bottleneck", "data_gaps"],
+        properties={
+            "generated_at": {"type": "string", "format": "date-time"},
+            "stations": {
+                "type": "array",
+                "items": station_schema,
+                "minItems": 4,
+                "maxItems": 4,
+            },
+            "bottleneck": nullable_bottleneck,
+            "data_gaps": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "transition_history",
+                        "throughput_per_hour",
+                        "worker_capacity",
+                        "rework_loops",
+                        "business_task_kind",
+                    ],
+                },
+            },
         },
     )
 

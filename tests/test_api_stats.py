@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -250,6 +251,135 @@ def test_get_stats_returns_zeroed_breakdowns_for_empty_database(session_factory)
             },
         },
     }
+
+
+def test_get_factory_returns_station_aggregates_and_bottleneck(session_factory) -> None:
+    now = datetime.now(UTC)
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(task_type=TaskType.FETCH, status=TaskStatus.NEW)
+        )
+        execute_active = repository.create_task(
+            TaskCreateParams(task_type=TaskType.EXECUTE, status=TaskStatus.PROCESSING)
+        )
+        execute_queued = repository.create_task(
+            TaskCreateParams(task_type=TaskType.EXECUTE, status=TaskStatus.NEW)
+        )
+        feedback_failed = repository.create_task(
+            TaskCreateParams(task_type=TaskType.PR_FEEDBACK, status=TaskStatus.FAILED)
+        )
+        deliver_done = repository.create_task(
+            TaskCreateParams(task_type=TaskType.DELIVER, status=TaskStatus.DONE)
+        )
+
+        fetch_task.updated_at = now - timedelta(minutes=10)
+        execute_active.updated_at = now - timedelta(minutes=20)
+        execute_queued.updated_at = now - timedelta(minutes=5)
+        feedback_failed.updated_at = now - timedelta(minutes=30)
+        deliver_done.updated_at = now - timedelta(minutes=40)
+
+    app = create_app(runtime=_runtime(), session_factory=session_factory)
+    response = app.test_client().get("/factory")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["generated_at"]
+    assert [station["name"] for station in payload["stations"]] == [
+        "fetch",
+        "execute",
+        "pr_feedback",
+        "deliver",
+    ]
+    assert payload["bottleneck"] == {"station": "execute", "wip_count": 2}
+    assert payload["data_gaps"] == [
+        "transition_history",
+        "throughput_per_hour",
+        "worker_capacity",
+        "rework_loops",
+        "business_task_kind",
+    ]
+
+    stations = {station["name"]: station for station in payload["stations"]}
+    assert stations["fetch"]["counts_by_status"] == {
+        "new": 1,
+        "processing": 0,
+        "done": 0,
+        "failed": 0,
+    }
+    assert stations["fetch"]["total_count"] == 1
+    assert stations["fetch"]["wip_count"] == 1
+    assert stations["fetch"]["queue_count"] == 1
+    assert stations["fetch"]["active_count"] == 0
+    assert stations["fetch"]["failed_count"] == 0
+    assert stations["fetch"]["oldest_queue_age_seconds"] >= 590
+    assert stations["fetch"]["oldest_active_age_seconds"] is None
+
+    assert stations["execute"]["counts_by_status"] == {
+        "new": 1,
+        "processing": 1,
+        "done": 0,
+        "failed": 0,
+    }
+    assert stations["execute"]["total_count"] == 2
+    assert stations["execute"]["wip_count"] == 2
+    assert stations["execute"]["queue_count"] == 1
+    assert stations["execute"]["active_count"] == 1
+    assert stations["execute"]["failed_count"] == 0
+    assert stations["execute"]["oldest_queue_age_seconds"] >= 290
+    assert stations["execute"]["oldest_active_age_seconds"] >= 1190
+
+    assert stations["pr_feedback"]["counts_by_status"] == {
+        "new": 0,
+        "processing": 0,
+        "done": 0,
+        "failed": 1,
+    }
+    assert stations["pr_feedback"]["failed_count"] == 1
+    assert stations["pr_feedback"]["wip_count"] == 0
+
+    assert stations["deliver"]["counts_by_status"] == {
+        "new": 0,
+        "processing": 0,
+        "done": 1,
+        "failed": 0,
+    }
+    assert stations["deliver"]["wip_count"] == 0
+
+
+def test_get_factory_returns_empty_state_without_bottleneck(session_factory) -> None:
+    app = create_app(runtime=_runtime(), session_factory=session_factory)
+
+    response = app.test_client().get("/factory")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["bottleneck"] is None
+    assert [station["name"] for station in payload["stations"]] == [
+        "fetch",
+        "execute",
+        "pr_feedback",
+        "deliver",
+    ]
+    for station in payload["stations"]:
+        assert station == {
+            "name": station["name"],
+            "counts_by_status": {
+                "new": 0,
+                "processing": 0,
+                "done": 0,
+                "failed": 0,
+            },
+            "total_count": 0,
+            "wip_count": 0,
+            "queue_count": 0,
+            "active_count": 0,
+            "failed_count": 0,
+            "oldest_queue_age_seconds": None,
+            "oldest_active_age_seconds": None,
+        }
 
 
 def test_get_tasks_returns_serialized_tasks_with_chain_linkage(session_factory) -> None:

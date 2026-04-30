@@ -90,6 +90,8 @@ Runtime logs are emitted as structured JSON events from the API, workers, and ag
 - Correlation fields such as `task_id`, `root_task_id`, `workspace_key`, `branch_name`, and `pr_external_id` make it possible to follow one execution thread across workers.
 - Logs are intended for operational tracing only; durable task routing and delivery decisions still flow through `context`, `input_payload`, and `result_payload`.
 
+The read-only factory API exposes the current pipeline view through `GET /factory`. It aggregates existing `tasks` rows into the ordered stations `fetch`, `execute`, `pr_feedback`, and `deliver`, reports WIP and queue/active/failed counts, and names the current bottleneck by largest WIP. It does not fabricate throughput, transition history, worker capacity, rework-loop, or business-kind analytics that are not present in the MVP data model.
+
 ## MVP Scope
 
 The MVP intentionally stays narrow:
@@ -100,6 +102,7 @@ The MVP intentionally stays narrow:
 - local development support through `MockTracker` and `MockScm`;
 - durable persistence for orchestration tasks, token usage, and seeded default agent prompts;
 - machine-readable OpenAPI schema through `GET /openapi.json`;
+- read-only operational factory view through `GET /factory`;
 - prompt-management API for listing stored agent prompts, reading one prompt, and updating prompt content;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.

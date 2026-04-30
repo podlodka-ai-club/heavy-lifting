@@ -22,6 +22,7 @@ def test_get_openapi_json_describes_public_api() -> None:
     assert schema["openapi"] == "3.1.0"
     assert schema["info"]["title"] == "Heavy Lifting API"
     assert set(schema["paths"]) == {
+        "/factory",
         "/health",
         "/openapi.json",
         "/prompts",
@@ -74,6 +75,44 @@ def test_openapi_json_describes_task_and_stats_responses() -> None:
     assert schema["paths"]["/stats"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/StatsResponse"}
+
+
+def test_openapi_json_describes_factory_response() -> None:
+    app = create_app(runtime=_runtime())
+
+    schema = app.test_client().get("/openapi.json").get_json()
+
+    assert schema is not None
+    assert schema["paths"]["/factory"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/FactoryResponse"}
+    factory_schema = schema["components"]["schemas"]["FactoryResponse"]
+    assert factory_schema["required"] == [
+        "generated_at",
+        "stations",
+        "bottleneck",
+        "data_gaps",
+    ]
+    station_schema = factory_schema["properties"]["stations"]["items"]
+    assert station_schema["properties"]["name"]["enum"] == [
+        "fetch",
+        "execute",
+        "pr_feedback",
+        "deliver",
+    ]
+    assert station_schema["properties"]["counts_by_status"]["required"] == [
+        "new",
+        "processing",
+        "done",
+        "failed",
+    ]
+    assert factory_schema["properties"]["data_gaps"]["items"]["enum"] == [
+        "transition_history",
+        "throughput_per_hour",
+        "worker_capacity",
+        "rework_loops",
+        "business_task_kind",
+    ]
 
 
 def test_openapi_json_describes_prompt_endpoints() -> None:
