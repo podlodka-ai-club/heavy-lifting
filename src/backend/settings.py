@@ -1,7 +1,12 @@
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+
+from backend.application_settings import APPLICATION_SETTING_SPECS_BY_KEY
 
 
 def _get_int(name: str, default: int) -> int:
@@ -74,8 +79,14 @@ class Settings:
     cli_agent_profile: str | None
     cli_agent_api_key_env_var: str | None
     cli_agent_base_url_env_var: str | None
+    cli_agent_preview_chars: int
+    local_agent_provider: str
+    local_agent_model: str
+    local_agent_name: str
     tracker_poll_interval: int
     pr_poll_interval: int
+    tracker_fetch_limit: int
+    pr_feedback_fetch_limit: int
     linear_api_url: str
     linear_token_env_var: str
     linear_team_id: str | None
@@ -107,7 +118,7 @@ def get_settings() -> Settings:
     postgres_user = os.getenv("POSTGRES_USER", "postgres")
     postgres_password = os.getenv("POSTGRES_PASSWORD", "postgres")
 
-    return Settings(
+    env_settings = Settings(
         app_name=os.getenv("APP_NAME", "heavy-lifting-backend"),
         app_host=os.getenv("APP_HOST", "0.0.0.0"),
         app_port=_get_int("APP_PORT", 8000),
@@ -136,8 +147,14 @@ def get_settings() -> Settings:
         cli_agent_api_key_env_var=os.getenv("CLI_AGENT_API_KEY_ENV_VAR", "OPENAI_API_KEY") or None,
         cli_agent_base_url_env_var=os.getenv("CLI_AGENT_BASE_URL_ENV_VAR", "OPENAI_BASE_URL")
         or None,
+        cli_agent_preview_chars=_get_int("CLI_AGENT_PREVIEW_CHARS", 1000),
+        local_agent_provider=os.getenv("LOCAL_AGENT_PROVIDER", "openai"),
+        local_agent_model=os.getenv("LOCAL_AGENT_MODEL", "gpt-5.4"),
+        local_agent_name=os.getenv("LOCAL_AGENT_NAME", "local-placeholder-runner"),
         tracker_poll_interval=_get_int("TRACKER_POLL_INTERVAL", 30),
         pr_poll_interval=_get_int("PR_POLL_INTERVAL", 60),
+        tracker_fetch_limit=_get_int("TRACKER_FETCH_LIMIT", 100),
+        pr_feedback_fetch_limit=_get_int("PR_FEEDBACK_FETCH_LIMIT", 100),
         linear_api_url=os.getenv("LINEAR_API_URL", "https://api.linear.app/graphql"),
         linear_token_env_var=os.getenv("LINEAR_TOKEN_ENV_VAR", "LINEAR_API_KEY"),
         linear_team_id=os.getenv("LINEAR_TEAM_ID") or None,
@@ -160,6 +177,83 @@ def get_settings() -> Settings:
         scm_default_base_branch=os.getenv("SCM_DEFAULT_BASE_BRANCH") or None,
         scm_branch_prefix=os.getenv("SCM_BRANCH_PREFIX", "execute/"),
     )
+
+    return _apply_database_overrides(env_settings)
+
+
+def _apply_database_overrides(settings: Settings) -> Settings:
+    try:
+        engine = create_engine(settings.database_url)
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT setting_key, value, value_type "
+                    "FROM application_settings"
+                )
+            )
+            overrides: dict[str, int | str] = {}
+            for key, raw_value, value_type in rows:
+                if key not in APPLICATION_SETTING_SPECS_BY_KEY:
+                    continue
+                coerced_value = _coerce_database_value(raw_value, value_type)
+                if coerced_value is not None:
+                    overrides[key] = coerced_value
+    except SQLAlchemyError:
+        return settings
+    finally:
+        try:
+            engine.dispose()
+        except UnboundLocalError:
+            pass
+
+    if not overrides:
+        return settings
+    return replace(
+        settings,
+        tracker_fetch_limit=_int_override(
+            overrides, "tracker_fetch_limit", settings.tracker_fetch_limit
+        ),
+        pr_feedback_fetch_limit=_int_override(
+            overrides, "pr_feedback_fetch_limit", settings.pr_feedback_fetch_limit
+        ),
+        local_agent_provider=_str_override(
+            overrides, "local_agent_provider", settings.local_agent_provider
+        ),
+        local_agent_model=_str_override(
+            overrides, "local_agent_model", settings.local_agent_model
+        ),
+        local_agent_name=_str_override(
+            overrides, "local_agent_name", settings.local_agent_name
+        ),
+        cli_agent_preview_chars=_int_override(
+            overrides, "cli_agent_preview_chars", settings.cli_agent_preview_chars
+        ),
+    )
+
+
+def _int_override(overrides: dict[str, int | str], key: str, default: int) -> int:
+    value = overrides.get(key)
+    return value if isinstance(value, int) else default
+
+
+def _str_override(overrides: dict[str, int | str], key: str, default: str) -> str:
+    value = overrides.get(key)
+    return value if isinstance(value, str) else default
+
+
+def _coerce_database_value(raw_value: str, value_type: str) -> int | str | None:
+    if value_type == "int":
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    if value_type == "string":
+        text_value = str(raw_value).strip()
+        return text_value or None
+
+    return None
 
 
 __all__ = ["Settings", "get_settings"]

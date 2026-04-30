@@ -155,6 +155,9 @@ class Task(Base):
         back_populates="root_task",
         uselist=False,
     )
+    agent_feedback_entries: Mapped[list[AgentFeedbackEntry]] = relationship(
+        back_populates="task",
+    )
 
 
 class TokenUsage(Base):
@@ -281,8 +284,99 @@ class TaskRevenue(Base):
     )
 
 
+class ApplicationSetting(Base):
+    __tablename__ = "application_settings"
+    __table_args__ = (
+        UniqueConstraint("setting_key", name="uq_application_settings_setting_key"),
+        CheckConstraint(
+            "value_type IN ('int', 'string')",
+            name="ck_application_settings_value_type",
+        ),
+        Index("ix_application_settings_setting_key", "setting_key"),
+        Index("ix_application_settings_display_order", "display_order"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    setting_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    env_var: Mapped[str] = mapped_column(String(100), nullable=False)
+    value_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    default_value: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    display_order: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        onupdate=_utc_now,
+        server_default=func.now(),
+    )
+
+
+class AgentFeedbackEntry(Base):
+    __tablename__ = "agent_feedback_entries"
+    __table_args__ = (
+        Index("ix_agent_feedback_entries_task_id", "task_id"),
+        Index("ix_agent_feedback_entries_tag_created_at", "tag", "created_at"),
+        Index(
+            "ix_agent_feedback_entries_task_type_created_at",
+            "task_type",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    root_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_type: Mapped[TaskType] = mapped_column(task_type_enum, nullable=False)
+    role: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="agent",
+        server_default="agent",
+    )
+    category: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="other",
+        server_default="other",
+    )
+    severity: Mapped[str] = mapped_column(String(50), nullable=False, default="info")
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tag: Mapped[str] = mapped_column(String(100), nullable=False)
+    entry_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        server_default=func.now(),
+    )
+
+    task: Mapped[Task] = relationship(back_populates="agent_feedback_entries")
+
+
 __all__ = [
+    "AgentFeedbackEntry",
     "AgentPrompt",
+    "ApplicationSetting",
     "Base",
     "RevenueConfidence",
     "RevenueSource",

@@ -1,3 +1,7 @@
+from sqlalchemy.orm import Session
+
+from backend.db import build_engine
+from backend.models import ApplicationSetting, Base
 from backend.settings import get_settings
 
 
@@ -24,8 +28,14 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "CLI_AGENT_PROFILE",
         "CLI_AGENT_API_KEY_ENV_VAR",
         "CLI_AGENT_BASE_URL_ENV_VAR",
+        "CLI_AGENT_PREVIEW_CHARS",
+        "LOCAL_AGENT_PROVIDER",
+        "LOCAL_AGENT_MODEL",
+        "LOCAL_AGENT_NAME",
         "TRACKER_POLL_INTERVAL",
         "PR_POLL_INTERVAL",
+        "TRACKER_FETCH_LIMIT",
+        "PR_FEEDBACK_FETCH_LIMIT",
         "LINEAR_API_URL",
         "LINEAR_TOKEN_ENV_VAR",
         "LINEAR_TEAM_ID",
@@ -76,8 +86,14 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.cli_agent_profile is None
     assert settings.cli_agent_api_key_env_var == "OPENAI_API_KEY"
     assert settings.cli_agent_base_url_env_var == "OPENAI_BASE_URL"
+    assert settings.cli_agent_preview_chars == 1000
+    assert settings.local_agent_provider == "openai"
+    assert settings.local_agent_model == "gpt-5.4"
+    assert settings.local_agent_name == "local-placeholder-runner"
     assert settings.tracker_poll_interval == 30
     assert settings.pr_poll_interval == 60
+    assert settings.tracker_fetch_limit == 100
+    assert settings.pr_feedback_fetch_limit == 100
     assert settings.linear_api_url == "https://api.linear.app/graphql"
     assert settings.linear_token_env_var == "LINEAR_API_KEY"
     assert settings.linear_team_id is None
@@ -122,8 +138,14 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("CLI_AGENT_PROFILE", "backend")
     monkeypatch.setenv("CLI_AGENT_API_KEY_ENV_VAR", "CUSTOM_API_KEY")
     monkeypatch.setenv("CLI_AGENT_BASE_URL_ENV_VAR", "CUSTOM_BASE_URL")
+    monkeypatch.setenv("CLI_AGENT_PREVIEW_CHARS", "500")
+    monkeypatch.setenv("LOCAL_AGENT_PROVIDER", "anthropic")
+    monkeypatch.setenv("LOCAL_AGENT_MODEL", "claude-opus-4.6")
+    monkeypatch.setenv("LOCAL_AGENT_NAME", "custom-local")
     monkeypatch.setenv("TRACKER_POLL_INTERVAL", "15")
     monkeypatch.setenv("PR_POLL_INTERVAL", "45")
+    monkeypatch.setenv("TRACKER_FETCH_LIMIT", "25")
+    monkeypatch.setenv("PR_FEEDBACK_FETCH_LIMIT", "9")
     monkeypatch.setenv("LINEAR_API_URL", "https://custom.linear.app")
     monkeypatch.setenv("LINEAR_TOKEN_ENV_VAR", "MY_LINEAR_KEY")
     monkeypatch.setenv("LINEAR_TEAM_ID", "team-123")
@@ -173,8 +195,14 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.cli_agent_profile == "backend"
     assert settings.cli_agent_api_key_env_var == "CUSTOM_API_KEY"
     assert settings.cli_agent_base_url_env_var == "CUSTOM_BASE_URL"
+    assert settings.cli_agent_preview_chars == 500
+    assert settings.local_agent_provider == "anthropic"
+    assert settings.local_agent_model == "claude-opus-4.6"
+    assert settings.local_agent_name == "custom-local"
     assert settings.tracker_poll_interval == 15
     assert settings.pr_poll_interval == 45
+    assert settings.tracker_fetch_limit == 25
+    assert settings.pr_feedback_fetch_limit == 9
     assert settings.linear_api_url == "https://custom.linear.app"
     assert settings.linear_token_env_var == "MY_LINEAR_KEY"
     assert settings.linear_team_id == "team-123"
@@ -241,3 +269,83 @@ def test_get_settings_not_dict_json_fallback(monkeypatch) -> None:
     settings = get_settings()
     
     assert settings.linear_task_type_label_mapping == {}
+
+
+def test_get_settings_applies_database_overrides(monkeypatch, tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'app.db'}"
+    engine = build_engine(database_url)
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add_all(
+            [
+                ApplicationSetting(
+                    setting_key="tracker_fetch_limit",
+                    env_var="TRACKER_FETCH_LIMIT",
+                    value_type="int",
+                    value="42",
+                    default_value="100",
+                    description="Fetch limit",
+                    display_order=10,
+                ),
+                ApplicationSetting(
+                    setting_key="local_agent_model",
+                    env_var="LOCAL_AGENT_MODEL",
+                    value_type="string",
+                    value="gpt-db",
+                    default_value="gpt-5.4",
+                    description="Local model",
+                    display_order=40,
+                ),
+            ]
+        )
+        session.commit()
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("TRACKER_FETCH_LIMIT", "25")
+    monkeypatch.setenv("LOCAL_AGENT_MODEL", "gpt-env")
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert settings.tracker_fetch_limit == 42
+    assert settings.local_agent_model == "gpt-db"
+
+
+def test_get_settings_ignores_invalid_database_overrides(monkeypatch, tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'app.db'}"
+    engine = build_engine(database_url)
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add_all(
+            [
+                ApplicationSetting(
+                    setting_key="tracker_fetch_limit",
+                    env_var="TRACKER_FETCH_LIMIT",
+                    value_type="int",
+                    value="not-an-int",
+                    default_value="100",
+                    description="Fetch limit",
+                    display_order=10,
+                ),
+                ApplicationSetting(
+                    setting_key="local_agent_name",
+                    env_var="LOCAL_AGENT_NAME",
+                    value_type="string",
+                    value=" ",
+                    default_value="local-placeholder-runner",
+                    description="Local name",
+                    display_order=50,
+                ),
+            ]
+        )
+        session.commit()
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("TRACKER_FETCH_LIMIT", "25")
+    monkeypatch.setenv("LOCAL_AGENT_NAME", "env-local")
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert settings.tracker_fetch_limit == 25
+    assert settings.local_agent_name == "env-local"

@@ -51,6 +51,10 @@ class TaskRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    @property
+    def session(self) -> Session:
+        return self._session
+
     def list_tasks(self) -> list[Task]:
         statement = select(Task).order_by(Task.created_at.asc(), Task.id.asc())
         return list(self._session.execute(statement).scalars())

@@ -7,8 +7,17 @@ from pathlib import Path
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from backend.application_settings import DEFAULT_APPLICATION_SETTINGS
 from backend.db import build_engine
-from backend.models import AgentPrompt, Base, Task, TaskRevenue, TokenUsage
+from backend.models import (
+    AgentFeedbackEntry,
+    AgentPrompt,
+    ApplicationSetting,
+    Base,
+    Task,
+    TaskRevenue,
+    TokenUsage,
+)
 
 DEFAULT_AGENT_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "agents"
 
@@ -17,12 +26,16 @@ MVP_SCHEMA_TABLES = (
     TokenUsage.__tablename__,
     AgentPrompt.__tablename__,
     TaskRevenue.__tablename__,
+    ApplicationSetting.__tablename__,
+    AgentFeedbackEntry.__tablename__,
 )
 MVP_SCHEMA_METADATA = (
     Base.metadata.tables[Task.__tablename__],
     Base.metadata.tables[TokenUsage.__tablename__],
     Base.metadata.tables[AgentPrompt.__tablename__],
     Base.metadata.tables[TaskRevenue.__tablename__],
+    Base.metadata.tables[ApplicationSetting.__tablename__],
+    Base.metadata.tables[AgentFeedbackEntry.__tablename__],
 )
 
 
@@ -35,6 +48,7 @@ def bootstrap_schema(database_url: str | None = None) -> tuple[str, ...]:
 
     with Session(engine) as session:
         seed_default_agent_prompts(session)
+        seed_default_application_settings(session)
         session.commit()
 
     return tuple(
@@ -65,6 +79,34 @@ def seed_default_agent_prompts(
             continue
 
         prompt.source_path = source_path
+
+
+def seed_default_application_settings(session: Session) -> None:
+    for spec in DEFAULT_APPLICATION_SETTINGS:
+        setting = (
+            session.query(ApplicationSetting)
+            .filter(ApplicationSetting.setting_key == spec.key)
+            .one_or_none()
+        )
+        if setting is None:
+            session.add(
+                ApplicationSetting(
+                    setting_key=spec.key,
+                    env_var=spec.env_var,
+                    value_type=spec.value_type,
+                    value=spec.env_default(),
+                    default_value=spec.default_value,
+                    description=spec.description,
+                    display_order=spec.display_order,
+                )
+            )
+            continue
+
+        setting.env_var = spec.env_var
+        setting.value_type = spec.value_type
+        setting.default_value = spec.default_value
+        setting.description = spec.description
+        setting.display_order = spec.display_order
 
 
 def build_parser() -> argparse.ArgumentParser:

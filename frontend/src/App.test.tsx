@@ -40,6 +40,35 @@ const prompts = [
   }
 ];
 
+const runtimeSettings = [
+  {
+    id: 1,
+    setting_key: "tracker_fetch_limit",
+    env_var: "TRACKER_FETCH_LIMIT",
+    value_type: "int",
+    value: "100",
+    default_value: "100",
+    description: "Maximum tracker tasks fetched by worker1 in one poll.",
+    display_order: 10,
+    requires_restart: true,
+    created_at: "2026-01-01T00:00:00+00:00",
+    updated_at: "2026-01-01T00:00:00+00:00"
+  },
+  {
+    id: 2,
+    setting_key: "local_agent_model",
+    env_var: "LOCAL_AGENT_MODEL",
+    value_type: "string",
+    value: "gpt-5.4",
+    default_value: "gpt-5.4",
+    description: "Model recorded by the local placeholder agent runner.",
+    display_order: 40,
+    requires_restart: true,
+    created_at: "2026-01-01T00:00:00+00:00",
+    updated_at: "2026-01-01T00:00:00+00:00"
+  }
+];
+
 const factorySnapshot = {
   generated_at: "2026-04-30T12:00:00+00:00",
   stations: [
@@ -147,6 +176,7 @@ const economicsSnapshot = {
 describe("App", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/");
+    mockReducedMotion(false);
   });
 
   afterEach(() => {
@@ -192,21 +222,48 @@ describe("App", () => {
     expect(await screen.findByText(/generated_at=/)).toBeInTheDocument();
     expect(screen.getByText("Current bottleneck")).toBeInTheDocument();
     expect(screen.getByText("WIP 3")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Factory handoff routes" })).toBeInTheDocument();
+    expect(screen.getByLabelText("fetch payload marker")).toBeInTheDocument();
+    expect(screen.getByLabelText("execute payload marker")).toBeInTheDocument();
+    expect(document.querySelectorAll("animateMotion")).toHaveLength(2);
 
     const executeStation = screen.getByLabelText("execute station");
+    expect(executeStation).toHaveClass("bottleneck");
     expect(within(executeStation).getByText("BOTTLENECK")).toBeInTheDocument();
     expect(within(executeStation).getByText("1h 1m")).toBeInTheDocument();
     expect(within(executeStation).getByText("3m")).toBeInTheDocument();
     expect(within(executeStation).getByText("failed 1")).toBeInTheDocument();
+    expect(executeStation.querySelector(".station-machine")).not.toBeNull();
 
     const feedbackStation = screen.getByLabelText("pr feedback station");
     const zeroWipMeter = within(feedbackStation).getByLabelText("pr feedback WIP 0");
     expect(zeroWipMeter.firstElementChild).toHaveStyle({ minWidth: "0", width: "0%" });
+    expect(screen.queryByLabelText("pr feedback payload marker")).not.toBeInTheDocument();
 
     expect(screen.getByText("Не показываем то, чего нет в API")).toBeInTheDocument();
     expect(screen.getByText("transition_history")).toBeInTheDocument();
     expect(screen.getByText("worker_capacity")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/factory");
+  });
+
+  it("keeps payload markers static when reduced motion is preferred", async () => {
+    mockReducedMotion(true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        input.toString() === "/api/factory"
+          ? jsonResponse(factorySnapshot)
+          : jsonResponse({ error: "not found" }, 404)
+      )
+    );
+    window.history.pushState({}, "", "/factory");
+
+    render(<App />);
+
+    const fetchMarker = await screen.findByLabelText("fetch payload marker");
+    expect(fetchMarker).toHaveAttribute("cx", "178");
+    expect(fetchMarker).toHaveAttribute("cy", "334");
+    expect(document.querySelector("animateMotion")).not.toBeInTheDocument();
   });
 
   it("shows backend errors while loading factory", async () => {
@@ -304,6 +361,10 @@ describe("App", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
 
+      if (url === "/api/settings" && !init) {
+        return jsonResponse({ settings: runtimeSettings });
+      }
+
       if (url === "/api/prompts" && !init) {
         return jsonResponse({ prompts });
       }
@@ -324,6 +385,7 @@ describe("App", () => {
 
     render(<App />);
 
+    await userEvent.click(await screen.findByRole("tab", { name: "Промты" }));
     const editor = await screen.findByLabelText("Content");
     expect(editor).toHaveValue("DEV prompt");
 
@@ -344,6 +406,54 @@ describe("App", () => {
       )
     );
     expect(await screen.findByText("Сохранено")).toBeInTheDocument();
+  });
+
+  it("loads runtime settings and saves edited values", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+
+      if (url === "/api/settings" && !init) {
+        return jsonResponse({ settings: runtimeSettings });
+      }
+
+      if (url === "/api/prompts" && !init) {
+        return jsonResponse({ prompts });
+      }
+
+      if (url === "/api/settings/tracker_fetch_limit" && init?.method === "PATCH") {
+        return jsonResponse({
+          setting: {
+            ...runtimeSettings[0],
+            value: "25"
+          }
+        });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/settings");
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Runtime settings" })).toBeInTheDocument();
+    expect(screen.getByText("tracker_fetch_limit")).toBeInTheDocument();
+    const fetchLimitInput = screen.getByDisplayValue("100");
+
+    await userEvent.clear(fetchLimitInput);
+    await userEvent.type(fetchLimitInput, "25");
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings/tracker_fetch_limit",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ value: "25" })
+        })
+      )
+    );
+    expect(await screen.findByText(/Перезапустите процессы/)).toBeInTheDocument();
   });
 
   it("shows backend errors while loading prompts", async () => {
@@ -381,4 +491,20 @@ function jsonResponse(body: unknown, status = 200): Response {
       "Content-Type": "application/json"
     }
   });
+}
+
+function mockReducedMotion(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    }))
+  );
 }

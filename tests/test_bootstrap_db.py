@@ -8,7 +8,7 @@ from backend.bootstrap_db import (
     main,
 )
 from backend.db import build_engine
-from backend.models import AgentPrompt
+from backend.models import AgentPrompt, ApplicationSetting
 
 
 def test_bootstrap_schema_creates_mvp_tables(tmp_path) -> None:
@@ -84,6 +84,68 @@ def test_bootstrap_schema_preserves_existing_agent_prompt_content(tmp_path) -> N
     assert prompt.source_path == f"prompts/agents/{first_prompt_path.name}"
 
 
+def test_bootstrap_schema_seeds_default_application_settings(tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'app.db'}"
+
+    bootstrap_schema(database_url)
+
+    engine = build_engine(database_url)
+    with Session(engine) as session:
+        settings = (
+            session.query(ApplicationSetting)
+            .order_by(ApplicationSetting.display_order)
+            .all()
+        )
+
+    assert [setting.setting_key for setting in settings] == [
+        "tracker_fetch_limit",
+        "pr_feedback_fetch_limit",
+        "local_agent_provider",
+        "local_agent_model",
+        "local_agent_name",
+        "cli_agent_preview_chars",
+    ]
+    assert [setting.value for setting in settings] == [
+        "100",
+        "100",
+        "openai",
+        "gpt-5.4",
+        "local-placeholder-runner",
+        "1000",
+    ]
+
+
+def test_bootstrap_schema_preserves_existing_application_setting_value(tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'app.db'}"
+
+    bootstrap_schema(database_url)
+
+    engine = build_engine(database_url)
+    with Session(engine) as session:
+        setting = (
+            session.query(ApplicationSetting)
+            .filter(ApplicationSetting.setting_key == "tracker_fetch_limit")
+            .one()
+        )
+        setting.value = "25"
+        setting.description = "outdated"
+        session.commit()
+
+    bootstrap_schema(database_url)
+
+    with Session(engine) as session:
+        setting_count = session.query(ApplicationSetting).count()
+        setting = (
+            session.query(ApplicationSetting)
+            .filter(ApplicationSetting.setting_key == "tracker_fetch_limit")
+            .one()
+        )
+
+    assert setting_count == 6
+    assert setting.value == "25"
+    assert setting.description == "Maximum tracker tasks fetched by worker1 in one poll."
+
+
 def test_main_accepts_database_url_override(tmp_path, capsys) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'cli.db'}"
 
@@ -92,6 +154,6 @@ def test_main_accepts_database_url_override(tmp_path, capsys) -> None:
 
     assert exit_code == 0
     assert (
-        "MVP schema is ready; created tables: tasks, token_usage, agent_prompts, task_revenue"
-        in stdout
-    )
+        "MVP schema is ready; created tables: tasks, token_usage, "
+        "agent_prompts, task_revenue, application_settings, agent_feedback_entries"
+    ) in stdout

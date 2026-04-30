@@ -62,6 +62,19 @@ If a pull request receives review comments or requested changes, the orchestrato
 
 Follow-up feedback enters the system through the event-ingestion path rather than as a new top-level intake task.
 
+### Agent Retro Feedback
+
+After `execute` and `pr_feedback` agent runs, the runner may include optional structured feedback in `TaskResultPayload.metadata["agent_retro"]`. The accepted v1 shapes are either a list of entries or an object with an `entries` list. Each valid entry is append-only, has `source: "agent"` assigned by the backend, a required slug `tag`, required `message`, `category` defaulting to `other`, `severity` defaulting to `info`, optional `suggested_action`, and optional JSON `metadata`. The persisted row also snapshots `task_id`, `root_id`, `task_type`, nullable `role`, and the current task `attempt`.
+
+Missing retro feedback has no effect on task execution. Invalid retro feedback is logged as a warning and ignored so that retrospective collection cannot break implementation or PR feedback processing.
+
+The read-only retro API exposes the collected data:
+
+- `GET /retro/entries` returns raw persisted feedback with optional `task_type`, `tag`, `severity`, `source`, and `limit` filters.
+- `GET /retro/tags` aggregates entries by tag and returns total count, severity counts, first and last seen timestamps, and affected task count.
+
+This v1 slice does not run a separate analyzer agent, infer embeddings, merge or split tags, create actions from tags, or provide a frontend visualization.
+
 ### Delivery
 
 After execution completes, the orchestrator reports the result back to the tracker. Delivery includes status, a concise summary of what changed, links to branches or pull requests when available, and failure context when execution does not succeed. Delivery is driven by structured handoff data rather than free-text parsing.
@@ -102,12 +115,14 @@ The MVP intentionally stays narrow:
 - explicit worker pipeline for intake, execution, and delivery;
 - protocol boundaries around tracker and SCM integrations;
 - local development support through `MockTracker` and `MockScm`;
-- durable persistence for orchestration tasks, token usage, and seeded default agent prompts;
+- durable persistence for orchestration tasks, token usage, seeded default agent prompts, and non-secret runtime settings;
 - durable persistence for root-task revenue in `task_revenue`;
 - machine-readable OpenAPI schema through `GET /openapi.json`;
 - read-only operational factory view through `GET /factory`;
 - MVP economics view through `GET /economics`, deterministic mock revenue generation, and manual expert/external revenue upsert;
+- append-only agent retro feedback persistence plus read-only `/retro/entries` and `/retro/tags`;
 - prompt-management API for listing stored agent prompts, reading one prompt, and updating prompt content;
+- runtime-settings API for listing and updating persisted non-secret operational settings;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
 - selection of previously estimated small tracker tasks into one executable subtask through the tracker boundary contract, with duplicate parent selection blocked through tracker metadata.

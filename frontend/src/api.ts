@@ -7,6 +7,20 @@ export type Prompt = {
   updated_at: string;
 };
 
+export type RuntimeSetting = {
+  id: number;
+  setting_key: string;
+  env_var: string;
+  value_type: "int" | "string";
+  value: string;
+  default_value: string;
+  description: string;
+  display_order: number;
+  requires_restart: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type FactoryStation = {
   name: "fetch" | "execute" | "pr_feedback" | "deliver";
   counts_by_status: {
@@ -109,6 +123,14 @@ type PromptResponse = {
   prompt: Prompt;
 };
 
+type RuntimeSettingsListResponse = {
+  settings: RuntimeSetting[];
+};
+
+type RuntimeSettingResponse = {
+  setting: RuntimeSetting;
+};
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T | { error?: string };
 
@@ -142,6 +164,27 @@ export async function updatePrompt(promptKey: string, content: string): Promise<
   });
   const payload = await parseJsonResponse<PromptResponse>(response);
   return payload.prompt;
+}
+
+export async function listRuntimeSettings(): Promise<RuntimeSetting[]> {
+  const response = await fetch("/api/settings");
+  const payload = await parseJsonResponse<RuntimeSettingsListResponse>(response);
+  return payload.settings;
+}
+
+export async function updateRuntimeSetting(
+  settingKey: string,
+  value: string
+): Promise<RuntimeSetting> {
+  const response = await fetch(`/api/settings/${encodeURIComponent(settingKey)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ value })
+  });
+  const payload = await parseJsonResponse<RuntimeSettingResponse>(response);
+  return payload.setting;
 }
 
 export async function getFactorySnapshot(): Promise<FactorySnapshot> {

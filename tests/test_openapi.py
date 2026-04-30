@@ -30,6 +30,10 @@ def test_get_openapi_json_describes_public_api() -> None:
         "/openapi.json",
         "/prompts",
         "/prompts/{prompt_key}",
+        "/retro/entries",
+        "/retro/tags",
+        "/settings",
+        "/settings/{setting_key}",
         "/stats",
         "/tasks",
         "/tasks/{task_id}",
@@ -184,6 +188,87 @@ def test_openapi_json_describes_prompt_endpoints() -> None:
     assert prompt_path["patch"]["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/PromptUpdatePayload"
     }
+
+
+def test_openapi_json_describes_setting_endpoints() -> None:
+    app = create_app(runtime=_runtime())
+
+    schema = app.test_client().get("/openapi.json").get_json()
+
+    assert schema is not None
+    components = schema["components"]["schemas"]
+    assert components["ApplicationSetting"]["required"] == [
+        "id",
+        "setting_key",
+        "env_var",
+        "value_type",
+        "value",
+        "default_value",
+        "description",
+        "display_order",
+        "requires_restart",
+        "created_at",
+        "updated_at",
+    ]
+    assert components["ApplicationSetting"]["properties"]["value_type"]["enum"] == [
+        "int",
+        "string",
+    ]
+    assert schema["paths"]["/settings"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/ApplicationSettingsListResponse"}
+    setting_path = schema["paths"]["/settings/{setting_key}"]
+    assert set(setting_path) == {"patch"}
+    assert setting_path["patch"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/SettingUpdatePayload"
+    }
+
+
+def test_openapi_json_describes_retro_endpoints() -> None:
+    app = create_app(runtime=_runtime())
+
+    schema = app.test_client().get("/openapi.json").get_json()
+
+    assert schema is not None
+    assert schema["paths"]["/retro/entries"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/RetroEntriesResponse"}
+    assert schema["paths"]["/retro/tags"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/RetroTagsResponse"}
+    components = schema["components"]["schemas"]
+    assert components["RetroEntry"]["required"] == [
+        "id",
+        "task_id",
+        "root_id",
+        "task_type",
+        "role",
+        "attempt",
+        "source",
+        "category",
+        "tag",
+        "severity",
+        "message",
+        "suggested_action",
+        "metadata",
+        "created_at",
+    ]
+    assert components["RetroEntry"]["properties"]["source"]["enum"] == ["agent"]
+    assert components["RetroEntry"]["properties"]["message"] == {"type": "string"}
+    assert components["RetroEntry"]["properties"]["task_type"]["enum"] == [
+        "fetch",
+        "execute",
+        "deliver",
+        "pr_feedback",
+    ]
+    assert components["RetroTagAggregate"]["required"] == [
+        "tag",
+        "count",
+        "severity_counts",
+        "first_seen",
+        "last_seen",
+        "affected_tasks_count",
+    ]
 
 
 def test_build_openapi_schema_returns_isolated_copy() -> None:

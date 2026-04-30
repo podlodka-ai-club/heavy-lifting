@@ -80,6 +80,25 @@ class TokenUsagePayload(SchemaModel):
     cost_usd: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
 
 
+class AgentRetroFeedbackItem(SchemaModel):
+    tag: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", min_length=1, max_length=100)
+    category: str = Field(
+        default="other",
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+        min_length=1,
+        max_length=50,
+    )
+    severity: str = Field(
+        default="info",
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+        min_length=1,
+        max_length=50,
+    )
+    message: str = Field(min_length=1)
+    suggested_action: str | None = None
+    metadata: JsonObject | None = None
+
+
 class TaskResultPayload(SchemaModel):
     summary: str
     details: str | None = None
@@ -278,6 +297,7 @@ class ScmReadPrFeedbackQuery(SchemaModel):
 __all__ = [
     "JsonObject",
     "JsonValue",
+    "AgentRetroFeedbackItem",
     "PrFeedbackPayload",
     "ScmBranchCreatePayload",
     "ScmBranchReference",

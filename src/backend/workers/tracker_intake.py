@@ -454,6 +454,8 @@ def build_tracker_intake_worker(
         session_factory=session_factory or get_session_factory(),
         poll_interval=active_runtime.settings.tracker_poll_interval,
         pr_poll_interval=active_runtime.settings.pr_poll_interval,
+        fetch_limit=active_runtime.settings.tracker_fetch_limit,
+        feedback_limit=active_runtime.settings.pr_feedback_fetch_limit,
     )
 
 

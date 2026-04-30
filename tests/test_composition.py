@@ -257,6 +257,7 @@ def test_create_runtime_container_builds_cli_agent_runner_from_settings(monkeypa
         cli_agent_profile="backend",
         cli_agent_api_key_env_var="CUSTOM_API_KEY",
         cli_agent_base_url_env_var="CUSTOM_BASE_URL",
+        cli_agent_preview_chars=250,
     )
 
     runtime = create_runtime_container(settings=settings)
@@ -270,6 +271,27 @@ def test_create_runtime_container_builds_cli_agent_runner_from_settings(monkeypa
     assert runtime.agent_runner.config.profile == "backend"
     assert runtime.agent_runner.config.api_key_env_var == "CUSTOM_API_KEY"
     assert runtime.agent_runner.config.base_url_env_var == "CUSTOM_BASE_URL"
+    assert runtime.agent_runner.config.preview_chars == 250
+
+
+def test_create_runtime_container_builds_local_agent_runner_from_settings(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(
+        get_settings(),
+        local_agent_provider="anthropic",
+        local_agent_model="claude-opus-4.6",
+        local_agent_name="local-test-runner",
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.agent_runner, LocalAgentRunner)
+    assert runtime.agent_runner.provider == "anthropic"
+    assert runtime.agent_runner.model == "claude-opus-4.6"
+    assert runtime.agent_runner.name == "local-test-runner"
 
 
 def test_create_runtime_container_rejects_invalid_cli_runner_timeout(monkeypatch) -> None:
@@ -289,6 +311,25 @@ def test_create_runtime_container_rejects_invalid_cli_runner_timeout(monkeypatch
         assert str(exc) == "CLI agent runner timeout must be greater than 0"
     else:
         raise AssertionError("Expected ValueError for invalid cli runner timeout")
+
+
+def test_create_runtime_container_rejects_invalid_cli_runner_preview_chars(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(
+        get_settings(),
+        agent_runner_adapter="cli",
+        cli_agent_preview_chars=0,
+    )
+
+    try:
+        create_runtime_container(settings=settings)
+    except ValueError as exc:
+        assert str(exc) == "CLI agent runner preview chars must be greater than 0"
+    else:
+        raise AssertionError("Expected ValueError for invalid cli runner preview chars")
 
 
 def test_create_app_stores_runtime_container_extension(monkeypatch) -> None:

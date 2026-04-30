@@ -55,6 +55,24 @@ def _cached_openapi_schema() -> dict[str, Any]:
                 required=["content"],
                 properties={"content": {"type": "string"}},
             ),
+            "ApplicationSetting": _application_setting_schema(),
+            "ApplicationSettingResponse": _object_schema(
+                required=["setting"],
+                properties={"setting": {"$ref": "#/components/schemas/ApplicationSetting"}},
+            ),
+            "ApplicationSettingsListResponse": _object_schema(
+                required=["settings"],
+                properties={
+                    "settings": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/ApplicationSetting"},
+                    }
+                },
+            ),
+            "SettingUpdatePayload": _object_schema(
+                required=["value"],
+                properties={"value": {"type": "string"}},
+            ),
             "Task": _task_schema(),
             "TaskResponse": _object_schema(
                 required=["task"],
@@ -79,6 +97,26 @@ def _cached_openapi_schema() -> dict[str, Any]:
             "TaskRevenueResponse": _object_schema(
                 required=["revenue"],
                 properties={"revenue": {"$ref": "#/components/schemas/TaskRevenue"}},
+            ),
+            "RetroEntry": _retro_entry_schema(),
+            "RetroEntriesResponse": _object_schema(
+                required=["entries"],
+                properties={
+                    "entries": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/RetroEntry"},
+                    }
+                },
+            ),
+            "RetroTagAggregate": _retro_tag_aggregate_schema(),
+            "RetroTagsResponse": _object_schema(
+                required=["tags"],
+                properties={
+                    "tags": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/RetroTagAggregate"},
+                    }
+                },
             ),
         }
     )
@@ -222,6 +260,46 @@ def _cached_openapi_schema() -> dict[str, Any]:
                     },
                 }
             },
+            "/retro/entries": {
+                "get": {
+                    "summary": "List persisted agent retro feedback entries",
+                    "operationId": "listRetroEntries",
+                    "tags": ["retro"],
+                    "parameters": [
+                        _query_parameter(
+                            "task_type",
+                            {"type": "string", "enum": _enum_values(TaskType)},
+                        ),
+                        _query_parameter("tag", {"type": "string"}),
+                        _query_parameter("severity", {"type": "string"}),
+                        _query_parameter("source", {"type": "string", "enum": ["agent"]}),
+                        _query_parameter(
+                            "limit",
+                            {"type": "integer", "minimum": 1, "maximum": 1000},
+                        ),
+                    ],
+                    "responses": {
+                        "200": _json_response(
+                            "Persisted retro feedback entries",
+                            "RetroEntriesResponse",
+                        ),
+                        "400": _json_response("Filter validation failed", "ErrorResponse"),
+                    },
+                }
+            },
+            "/retro/tags": {
+                "get": {
+                    "summary": "List retro tag aggregates",
+                    "operationId": "listRetroTags",
+                    "tags": ["retro"],
+                    "responses": {
+                        "200": _json_response(
+                            "Retro tag aggregates",
+                            "RetroTagsResponse",
+                        ),
+                    },
+                }
+            },
             "/prompts": {
                 "get": {
                     "summary": "List stored agent prompts",
@@ -263,6 +341,43 @@ def _cached_openapi_schema() -> dict[str, Any]:
                         "200": _json_response("Updated agent prompt", "AgentPromptResponse"),
                         "400": _json_response("Payload validation failed", "ErrorResponse"),
                         "404": _json_response("Prompt was not found", "ErrorResponse"),
+                    },
+                },
+            },
+            "/settings": {
+                "get": {
+                    "summary": "List persisted runtime settings",
+                    "operationId": "listSettings",
+                    "tags": ["settings"],
+                    "responses": {
+                        "200": _json_response(
+                            "List of persisted runtime settings",
+                            "ApplicationSettingsListResponse",
+                        ),
+                    },
+                }
+            },
+            "/settings/{setting_key}": {
+                "patch": {
+                    "summary": "Update a persisted runtime setting",
+                    "operationId": "updateSetting",
+                    "tags": ["settings"],
+                    "parameters": [_setting_key_parameter()],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/SettingUpdatePayload"}
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": _json_response(
+                            "Updated runtime setting",
+                            "ApplicationSettingResponse",
+                        ),
+                        "400": _json_response("Payload validation failed", "ErrorResponse"),
+                        "404": _json_response("Setting was not found", "ErrorResponse"),
                     },
                 },
             },
@@ -398,6 +513,24 @@ def _prompt_key_parameter() -> dict[str, Any]:
     }
 
 
+def _setting_key_parameter() -> dict[str, Any]:
+    return {
+        "name": "setting_key",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1},
+    }
+
+
+def _query_parameter(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": name,
+        "in": "query",
+        "required": False,
+        "schema": schema,
+    }
+
+
 def _agent_prompt_schema() -> dict[str, Any]:
     return _object_schema(
         required=[
@@ -415,6 +548,98 @@ def _agent_prompt_schema() -> dict[str, Any]:
             "content": {"type": "string"},
             "created_at": {"type": "string", "format": "date-time"},
             "updated_at": {"type": "string", "format": "date-time"},
+        },
+    )
+
+
+def _application_setting_schema() -> dict[str, Any]:
+    return _object_schema(
+        required=[
+            "id",
+            "setting_key",
+            "env_var",
+            "value_type",
+            "value",
+            "default_value",
+            "description",
+            "display_order",
+            "requires_restart",
+            "created_at",
+            "updated_at",
+        ],
+        properties={
+            "id": {"type": "integer"},
+            "setting_key": {"type": "string"},
+            "env_var": {"type": "string"},
+            "value_type": {"type": "string", "enum": ["int", "string"]},
+            "value": {"type": "string"},
+            "default_value": {"type": "string"},
+            "description": {"type": "string"},
+            "display_order": {"type": "integer"},
+            "requires_restart": {"type": "boolean", "const": True},
+            "created_at": {"type": "string", "format": "date-time"},
+            "updated_at": {"type": "string", "format": "date-time"},
+        },
+    )
+
+
+def _retro_entry_schema() -> dict[str, Any]:
+    return _object_schema(
+        required=[
+            "id",
+            "task_id",
+            "root_id",
+            "task_type",
+            "role",
+            "attempt",
+            "source",
+            "category",
+            "tag",
+            "severity",
+            "message",
+            "suggested_action",
+            "metadata",
+            "created_at",
+        ],
+        properties={
+            "id": {"type": "integer"},
+            "task_id": {"type": "integer"},
+            "root_id": {"type": "integer"},
+            "task_type": {"type": "string", "enum": _enum_values(TaskType)},
+            "role": {"type": ["string", "null"]},
+            "attempt": {"type": "integer", "minimum": 0},
+            "source": {"type": "string", "enum": ["agent"]},
+            "category": {"type": "string"},
+            "tag": {"type": "string"},
+            "severity": {"type": "string"},
+            "message": {"type": "string"},
+            "suggested_action": {"type": ["string", "null"]},
+            "metadata": {"type": "object", "additionalProperties": True},
+            "created_at": {"type": "string", "format": "date-time"},
+        },
+    )
+
+
+def _retro_tag_aggregate_schema() -> dict[str, Any]:
+    return _object_schema(
+        required=[
+            "tag",
+            "count",
+            "severity_counts",
+            "first_seen",
+            "last_seen",
+            "affected_tasks_count",
+        ],
+        properties={
+            "tag": {"type": "string"},
+            "count": {"type": "integer", "minimum": 0},
+            "severity_counts": {
+                "type": "object",
+                "additionalProperties": {"type": "integer", "minimum": 0},
+            },
+            "first_seen": {"type": "string", "format": "date-time"},
+            "last_seen": {"type": "string", "format": "date-time"},
+            "affected_tasks_count": {"type": "integer", "minimum": 0},
         },
     )
 

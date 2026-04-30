@@ -32,6 +32,7 @@ from backend.schemas import (
     TokenUsagePayload,
 )
 from backend.services.context_builder import ContextBuilder, parse_task_result_payload
+from backend.services.retro_service import RetroService
 from backend.settings import Settings, get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
@@ -109,6 +110,11 @@ class ExecuteWorker:
                         error=run_result.failure_message or run_result.payload.summary,
                         result_payload=run_result.payload,
                         branch_name=prepared_execution.branch_name,
+                    )
+                    self._record_agent_retro_feedback(
+                        repository=repository,
+                        task=task,
+                        result_payload=run_result.payload,
                     )
                     if task_type == TaskType.EXECUTE:
                         return ExecuteWorkerReport(failed_execute_tasks=1)
@@ -375,6 +381,9 @@ class ExecuteWorker:
         self._record_token_usage(
             repository=repository, task_id=task.id, usage=result_payload.token_usage
         )
+        self._record_agent_retro_feedback(
+            repository=repository, task=task, result_payload=result_payload
+        )
         self._ensure_deliver_task(
             repository=repository, execute_task=task, task_context=task_context
         )
@@ -411,6 +420,9 @@ class ExecuteWorker:
         ).info("execute_task_completed")
         self._record_token_usage(
             repository=repository, task_id=task.id, usage=result_payload.token_usage
+        )
+        self._record_agent_retro_feedback(
+            repository=repository, task=task, result_payload=result_payload
         )
         self._ensure_deliver_task(
             repository=repository, execute_task=task, task_context=task_context
@@ -497,6 +509,9 @@ class ExecuteWorker:
 
         self._record_token_usage(
             repository=repository, task_id=task.id, usage=result_payload.token_usage
+        )
+        self._record_agent_retro_feedback(
+            repository=repository, task=task, result_payload=result_payload
         )
 
     def _mark_task_done(
@@ -594,6 +609,18 @@ class ExecuteWorker:
                     cost_usd=item.cost_usd,
                 ),
             )
+
+    def _record_agent_retro_feedback(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        result_payload: TaskResultPayload,
+    ) -> None:
+        RetroService(repository.session).record_agent_feedback(
+            task=task,
+            result_metadata=result_payload.metadata,
+        )
 
     def _build_result_payload(
         self,
