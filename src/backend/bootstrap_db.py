@@ -8,15 +8,21 @@ from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from backend.db import build_engine
-from backend.models import AgentPrompt, Base, Task, TokenUsage
+from backend.models import AgentPrompt, Base, Task, TaskRevenue, TokenUsage
 
 DEFAULT_AGENT_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "agents"
 
-MVP_SCHEMA_TABLES = (Task.__tablename__, TokenUsage.__tablename__, AgentPrompt.__tablename__)
+MVP_SCHEMA_TABLES = (
+    Task.__tablename__,
+    TokenUsage.__tablename__,
+    AgentPrompt.__tablename__,
+    TaskRevenue.__tablename__,
+)
 MVP_SCHEMA_METADATA = (
     Base.metadata.tables[Task.__tablename__],
     Base.metadata.tables[TokenUsage.__tablename__],
     Base.metadata.tables[AgentPrompt.__tablename__],
+    Base.metadata.tables[TaskRevenue.__tablename__],
 )
 
 

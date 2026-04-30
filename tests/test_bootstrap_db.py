@@ -91,4 +91,7 @@ def test_main_accepts_database_url_override(tmp_path, capsys) -> None:
     stdout = capsys.readouterr().out
 
     assert exit_code == 0
-    assert "MVP schema is ready; created tables: tasks, token_usage, agent_prompts" in stdout
+    assert (
+        "MVP schema is ready; created tables: tasks, token_usage, agent_prompts, task_revenue"
+        in stdout
+    )

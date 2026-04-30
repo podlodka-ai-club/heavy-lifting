@@ -5,7 +5,10 @@ from backend.db import build_engine
 from backend.models import (
     AgentPrompt,
     Base,
+    RevenueConfidence,
+    RevenueSource,
     Task,
+    TaskRevenue,
     TokenUsage,
 )
 from backend.task_constants import TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskStatus, TaskType
@@ -140,6 +143,58 @@ def test_token_usage_table_has_expected_indexes_and_foreign_key(tmp_path) -> Non
     assert foreign_keys[0]["referred_columns"] == ["id"]
 
 
+def test_task_revenue_table_contains_mvp_columns(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+
+    columns = {
+        column["name"]: column for column in inspect(engine).get_columns(TaskRevenue.__tablename__)
+    }
+
+    assert set(columns) == {
+        "id",
+        "root_task_id",
+        "amount_usd",
+        "source",
+        "confidence",
+        "metadata",
+        "created_at",
+        "updated_at",
+    }
+    assert columns["id"]["primary_key"] == 1
+    assert columns["root_task_id"]["nullable"] is False
+    assert columns["amount_usd"]["nullable"] is False
+    assert columns["source"]["nullable"] is False
+    assert columns["confidence"]["nullable"] is False
+    assert columns["metadata"]["nullable"] is True
+    assert columns["created_at"]["nullable"] is False
+    assert columns["updated_at"]["nullable"] is False
+
+
+def test_task_revenue_table_has_expected_indexes_constraints_and_foreign_key(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+
+    inspector = inspect(engine)
+    indexes = {
+        index["name"]: tuple(index["column_names"])
+        for index in inspector.get_indexes(TaskRevenue.__tablename__)
+    }
+    foreign_keys = inspector.get_foreign_keys(TaskRevenue.__tablename__)
+    unique_constraints = {
+        constraint["name"]: tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints(TaskRevenue.__tablename__)
+    }
+
+    assert indexes["ix_task_revenue_root_task_id"] == ("root_task_id",)
+    assert indexes["ix_task_revenue_source_confidence"] == ("source", "confidence")
+    assert unique_constraints["uq_task_revenue_root_task_id"] == ("root_task_id",)
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0]["constrained_columns"] == ["root_task_id"]
+    assert foreign_keys[0]["referred_table"] == "tasks"
+    assert foreign_keys[0]["referred_columns"] == ["id"]
+
+
 def test_agent_prompts_table_contains_default_prompt_columns(tmp_path) -> None:
     engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
     Base.metadata.create_all(engine)
@@ -194,6 +249,18 @@ def test_task_and_token_usage_relationships_are_linked() -> None:
     assert token_usage_relationship.back_populates == "token_usage_entries"
 
 
+def test_task_and_revenue_relationships_are_linked() -> None:
+    configure_mappers()
+
+    task_relationship = inspect(Task).relationships["revenue"]
+    revenue_relationship = inspect(TaskRevenue).relationships["root_task"]
+
+    assert task_relationship.mapper.class_ is TaskRevenue
+    assert task_relationship.back_populates == "root_task"
+    assert revenue_relationship.mapper.class_ is Task
+    assert revenue_relationship.back_populates == "revenue"
+
+
 def test_task_table_has_enum_check_constraints(tmp_path) -> None:
     engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
     Base.metadata.create_all(engine)
@@ -222,3 +289,22 @@ def test_token_usage_table_has_non_negative_check_constraints(tmp_path) -> None:
     assert constraints["ck_token_usage_output_tokens_non_negative"] == "output_tokens >= 0"
     assert constraints["ck_token_usage_cached_tokens_non_negative"] == "cached_tokens >= 0"
     assert constraints["ck_token_usage_cost_usd_non_negative"] == "cost_usd >= 0"
+
+
+def test_task_revenue_table_has_check_constraints(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+
+    constraints = {
+        constraint["name"]: constraint["sqltext"]
+        for constraint in inspect(engine).get_check_constraints(TaskRevenue.__tablename__)
+    }
+
+    assert constraints["ck_task_revenue_amount_usd_non_negative"] == "amount_usd >= 0"
+    assert constraints["revenue_source_enum"] == "source IN ('mock', 'expert', 'external')"
+    assert constraints["revenue_confidence_enum"] == "confidence IN ('estimated', 'actual')"
+
+
+def test_revenue_enum_values_match_economics_spec() -> None:
+    assert [source.value for source in RevenueSource] == ["mock", "expert", "external"]
+    assert [confidence.value for confidence in RevenueConfidence] == ["estimated", "actual"]

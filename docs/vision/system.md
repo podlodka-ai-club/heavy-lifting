@@ -19,7 +19,7 @@ The target system is a reliable orchestration backend that:
 - creates or updates pull requests through an SCM boundary;
 - processes follow-up review feedback as first-class work;
 - delivers status, artifacts, and outcome summaries back to the tracker;
-- tracks token usage and other execution metadata needed for operational visibility.
+- tracks token usage, root-task revenue, and other execution metadata needed for operational and MVP economics visibility.
 
 ## Primary Actors
 
@@ -92,6 +92,8 @@ Runtime logs are emitted as structured JSON events from the API, workers, and ag
 
 The read-only factory API exposes the current pipeline view through `GET /factory`. It aggregates existing `tasks` rows into the ordered stations `fetch`, `execute`, `pr_feedback`, and `deliver`, reports WIP and queue/active/failed counts, and names the current bottleneck by largest WIP. It does not fabricate throughput, transition history, worker capacity, rework-loop, or business-kind analytics that are not present in the MVP data model.
 
+The economics API exposes the current money view through `GET /economics`, `POST /economics/mock-revenue`, and `PUT /economics/revenue/{root_task_id}`. It treats a root chain as closed when the chain has a successful `deliver` task and uses the first such `deliver.updated_at` as `closed_at`. Revenue is stored once per root in `task_revenue`, token cost is summed from `token_usage` across all tasks in the closed root chain, and aggregate profit is reported as displayed revenue minus displayed token cost. `GET /economics` defaults to the last 30 days when no period is supplied. Known gaps such as infra cost, runner hours, external accounting import, and retry waste remain explicit rather than being estimated silently.
+
 ## MVP Scope
 
 The MVP intentionally stays narrow:
@@ -101,8 +103,10 @@ The MVP intentionally stays narrow:
 - protocol boundaries around tracker and SCM integrations;
 - local development support through `MockTracker` and `MockScm`;
 - durable persistence for orchestration tasks, token usage, and seeded default agent prompts;
+- durable persistence for root-task revenue in `task_revenue`;
 - machine-readable OpenAPI schema through `GET /openapi.json`;
 - read-only operational factory view through `GET /factory`;
+- MVP economics view through `GET /economics`, deterministic mock revenue generation, and manual expert/external revenue upsert;
 - prompt-management API for listing stored agent prompts, reading one prompt, and updating prompt content;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
@@ -44,6 +45,36 @@ task_type_enum = Enum(
 task_status_enum = Enum(
     TaskStatus,
     name="task_status_enum",
+    native_enum=False,
+    create_constraint=True,
+    validate_strings=True,
+    values_callable=lambda members: [member.value for member in members],
+)
+
+
+class RevenueSource(StrEnum):
+    MOCK = "mock"
+    EXPERT = "expert"
+    EXTERNAL = "external"
+
+
+class RevenueConfidence(StrEnum):
+    ESTIMATED = "estimated"
+    ACTUAL = "actual"
+
+
+revenue_source_enum = Enum(
+    RevenueSource,
+    name="revenue_source_enum",
+    native_enum=False,
+    create_constraint=True,
+    validate_strings=True,
+    values_callable=lambda members: [member.value for member in members],
+)
+
+revenue_confidence_enum = Enum(
+    RevenueConfidence,
+    name="revenue_confidence_enum",
     native_enum=False,
     create_constraint=True,
     validate_strings=True,
@@ -117,6 +148,12 @@ class Task(Base):
     )
     token_usage_entries: Mapped[list[TokenUsage]] = relationship(
         back_populates="task",
+    )
+    revenue: Mapped[TaskRevenue | None] = relationship(
+        "TaskRevenue",
+        foreign_keys="TaskRevenue.root_task_id",
+        back_populates="root_task",
+        uselist=False,
     )
 
 
@@ -201,15 +238,63 @@ class AgentPrompt(Base):
     )
 
 
+class TaskRevenue(Base):
+    __tablename__ = "task_revenue"
+    __table_args__ = (
+        CheckConstraint("amount_usd >= 0", name="ck_task_revenue_amount_usd_non_negative"),
+        UniqueConstraint("root_task_id", name="uq_task_revenue_root_task_id"),
+        Index("ix_task_revenue_root_task_id", "root_task_id"),
+        Index("ix_task_revenue_source_confidence", "source", "confidence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    root_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
+    source: Mapped[RevenueSource] = mapped_column(revenue_source_enum, nullable=False)
+    confidence: Mapped[RevenueConfidence] = mapped_column(
+        revenue_confidence_enum,
+        nullable=False,
+    )
+    metadata_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        onupdate=_utc_now,
+        server_default=func.now(),
+    )
+
+    root_task: Mapped[Task] = relationship(
+        "Task",
+        foreign_keys=[root_task_id],
+        back_populates="revenue",
+    )
+
+
 __all__ = [
     "AgentPrompt",
     "Base",
+    "RevenueConfidence",
+    "RevenueSource",
     "TASK_STATUS_VALUES",
     "TASK_TYPE_VALUES",
     "Task",
+    "TaskRevenue",
     "TaskStatus",
     "TaskType",
     "TokenUsage",
+    "revenue_confidence_enum",
+    "revenue_source_enum",
     "task_status_enum",
     "task_type_enum",
 ]

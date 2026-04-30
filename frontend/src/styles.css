@@ -282,6 +282,23 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+.inline-action {
+  background: rgba(255, 131, 28, 0.14);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  color: var(--orange-2);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 800;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.inline-action:disabled {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
 .primary-button:disabled {
   background: #624c32;
   border-color: #624c32;
@@ -293,6 +310,10 @@ button:focus-visible {
   margin: 12px 0 0;
 }
 
+.status-inline-ok {
+  color: var(--green);
+}
+
 .status-error {
   background: rgba(224, 75, 48, 0.12);
   border: 1px solid rgba(224, 75, 48, 0.55);
@@ -302,6 +323,10 @@ button:focus-visible {
 }
 
 .factory-page {
+  max-width: 1360px;
+}
+
+.economics-page {
   max-width: 1360px;
 }
 
@@ -515,6 +540,61 @@ button:focus-visible {
   color: #ff8d78;
 }
 
+.economics-summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.economics-table-panel {
+  background:
+    linear-gradient(180deg, rgba(43, 33, 22, 0.82), rgba(15, 11, 7, 0.92));
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  box-shadow: 0 18px 42px var(--shadow), inset 0 1px 0 rgba(255, 177, 63, 0.13);
+  margin-bottom: 18px;
+  padding: 16px;
+}
+
+.section-heading.compact {
+  margin-bottom: 12px;
+}
+
+.section-heading.compact h2 {
+  color: var(--text);
+}
+
+.data-table-wrap {
+  overflow-x: auto;
+}
+
+.data-table {
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  min-width: 760px;
+  width: 100%;
+}
+
+.data-table th,
+.data-table td {
+  border-bottom: 1px solid var(--edge-soft);
+  padding: 9px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.data-table th {
+  color: var(--orange-2);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.data-table td {
+  color: var(--muted-strong);
+}
+
 .status-strip {
   border-top: 1px solid var(--edge-soft);
   color: var(--muted);
@@ -569,6 +649,10 @@ button:focus-visible {
   .station-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .economics-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -584,7 +668,8 @@ button:focus-visible {
   }
 
   .settings-layout,
-  .station-grid {
+  .station-grid,
+  .economics-summary-grid {
     grid-template-columns: 1fr;
   }
 

@@ -34,6 +34,73 @@ export type FactorySnapshot = {
   data_gaps: string[];
 };
 
+export type EconomicsRoot = {
+  root_task_id: number;
+  external_task_id: string | null;
+  tracker_name: string | null;
+  closed_at: string;
+  revenue_usd: string | null;
+  token_cost_usd: string;
+  profit_usd: string | null;
+  revenue_source: "mock" | "expert" | "external" | null;
+  revenue_confidence: "estimated" | "actual" | null;
+};
+
+export type EconomicsSeriesPoint = {
+  bucket: string;
+  closed_roots_count: number;
+  monetized_roots_count: number;
+  missing_revenue_count: number;
+  revenue_usd: string;
+  token_cost_usd: string;
+  profit_usd: string;
+};
+
+export type EconomicsSnapshot = {
+  generated_at: string;
+  period: {
+    from: string | null;
+    to: string | null;
+    bucket: "day" | "week" | "month";
+  };
+  totals: {
+    closed_roots_count: number;
+    monetized_roots_count: number;
+    missing_revenue_count: number;
+    revenue_usd: string;
+    token_cost_usd: string;
+    profit_usd: string;
+  };
+  series: EconomicsSeriesPoint[];
+  roots: EconomicsRoot[];
+  data_gaps: string[];
+};
+
+export type MockRevenueResult = {
+  created_count: number;
+  updated_count: number;
+  created_root_task_ids: number[];
+  updated_root_task_ids: number[];
+};
+
+export type RevenueUpsertPayload = {
+  amount_usd: string;
+  source: "expert" | "external";
+  confidence: "estimated" | "actual";
+  metadata?: Record<string, unknown> | null;
+};
+
+export type TaskRevenue = {
+  id: number;
+  root_task_id: number;
+  amount_usd: string;
+  source: "mock" | "expert" | "external";
+  confidence: "estimated" | "actual";
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type PromptListResponse = {
   prompts: Prompt[];
 };
@@ -80,4 +147,35 @@ export async function updatePrompt(promptKey: string, content: string): Promise<
 export async function getFactorySnapshot(): Promise<FactorySnapshot> {
   const response = await fetch("/api/factory");
   return parseJsonResponse<FactorySnapshot>(response);
+}
+
+export async function getEconomicsSnapshot(): Promise<EconomicsSnapshot> {
+  const response = await fetch("/api/economics");
+  return parseJsonResponse<EconomicsSnapshot>(response);
+}
+
+export async function generateMockRevenue(): Promise<MockRevenueResult> {
+  const response = await fetch("/api/economics/mock-revenue", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({})
+  });
+  return parseJsonResponse<MockRevenueResult>(response);
+}
+
+export async function upsertRevenue(
+  rootTaskId: number,
+  payload: RevenueUpsertPayload
+): Promise<TaskRevenue> {
+  const response = await fetch(`/api/economics/revenue/${rootTaskId}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await parseJsonResponse<{ revenue: TaskRevenue }>(response);
+  return data.revenue;
 }

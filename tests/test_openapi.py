@@ -22,6 +22,9 @@ def test_get_openapi_json_describes_public_api() -> None:
     assert schema["openapi"] == "3.1.0"
     assert schema["info"]["title"] == "Heavy Lifting API"
     assert set(schema["paths"]) == {
+        "/economics",
+        "/economics/mock-revenue",
+        "/economics/revenue/{root_task_id}",
         "/factory",
         "/health",
         "/openapi.json",
@@ -113,6 +116,49 @@ def test_openapi_json_describes_factory_response() -> None:
         "rework_loops",
         "business_task_kind",
     ]
+
+
+def test_openapi_json_describes_economics_paths_without_api_prefix() -> None:
+    app = create_app(runtime=_runtime())
+
+    schema = app.test_client().get("/openapi.json").get_json()
+
+    assert schema is not None
+    assert "/api/economics" not in schema["paths"]
+    assert schema["paths"]["/economics"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/EconomicsSnapshotResponse"}
+    assert schema["paths"]["/economics/mock-revenue"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/MockRevenuePayload"}
+    assert schema["paths"]["/economics/revenue/{root_task_id}"]["put"]["requestBody"][
+        "content"
+    ]["application/json"]["schema"] == {"$ref": "#/components/schemas/RevenueUpsertPayload"}
+    economics_parameters = {
+        parameter["name"]: parameter
+        for parameter in schema["paths"]["/economics"]["get"]["parameters"]
+    }
+    assert "Defaults to 30 days before `to`" in economics_parameters["from"]["description"]
+    assert "Defaults to request time" in economics_parameters["to"]["description"]
+
+    economics_schema = schema["components"]["schemas"]["EconomicsSnapshotResponse"]
+    assert economics_schema["required"] == [
+        "generated_at",
+        "period",
+        "totals",
+        "series",
+        "roots",
+        "data_gaps",
+    ]
+    assert economics_schema["properties"]["data_gaps"]["items"]["enum"] == [
+        "infra_cost",
+        "runner_hours",
+        "external_accounting_import",
+        "retry_waste",
+    ]
+    period_schema = economics_schema["properties"]["period"]
+    assert period_schema["properties"]["from"]["type"] == "string"
+    assert period_schema["properties"]["to"]["type"] == "string"
 
 
 def test_openapi_json_describes_prompt_endpoints() -> None:
