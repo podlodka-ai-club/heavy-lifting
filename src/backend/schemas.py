@@ -144,7 +144,10 @@ class TrackerEstimatedSelectionQuery(SchemaModel):
 class TrackerFetchTasksQuery(SchemaModel):
     statuses: list[TaskStatus] = Field(default_factory=lambda: [TaskStatus.NEW])
     task_type: TaskType | None = None
-    estimated_selection: TrackerEstimatedSelectionQuery | None = None
+    estimated_selection: TrackerEstimatedSelectionQuery | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     limit: int = Field(default=100, ge=1, le=1000)
 
 
@@ -187,7 +190,7 @@ class ScmWorkspaceEnsurePayload(SchemaModel):
     repo_url: str | None = None
     workspace_key: str
     repo_ref: str | None = None
-    branch_name: str | None = None
+    branch_name: str | None = Field(default=None, exclude_if=lambda value: value is None)
     metadata: JsonObject = Field(default_factory=dict)
 
 

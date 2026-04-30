@@ -14,6 +14,7 @@ from backend.schemas import (
     TaskContext,
     TaskInputPayload,
     TaskResultPayload,
+    TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerTask,
@@ -199,6 +200,29 @@ def test_tracker_create_payload_and_fetch_query_apply_mvp_defaults() -> None:
     }
 
 
+def test_tracker_fetch_query_serializes_estimated_selection_when_provided() -> None:
+    query = TrackerFetchTasksQuery(
+        estimated_selection=TrackerEstimatedSelectionQuery(
+            max_story_points=5,
+            can_take_in_work=True,
+            taken_in_work=False,
+            only_parent_tasks=True,
+        ),
+    )
+
+    assert query.model_dump(mode="json") == {
+        "statuses": ["new"],
+        "task_type": None,
+        "estimated_selection": {
+            "max_story_points": 5,
+            "can_take_in_work": True,
+            "taken_in_work": False,
+            "only_parent_tasks": True,
+        },
+        "limit": 100,
+    }
+
+
 def test_scm_pull_request_feedback_reuses_shared_feedback_fields() -> None:
     feedback = ScmPullRequestFeedback(
         pr_external_id="42",
@@ -294,6 +318,23 @@ def test_scm_payloads_apply_mvp_defaults() -> None:
         "since_cursor": None,
         "page_cursor": None,
         "limit": 100,
+    }
+
+
+def test_scm_workspace_ensure_payload_serializes_branch_name_when_provided() -> None:
+    payload = ScmWorkspaceEnsurePayload(
+        repo_url="https://example.test/repo.git",
+        workspace_key="repo-1",
+        repo_ref="main",
+        branch_name="task18/scm-boundary",
+    )
+
+    assert payload.model_dump(mode="json") == {
+        "repo_url": "https://example.test/repo.git",
+        "workspace_key": "repo-1",
+        "repo_ref": "main",
+        "branch_name": "task18/scm-boundary",
+        "metadata": {},
     }
 
 
