@@ -253,7 +253,9 @@ describe("App", () => {
 
     expect(screen.getByRole("heading", { name: "heavy-lifting" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Factory" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Factory v2" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Money" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Money v2" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retro" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Настройки" })).toBeInTheDocument();
   });
@@ -338,6 +340,36 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Factory unavailable");
   });
 
+  it("opens factory v2 from the topbar and shows loading state", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Factory v2" }));
+
+    expect(screen.getByRole("heading", { name: "Factory Floor" })).toBeInTheDocument();
+    expect(screen.getByText("Загрузка factory...")).toBeInTheDocument();
+  });
+
+  it("loads factory v2 from direct URL through the factory API", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (input.toString() === "/api/factory") {
+        return jsonResponse(factorySnapshot);
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/factory2");
+
+    render(<App />);
+
+    expect(await screen.findByText("GET /factory")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Factory Floor" })).toBeInTheDocument();
+    expect(screen.getByText("execute wip=3 q=2")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/factory");
+  });
+
   it("opens economics from the topbar and shows loading state", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
 
@@ -418,6 +450,36 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Economics unavailable");
+  });
+
+  it("opens money v2 from the topbar and shows loading state", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Money v2" }));
+
+    expect(screen.getByText(/heavy-lifting · economics/)).toBeInTheDocument();
+    expect(screen.getByText("Загружаю экономику...")).toBeInTheDocument();
+  });
+
+  it("loads money v2 from direct URL through the economics API", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (input.toString() === "/api/economics") {
+        return jsonResponse(economicsSnapshot);
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/economics2");
+
+    render(<App />);
+
+    expect(await screen.findByText("GET /economics")).toBeInTheDocument();
+    expect(screen.getByText("$1,495.00")).toBeInTheDocument();
+    expect(screen.getByText("TASK-10")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/economics");
   });
 
   it("opens retro from the topbar and shows loading state", async () => {

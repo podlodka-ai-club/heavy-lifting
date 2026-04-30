@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { EconomicsPage } from "./pages/economics/EconomicsPage";
+import { EconomicsPage2 } from "./pages/economics/EconomicsPage2";
 import { FactoryPage } from "./pages/factory/FactoryPage";
+import { FactoryPage2 } from "./pages/factory/FactoryPage2";
 import { HomePage } from "./pages/HomePage";
 import { RetroPage } from "./pages/retro/RetroPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
@@ -9,7 +11,9 @@ import { SettingsPage } from "./pages/settings/SettingsPage";
 type Route =
   | "/"
   | "/factory"
+  | "/factory2"
   | "/economics"
+  | "/economics2"
   | "/retro"
   | "/settings";
 
@@ -17,7 +21,9 @@ function getRoute(pathname: string): Route {
   if (
     pathname === "/settings" ||
     pathname === "/factory" ||
+    pathname === "/factory2" ||
     pathname === "/economics" ||
+    pathname === "/economics2" ||
     pathname === "/retro"
   ) {
     return pathname;
@@ -55,11 +61,25 @@ export function App() {
             Factory
           </button>
           <button
+            className={route === "/factory2" ? "nav-link active" : "nav-link"}
+            type="button"
+            onClick={() => navigate("/factory2")}
+          >
+            Factory v2
+          </button>
+          <button
             className={route === "/economics" ? "nav-link active" : "nav-link"}
             type="button"
             onClick={() => navigate("/economics")}
           >
             Money
+          </button>
+          <button
+            className={route === "/economics2" ? "nav-link active" : "nav-link"}
+            type="button"
+            onClick={() => navigate("/economics2")}
+          >
+            Money v2
           </button>
           <button
             className={route === "/retro" ? "nav-link active" : "nav-link"}
@@ -79,7 +99,9 @@ export function App() {
       </header>
       {route === "/settings" ? <SettingsPage /> : null}
       {route === "/factory" ? <FactoryPage /> : null}
+      {route === "/factory2" ? <FactoryPage2 /> : null}
       {route === "/economics" ? <EconomicsPage /> : null}
+      {route === "/economics2" ? <EconomicsPage2 /> : null}
       {route === "/retro" ? <RetroPage /> : null}
       {route === "/" ? <HomePage /> : null}
     </div>

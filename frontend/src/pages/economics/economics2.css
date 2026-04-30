@@ -1,0 +1,672 @@
+/* ─── Page ─────────────────────────────────────────────────────────────────── */
+
+.e2-page {
+  max-width: 1360px;
+}
+
+/* ─── HUD ──────────────────────────────────────────────────────────────────── */
+
+.e2-hud {
+  align-items: stretch;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  margin-bottom: 18px;
+}
+
+.e2-hero-profit {
+  color: var(--yellow);
+  font-size: 2.6rem;
+  font-weight: 700;
+  letter-spacing: -1px;
+}
+
+.e2-hero-label {
+  color: var(--muted);
+  font-size: 1rem;
+  margin-left: 10px;
+}
+
+.e2-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+}
+
+.e2-kpi-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.e2-kpi {
+  background: rgba(15, 11, 7, 0.52);
+  border: 1px solid var(--edge-soft);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.e2-green {
+  color: var(--green) !important;
+}
+
+.e2-warn {
+  color: var(--yellow);
+}
+
+.e2-warn-small {
+  color: var(--yellow);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  margin: -4px 0 12px;
+}
+
+/* ─── Flow section (3-col) ─────────────────────────────────────────────────── */
+
+.e2-flow {
+  display: grid;
+  gap: 32px;
+  grid-template-columns: 1fr 1.15fr 1fr;
+  margin-bottom: 18px;
+  padding: 28px;
+}
+
+.e2-col-eyebrow {
+  margin-bottom: 4px !important;
+}
+
+.e2-out-label {
+  color: var(--red) !important;
+}
+
+.e2-col-big {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 0 0 16px;
+}
+
+.e2-col-out {
+  color: var(--red);
+}
+
+/* ─── Task list (inflow) ───────────────────────────────────────────────────── */
+
+.e2-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.e2-task-row {
+  align-items: center;
+  background: rgba(255, 131, 28, 0.05);
+  border: 1px solid var(--edge-soft);
+  border-left: 3px solid var(--green);
+  border-radius: 4px;
+  display: flex;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  gap: 8px;
+  padding: 6px 10px;
+}
+
+.e2-task-row.missing {
+  border-left-color: var(--muted);
+  opacity: 0.6;
+}
+
+.e2-coin-badge {
+  align-items: center;
+  background: radial-gradient(circle at 35% 30%, #fff3a0, var(--orange-2));
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  color: #6a3e08;
+  display: flex;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 800;
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.e2-coin-badge.empty {
+  background: rgba(255, 131, 28, 0.1);
+  border: 1px dashed var(--edge);
+  color: var(--muted);
+}
+
+.e2-task-id {
+  color: var(--muted-strong);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.e2-task-amount {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.e2-task-row.missing .e2-task-amount {
+  color: var(--muted);
+}
+
+.e2-more {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  margin-top: 8px;
+  text-align: center;
+}
+
+/* ─── Vault center column ──────────────────────────────────────────────────── */
+
+.e2-vault-col {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.e2-vault {
+  background: linear-gradient(180deg, #2c2012 0%, #160f06 100%);
+  border: 1px solid rgba(255, 146, 42, 0.22);
+  border-radius: 14px 14px 22px 22px;
+  box-shadow:
+    inset 0 6px 12px rgba(255, 255, 255, 0.04),
+    inset 0 -8px 18px rgba(0, 0, 0, 0.5),
+    0 0 60px rgba(255, 131, 28, 0.1),
+    0 12px 32px rgba(0, 0, 0, 0.4);
+  height: 200px;
+  max-width: 260px;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.e2-vault-rim {
+  background: repeating-linear-gradient(90deg, #5a3f1c 0 10px, #3a2810 10px 14px);
+  border-bottom: 2px solid #2a1c0c;
+  height: 12px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 10;
+}
+
+.e2-vault-gold {
+  background: linear-gradient(180deg, var(--yellow) 0%, var(--orange) 55%, #7a5a0a 100%);
+  bottom: 0;
+  box-shadow: inset 0 8px 18px rgba(255, 255, 255, 0.3);
+  left: 0;
+  position: absolute;
+  right: 0;
+  transition: height 1.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.e2-vault-gold.negative {
+  background: linear-gradient(180deg, #ff5555 0%, var(--red) 100%);
+}
+
+.e2-vault-surface {
+  background:
+    radial-gradient(circle at 8% 55%, var(--yellow) 0 9px, transparent 11px),
+    radial-gradient(circle at 25% 35%, var(--yellow) 0 10px, transparent 12px),
+    radial-gradient(circle at 44% 60%, var(--yellow) 0 8px, transparent 10px),
+    radial-gradient(circle at 63% 30%, var(--yellow) 0 11px, transparent 13px),
+    radial-gradient(circle at 80% 58%, var(--yellow) 0 9px, transparent 11px),
+    radial-gradient(circle at 95% 35%, var(--yellow) 0 8px, transparent 10px);
+  height: 20px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: -10px;
+}
+
+.e2-coins-pile {
+  inset: 0;
+  position: absolute;
+}
+
+.e2-coin-static {
+  background: radial-gradient(circle at 35% 30%, #fff3a0, var(--orange-2));
+  border-radius: 50%;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+  height: 13px;
+  position: absolute;
+  width: 13px;
+}
+
+/* falling coin shower */
+
+.e2-coin-shower {
+  height: 100%;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.e2-falling-coin {
+  animation: e2-coin-fall 3s ease-in infinite;
+  color: var(--yellow);
+  font-size: 13px;
+  font-weight: 800;
+  opacity: 0;
+  position: absolute;
+}
+
+.e2-falling-coin.c1 { animation-delay: 0s;     left: 18%; }
+.e2-falling-coin.c2 { animation-delay: 0.75s;  left: 40%; }
+.e2-falling-coin.c3 { animation-delay: 1.5s;   left: 63%; }
+.e2-falling-coin.c4 { animation-delay: 2.25s;  left: 82%; }
+
+@keyframes e2-coin-fall {
+  0%   { opacity: 0; top: -16px; transform: rotate(0deg) scale(0.7); }
+  8%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; top: 108%; transform: rotate(110deg) scale(0.85); }
+}
+
+/* leaks at bottom */
+
+.e2-leaks {
+  bottom: -2px;
+  display: flex;
+  justify-content: space-around;
+  left: 16px;
+  pointer-events: none;
+  position: absolute;
+  right: 16px;
+}
+
+.e2-leak-slot {
+  position: relative;
+  width: 8px;
+}
+
+.e2-drip {
+  animation: e2-drip-fall 1.9s ease-in infinite;
+  background: linear-gradient(180deg, var(--orange), var(--red));
+  border-radius: 50% 50% 60% 60% / 40% 40% 60% 60%;
+  height: 11px;
+  left: 50%;
+  opacity: 0;
+  position: absolute;
+  transform: translateX(-50%);
+  width: 6px;
+}
+
+@keyframes e2-drip-fall {
+  0%   { opacity: 0; top: 0; transform: translateX(-50%) scaleY(0); }
+  12%  { opacity: 1; transform: translateX(-50%) scaleY(1); }
+  72%  { opacity: 1; }
+  100% { opacity: 0; top: 52px; transform: translateX(-50%) scaleY(0.6); }
+}
+
+.e2-vault-label {
+  text-align: center;
+}
+
+/* ─── Scrooge (pure CSS duck) ──────────────────────────────────────────────── */
+
+.e2-scrooge {
+  height: 102px;
+  margin: 0 auto 4px;
+  position: relative;
+  width: 88px;
+}
+
+.scr-hat {
+  background: #1e1e24;
+  border-radius: 6px 6px 2px 2px;
+  height: 32px;
+  left: 14px;
+  position: absolute;
+  top: 0;
+  width: 60px;
+}
+
+.scr-brim {
+  background: #1e1e24;
+  border-radius: 3px;
+  bottom: -4px;
+  height: 7px;
+  left: -10px;
+  position: absolute;
+  right: -10px;
+}
+
+.scr-hat-band {
+  background: #c0392b;
+  height: 5px;
+  left: 4px;
+  position: absolute;
+  right: 4px;
+  top: 24px;
+  z-index: 2;
+}
+
+.scr-head {
+  background: radial-gradient(circle at 38% 36%, #fffbe6 0%, #f7e6a3 80%);
+  border-radius: 50% 50% 44% 44% / 58% 58% 42% 42%;
+  box-shadow: inset 0 -4px 8px rgba(170, 130, 20, 0.18);
+  height: 52px;
+  left: 10px;
+  position: absolute;
+  top: 26px;
+  width: 68px;
+}
+
+.scr-beak {
+  background: linear-gradient(180deg, #f0a838 0%, #c9851a 100%);
+  border-radius: 6px 8px 14px 14px / 6px 8px 50% 50%;
+  box-shadow: inset 0 -2px 3px rgba(0, 0, 0, 0.2);
+  height: 14px;
+  left: 26px;
+  position: absolute;
+  top: 58px;
+  width: 28px;
+}
+
+.scr-eye {
+  background: #111;
+  border-radius: 50%;
+  box-shadow: 14px 0 0 #111;
+  height: 5px;
+  left: 26px;
+  position: absolute;
+  top: 46px;
+  width: 5px;
+}
+
+.scr-glasses {
+  border: 2px solid #2b1d0e;
+  border-radius: 50%;
+  box-shadow: 18px 0 0 -1px #2b1d0e;
+  height: 15px;
+  left: 20px;
+  position: absolute;
+  top: 41px;
+  width: 15px;
+}
+
+.scr-glasses::after {
+  background: #2b1d0e;
+  content: "";
+  height: 2px;
+  left: 15px;
+  position: absolute;
+  top: 6px;
+  width: 3px;
+}
+
+.scr-collar {
+  background: #fff;
+  border-radius: 3px;
+  height: 10px;
+  left: 28px;
+  position: absolute;
+  top: 68px;
+  width: 26px;
+}
+
+.scr-coat {
+  background: linear-gradient(180deg, #1c4f7a 0%, #143553 100%);
+  border-radius: 8px 8px 3px 3px;
+  bottom: 0;
+  height: 26px;
+  left: 4px;
+  position: absolute;
+  right: 4px;
+}
+
+.scr-cane {
+  background: linear-gradient(180deg, var(--orange-2) 0%, #8a6510 100%);
+  border-radius: 2px;
+  bottom: -2px;
+  height: 46px;
+  position: absolute;
+  right: -4px;
+  transform: rotate(8deg);
+  width: 3px;
+}
+
+.scr-cane::before {
+  border: 3px solid var(--orange-2);
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  content: "";
+  height: 8px;
+  left: -4px;
+  position: absolute;
+  top: -5px;
+  width: 10px;
+}
+
+/* ─── Leaks column (right) ─────────────────────────────────────────────────── */
+
+.e2-cost-ratio-wrap {
+  margin-bottom: 18px;
+}
+
+.e2-cost-ratio-bar {
+  background: rgba(255, 131, 28, 0.1);
+  border: 1px solid var(--edge-soft);
+  border-radius: 4px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.e2-cost-ratio-fill {
+  background: linear-gradient(90deg, var(--orange), var(--red));
+  border-radius: 3px;
+  height: 100%;
+  transition: width 1s ease;
+}
+
+.e2-ratio-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  margin-top: 4px;
+}
+
+.e2-gap-section {
+  margin-top: 20px;
+}
+
+.e2-gap-title {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+  margin-top: 0;
+  text-transform: uppercase;
+}
+
+.e2-gap-row {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.e2-gap-hole {
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px dashed var(--edge);
+  border-radius: 50%;
+  flex-shrink: 0;
+  height: 12px;
+  width: 12px;
+}
+
+.e2-gap-name {
+  opacity: 0.65;
+}
+
+/* ─── Series chart ─────────────────────────────────────────────────────────── */
+
+.e2-series-section {
+  margin-bottom: 18px;
+  padding: 20px 24px 24px;
+}
+
+.e2-series-header {
+  margin-bottom: 20px;
+}
+
+.e2-series-header h2 {
+  color: var(--text);
+  margin-top: 4px;
+}
+
+.e2-series-chart-wrap {
+  overflow-x: auto;
+  padding-bottom: 52px;
+}
+
+.e2-series-chart {
+  align-items: flex-end;
+  display: flex;
+  gap: 8px;
+  height: 140px;
+  min-width: max-content;
+}
+
+.e2-series-group {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  min-width: 52px;
+  position: relative;
+}
+
+.e2-series-bars {
+  align-items: flex-end;
+  display: flex;
+  gap: 3px;
+  height: 140px;
+  width: 100%;
+}
+
+.e2-bar-revenue {
+  background: linear-gradient(180deg, var(--green) 0%, rgba(93, 219, 98, 0.35) 100%);
+  border-radius: 3px 3px 0 0;
+  flex: 1;
+  min-height: 2px;
+  transition: height 0.8s ease;
+}
+
+.e2-bar-cost {
+  background: linear-gradient(180deg, var(--red) 0%, rgba(224, 75, 48, 0.35) 100%);
+  border-radius: 3px 3px 0 0;
+  flex: 1;
+  min-height: 2px;
+  transition: height 0.8s ease;
+}
+
+.e2-series-tick {
+  bottom: -50px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  text-align: center;
+}
+
+.e2-tick-date {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+}
+
+.e2-tick-profit {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.e2-tick-profit.pos { color: var(--green); }
+.e2-tick-profit.neg { color: var(--red); }
+
+.e2-series-legend {
+  display: flex;
+  gap: 18px;
+  margin-top: 8px;
+}
+
+.e2-legend-item {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  gap: 6px;
+}
+
+.e2-legend-item::before {
+  border-radius: 2px;
+  content: "";
+  display: block;
+  height: 10px;
+  width: 12px;
+}
+
+.e2-legend-item.rev::before  { background: var(--green); }
+.e2-legend-item.cost::before { background: var(--red); }
+
+/* ─── Reduced motion ───────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .e2-falling-coin,
+  .e2-drip {
+    animation: none;
+    opacity: 0;
+  }
+
+  .e2-vault-gold,
+  .e2-cost-ratio-fill,
+  .e2-bar-revenue,
+  .e2-bar-cost {
+    transition: none;
+  }
+}
+
+/* ─── Responsive ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 980px) {
+  .e2-hud {
+    grid-template-columns: 1fr;
+  }
+
+  .e2-flow {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .e2-vault-col {
+    order: -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .e2-hero-profit {
+    font-size: 2rem;
+  }
+}
