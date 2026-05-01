@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { EconomicsPage } from "./pages/economics/EconomicsPage";
 import { EconomicsPage2 } from "./pages/economics/EconomicsPage2";
-import { FactoryPage } from "./pages/factory/FactoryPage";
 import { FactoryPage2 } from "./pages/factory/FactoryPage2";
 import { HomePage } from "./pages/HomePage";
 import { MicromanagementPage } from "./pages/micromanagement/MicromanagementPage";
@@ -67,25 +65,11 @@ export function App() {
             Factory
           </button>
           <button
-            className={route === "/factory2" ? "nav-link active" : "nav-link"}
-            type="button"
-            onClick={() => navigate("/factory2")}
-          >
-            Factory v2
-          </button>
-          <button
             className={route === "/economics" ? "nav-link active" : "nav-link"}
             type="button"
             onClick={() => navigate("/economics")}
           >
             Money
-          </button>
-          <button
-            className={route === "/economics2" ? "nav-link active" : "nav-link"}
-            type="button"
-            onClick={() => navigate("/economics2")}
-          >
-            Money v2
           </button>
           <button
             className={route === "/retro" ? "nav-link active" : "nav-link"}
@@ -118,10 +102,8 @@ export function App() {
         </nav>
       </header>
       {route === "/settings" ? <SettingsPage /> : null}
-      {route === "/factory" ? <FactoryPage /> : null}
-      {route === "/factory2" ? <FactoryPage2 /> : null}
-      {route === "/economics" ? <EconomicsPage /> : null}
-      {route === "/economics2" ? <EconomicsPage2 /> : null}
+      {route === "/factory" || route === "/factory2" ? <FactoryPage2 /> : null}
+      {route === "/economics" || route === "/economics2" ? <EconomicsPage2 /> : null}
       {route === "/retro" ? <RetroPage /> : null}
       {route === "/micromanagement" ? <MicromanagementPage /> : null}
       {route === "/stats" ? <StatsPage /> : null}

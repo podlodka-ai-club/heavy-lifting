@@ -253,9 +253,7 @@ describe("App", () => {
 
     expect(screen.getByRole("heading", { name: "heavy-lifting" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Factory" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Factory v2" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Money" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Money v2" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retro" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Настройки" })).toBeInTheDocument();
   });
@@ -267,11 +265,11 @@ describe("App", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Factory" }));
 
-    expect(screen.getByRole("heading", { name: "Factory Flow" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Factory Floor" })).toBeInTheDocument();
     expect(screen.getByText("Загрузка factory...")).toBeInTheDocument();
   });
 
-  it("loads factory snapshot and renders live station data with explicit gaps", async () => {
+  it("loads factory snapshot at the canonical route through the v2 factory UI", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (input.toString() === "/api/factory") {
         return jsonResponse(factorySnapshot);
@@ -284,28 +282,9 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByText(/generated_at=/)).toBeInTheDocument();
-    expect(screen.getByText("Current bottleneck")).toBeInTheDocument();
-    expect(screen.getByText("WIP 3")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Factory handoff routes" })).toBeInTheDocument();
-    expect(screen.getByLabelText("fetch payload marker")).toBeInTheDocument();
-    expect(screen.getByLabelText("execute payload marker")).toBeInTheDocument();
-    expect(document.querySelectorAll("animateMotion")).toHaveLength(2);
-
-    const executeStation = screen.getByLabelText("execute station");
-    expect(executeStation).toHaveClass("bottleneck");
-    expect(within(executeStation).getByText("BOTTLENECK")).toBeInTheDocument();
-    expect(within(executeStation).getByText("1h 1m")).toBeInTheDocument();
-    expect(within(executeStation).getByText("3m")).toBeInTheDocument();
-    expect(within(executeStation).getByText("failed 1")).toBeInTheDocument();
-    expect(executeStation.querySelector(".station-machine")).not.toBeNull();
-
-    const feedbackStation = screen.getByLabelText("pr feedback station");
-    const zeroWipMeter = within(feedbackStation).getByLabelText("pr feedback WIP 0");
-    expect(zeroWipMeter.firstElementChild).toHaveStyle({ minWidth: "0", width: "0%" });
-    expect(screen.queryByLabelText("pr feedback payload marker")).not.toBeInTheDocument();
-
-    expect(screen.getByText("Не показываем то, чего нет в API")).toBeInTheDocument();
+    expect(await screen.findByText("GET /factory")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Factory Floor" })).toBeInTheDocument();
+    expect(screen.getByText("execute wip=3 q=2")).toBeInTheDocument();
     expect(screen.getByText("transition_history")).toBeInTheDocument();
     expect(screen.getByText("worker_capacity")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/factory");
@@ -325,10 +304,8 @@ describe("App", () => {
 
     render(<App />);
 
-    const fetchMarker = await screen.findByLabelText("fetch payload marker");
-    expect(fetchMarker).toHaveAttribute("cx", "178");
-    expect(fetchMarker).toHaveAttribute("cy", "334");
-    expect(document.querySelector("animateMotion")).not.toBeInTheDocument();
+    expect(await screen.findByText("GET /factory")).toBeInTheDocument();
+    expect(document.querySelector(".f2-item-rolling")).not.toBeInTheDocument();
   });
 
   it("shows backend errors while loading factory", async () => {
@@ -340,18 +317,7 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Factory unavailable");
   });
 
-  it("opens factory v2 from the topbar and shows loading state", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
-
-    render(<App />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Factory v2" }));
-
-    expect(screen.getByRole("heading", { name: "Factory Floor" })).toBeInTheDocument();
-    expect(screen.getByText("Загрузка factory...")).toBeInTheDocument();
-  });
-
-  it("loads factory v2 from direct URL through the factory API", async () => {
+  it("keeps factory v2 URL as an alias through the factory API", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (input.toString() === "/api/factory") {
         return jsonResponse(factorySnapshot);
@@ -377,13 +343,13 @@ describe("App", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Money" }));
 
-    expect(screen.getByRole("heading", { name: "Money Flow" })).toBeInTheDocument();
-    expect(screen.getByText("Загрузка economics...")).toBeInTheDocument();
+    expect(screen.getByText(/heavy-lifting · economics/)).toBeInTheDocument();
+    expect(screen.getByText("Загружаю экономику...")).toBeInTheDocument();
   });
 
-  it("loads economics snapshot and renders money summary, roots, series, and gaps", async () => {
+  it("loads economics snapshot at the canonical route through the v2 money UI", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (input.toString() === "/api/economics") {
+      if (input.toString().startsWith("/api/economics")) {
         return jsonResponse(economicsSnapshot);
       }
 
@@ -395,21 +361,20 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("GET /economics")).toBeInTheDocument();
-    expect(screen.getAllByText("$1500.000000").length).toBeGreaterThan(0);
-    expect(screen.getByText("$5.000000")).toBeInTheDocument();
-    expect(screen.getAllByText("$1495.000000").length).toBeGreaterThan(0);
+    expect(screen.getByText("$1,495.00")).toBeInTheDocument();
     expect(screen.getByText("TASK-10")).toBeInTheDocument();
-    expect(screen.getAllByText("missing").length).toBeGreaterThan(0);
-    expect(screen.getByText("2026-04-28")).toBeInTheDocument();
-    expect(screen.getByText("infra_cost")).toBeInTheDocument();
-    expect(screen.getByText("retry_waste")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/economics");
+    expect(screen.getByText("04-28")).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("infra") && content.includes("cost")))
+      .toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("retry") && content.includes("waste")))
+      .toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/economics"));
   });
 
   it("generates mock revenue through the frontend api path and reloads economics", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
-      if (url === "/api/economics" && !init) {
+      if (url.startsWith("/api/economics") && !init) {
         return jsonResponse(economicsSnapshot);
       }
       if (url === "/api/economics/mock-revenue" && init?.method === "POST") {
@@ -440,7 +405,7 @@ describe("App", () => {
         })
       )
     );
-    expect(await screen.findByText("mock revenue: +1 / updated 0")).toBeInTheDocument();
+    expect(await screen.findByText("+1 monetized")).toBeInTheDocument();
   });
 
   it("shows backend errors while loading economics", async () => {
@@ -452,18 +417,7 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Economics unavailable");
   });
 
-  it("opens money v2 from the topbar and shows loading state", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
-
-    render(<App />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Money v2" }));
-
-    expect(screen.getByText(/heavy-lifting · economics/)).toBeInTheDocument();
-    expect(screen.getByText("Загружаю экономику...")).toBeInTheDocument();
-  });
-
-  it("loads money v2 from direct URL through the economics API", async () => {
+  it("keeps economics v2 URL as an alias through the economics API", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (input.toString().startsWith("/api/economics")) {
         return jsonResponse(economicsSnapshot);
