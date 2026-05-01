@@ -164,6 +164,53 @@ export function FactoryPage2() {
   );
 }
 
+/* ─── Return Conveyor (feedback loop REVIEW → EXECUTE) ──────────────────── */
+
+function ReturnConveyor({
+  feedbackWip,
+  reduced,
+  stationCount,
+}: {
+  feedbackWip: number;
+  reduced: boolean;
+  stationCount: number;
+}) {
+  const active = feedbackWip > 0;
+  const items = Math.min(feedbackWip, 4);
+
+  // Slots: [fetch=empty] [execute=belt] [pr_feedback=belt] [deliver=empty]
+  // Belt spans slots 1 and 2 (execute + pr_feedback), going right-to-left
+  return (
+    <div className="f2-return-row" aria-label="Feedback return conveyor">
+      {Array.from({ length: stationCount }).map((_, i) => {
+        const inLoop = i === 1 || i === 2; // execute=1, pr_feedback=2
+        const isStart = i === 2; // REVIEW end (right side, where items enter)
+        const isEnd   = i === 1; // EXECUTE end (left side, where items exit)
+        if (!inLoop) return <div key={i} className="f2-return-slot" />;
+        return (
+          <div key={i} className={`f2-return-slot f2-return-slot-active`}>
+            {/* cap indicators */}
+            {isStart && <span className="f2-return-cap f2-return-cap-start">↩</span>}
+            {isEnd   && <span className="f2-return-cap f2-return-cap-end">↓</span>}
+            {/* belt surface */}
+            <div className={`f2-return-surface${active && !reduced ? " f2-return-moving" : ""}`} />
+            {/* items moving right-to-left */}
+            <div className="f2-return-items">
+              {Array.from({ length: items }).map((_, j) => (
+                <span
+                  key={j}
+                  className={`f2-return-item${active && !reduced ? " f2-return-item-roll" : ""}`}
+                  style={{ animationDelay: `${j * 0.55}s` }}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ─── Factory Scene ──────────────────────────────────────────────────────── */
 
 function FactoryScene({
@@ -200,6 +247,13 @@ function FactoryScene({
         {/* factory floor surface */}
         <div aria-hidden className="f2-floor-surface" />
 
+
+        {/* return conveyor — feedback loop REVIEW → EXECUTE */}
+        <ReturnConveyor
+          feedbackWip={snapshot.stations.find(s => s.name === "pr_feedback")?.wip_count ?? 0}
+          reduced={reduced}
+          stationCount={snapshot.stations.length}
+        />
 
         {/* machines + belt */}
         <div className="f2-factory-row" aria-label="Pipeline">
