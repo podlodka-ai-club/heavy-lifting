@@ -61,6 +61,8 @@ class Settings:
     app_name: str
     app_host: str
     app_port: int
+    api_basic_auth_username: str | None
+    api_basic_auth_password: str | None
     database_url: str
     postgres_host: str
     postgres_port: int
@@ -122,6 +124,8 @@ def get_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "heavy-lifting-backend"),
         app_host=os.getenv("APP_HOST", "0.0.0.0"),
         app_port=_get_int("APP_PORT", 8000),
+        api_basic_auth_username=os.getenv("API_BASIC_AUTH_USERNAME") or None,
+        api_basic_auth_password=os.getenv("API_BASIC_AUTH_PASSWORD") or None,
         database_url=_build_database_url(
             postgres_host=postgres_host,
             postgres_port=postgres_port,

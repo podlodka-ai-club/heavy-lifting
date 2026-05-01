@@ -70,6 +70,8 @@ echo '<github-pat-with-read-packages>' | docker login ghcr.io -u '<github-userna
 ```dotenv
 APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:master
 APP_PORT=8000
+API_BASIC_AUTH_USERNAME=heavy
+API_BASIC_AUTH_PASSWORD=lifting
 
 POSTGRES_DB=heavy_lifting
 POSTGRES_USER=heavy_lifting
@@ -86,6 +88,8 @@ GUNICORN_TIMEOUT=120
 `APP_IMAGE` из файла нужен для ручных команд и rollback. Во время штатного GitHub Actions deploy workflow передает `APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:sha-<commit>` явно, чтобы поднять ровно собранный commit.
 
 `APP_PORT` задает внешний порт VPS для API. Если переменная не задана, production compose и deploy healthcheck используют `8000`. Внутри контейнера API остается на `0.0.0.0:8000`.
+
+`API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` включают HTTP Basic Auth guard для non-local запросов к API. Если одна из переменных не задана, guard отключается для совместимости с локальной разработкой. Запросы с `127.0.0.1` и `::1` обходят guard, чтобы локальные healthcheck и deploy-команды продолжали работать.
 
 ## Штатный deploy
 
@@ -145,7 +149,7 @@ Healthcheck URL снаружи VPS зависит от `APP_PORT` из `.env.pro
 http://<vps-host>:<APP_PORT-or-8000>/health
 ```
 
-Риск: plain HTTP на внешнем `APP_PORT` не дает TLS и может открыть API всему интернету. Для MVP это допустимо только при осознанном сетевом ограничении. Минимум - firewall allowlist на доверенные IP; лучше - reverse proxy с TLS и закрытый direct access к опубликованному порту.
+Риск: Basic Auth поверх plain HTTP на внешнем `APP_PORT` не дает TLS, поэтому логин и пароль видны на сетевом пути. Это слабый MVP guard, а не полноценная защита. Минимум - firewall allowlist на доверенные IP; лучше - reverse proxy с TLS и закрытый direct access к опубликованному порту.
 
 ## Rollback
 

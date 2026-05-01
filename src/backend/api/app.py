@@ -1,6 +1,7 @@
 from flask import Flask
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.api.auth import register_basic_auth_guard
 from backend.api.routes import register_routes
 from backend.composition import RuntimeContainer, init_app_container
 from backend.db import get_session_factory
@@ -19,5 +20,6 @@ def create_app(
         app_name=active_runtime.settings.app_name,
         component="api",
     )
+    register_basic_auth_guard(app, active_runtime.settings)
     register_routes(app)
     return app

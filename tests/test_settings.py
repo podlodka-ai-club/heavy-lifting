@@ -10,6 +10,8 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "APP_NAME",
         "APP_HOST",
         "APP_PORT",
+        "API_BASIC_AUTH_USERNAME",
+        "API_BASIC_AUTH_PASSWORD",
         "DATABASE_URL",
         "POSTGRES_HOST",
         "POSTGRES_PORT",
@@ -66,6 +68,8 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.app_name == "heavy-lifting-backend"
     assert settings.app_host == "0.0.0.0"
     assert settings.app_port == 8000
+    assert settings.api_basic_auth_username is None
+    assert settings.api_basic_auth_password is None
     assert settings.postgres_host == "localhost"
     assert settings.postgres_port == 5432
     assert settings.postgres_db == "heavy_lifting"
@@ -121,6 +125,8 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("APP_NAME", "orchestrator")
     monkeypatch.setenv("APP_HOST", "127.0.0.1")
     monkeypatch.setenv("APP_PORT", "9001")
+    monkeypatch.setenv("API_BASIC_AUTH_USERNAME", "heavy")
+    monkeypatch.setenv("API_BASIC_AUTH_PASSWORD", "lifting")
     monkeypatch.setenv("POSTGRES_HOST", "db")
     monkeypatch.setenv("POSTGRES_PORT", "6543")
     monkeypatch.setenv("POSTGRES_DB", "orchestrator")
@@ -177,6 +183,8 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.app_name == "orchestrator"
     assert settings.app_host == "127.0.0.1"
     assert settings.app_port == 9001
+    assert settings.api_basic_auth_username == "heavy"
+    assert settings.api_basic_auth_password == "lifting"
     assert settings.postgres_host == "db"
     assert settings.postgres_port == 6543
     assert settings.postgres_db == "orchestrator"
