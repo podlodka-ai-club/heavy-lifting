@@ -213,7 +213,7 @@
 .f2-machine-review  { width: 125px; height: 110px; }
 
 /* DELIVER — dispatch station, medium */
-.f2-machine-deliver { width: 100px; height: 128px; }
+.f2-machine-deliver { width: 100px; height: 140px; }
 
 /* ─── WIP fill (liquid inside machine) ──────────────────────────────────── */
 
@@ -538,10 +538,10 @@
   background: linear-gradient(180deg, rgba(177, 113, 255, 0.18) 0%, rgba(177, 113, 255, 0.05) 100%);
   border: 2px solid rgba(177, 113, 255, 0.3);
   border-radius: 3px 3px 8px 8px;
-  height: 40px;
+  height: 44px;
   left: 18px;
   position: absolute;
-  top: 30px;
+  top: 28px;
   width: 50px;
   z-index: 5;
 }
@@ -562,7 +562,7 @@
   background: linear-gradient(180deg, rgba(177, 113, 255, 0.25) 0%, rgba(177, 113, 255, 0.05) 100%);
   border: 1px solid rgba(177, 113, 255, 0.2);
   border-radius: 0 2px 2px 0;
-  bottom: 38px;
+  bottom: 60px;
   height: 12px;
   position: absolute;
   right: -18px;
@@ -573,7 +573,7 @@
 .f2-dial {
   border: 2px solid var(--m-color);
   border-radius: 50%;
-  bottom: 50px;
+  bottom: 62px;
   height: 28px;
   opacity: 0.65;
   position: absolute;
@@ -915,7 +915,7 @@
   .f2-scene { height: 440px; }
 
   .f2-machine-execute { height: 140px; }
-  .f2-machine-deliver { height: 108px; }
+  .f2-machine-deliver { height: 122px; }
   .f2-machine-review  { width: 105px; height: 92px; }
   .f2-machine-fetch   { width: 78px;  height: 78px; }
 }
