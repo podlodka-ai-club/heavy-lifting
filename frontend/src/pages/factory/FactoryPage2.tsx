@@ -164,102 +164,6 @@ export function FactoryPage2() {
   );
 }
 
-/* ─── Flow Overlay ───────────────────────────────────────────────────────── */
-/*
- * SVG absolute over the scene. viewBox="0 0 100 100" maps to scene %%.
- * Approximate slot centers (4 equal slots, machines left-aligned):
- *   FETCH   ≈ x=5   EXECUTE ≈ x=30   REVIEW ≈ x=55   DELIVER ≈ x=80
- * Machine tops from scene top (scene h=540px):
- *   EXECUTE (168px tall) top ≈ y=57%   REVIEW (110px tall) top ≈ y=68%
- */
-function FlowOverlay({ snapshot }: { snapshot: FactorySnapshot }) {
-  const byName = Object.fromEntries(
-    snapshot.stations.map(s => [s.name, s])
-  ) as Partial<Record<StationName, FactoryStation>>;
-
-  const feedbackWip = byName["pr_feedback"]?.wip_count ?? 0;
-  const feedbackActive = feedbackWip > 0;
-
-  // Failed stations (any with failed_count > 0)
-  const failedStations = snapshot.stations.filter(s => s.failed_count > 0);
-
-  // Approximate x-centers per station (in 0-100 viewBox units)
-  const stationX: Record<StationName, number> = {
-    fetch: 5, execute: 30, pr_feedback: 56, deliver: 80,
-  };
-  // Machine top y (% of scene height, from top)
-  const stationTopY: Record<StationName, number> = {
-    fetch: 70, execute: 57, pr_feedback: 68, deliver: 64,
-  };
-
-  return (
-    <svg
-      aria-hidden
-      className="f2-flow-overlay"
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-    >
-      <defs>
-        <marker id="fo-arr-back" viewBox="0 0 8 8" refX="4" refY="1"
-          markerWidth="4" markerHeight="4" orient="auto">
-          <polygon points="1,8 4,1 7,8" fill="rgba(110,225,255,0.8)" />
-        </marker>
-        <marker id="fo-arr-fail" viewBox="0 0 8 8" refX="4" refY="7"
-          markerWidth="3.5" markerHeight="3.5" orient="auto">
-          <polygon points="1,0 7,0 4,7" fill="rgba(224,75,48,0.65)" />
-        </marker>
-      </defs>
-
-      {/* ── Feedback arc: REVIEW → EXECUTE, curves over the machines ── */}
-      <path
-        d={`M ${stationX.pr_feedback},${stationTopY.pr_feedback}
-            C ${stationX.pr_feedback},28
-              ${stationX.execute},28
-              ${stationX.execute},${stationTopY.execute}`}
-        fill="none"
-        stroke={feedbackActive ? "rgba(110,225,255,0.65)" : "rgba(110,225,255,0.2)"}
-        strokeWidth={feedbackActive ? "0.5" : "0.3"}
-        strokeDasharray="2.5 1.5"
-        markerEnd="url(#fo-arr-back)"
-      />
-      <text
-        x={(stationX.pr_feedback + stationX.execute) / 2}
-        y="24"
-        textAnchor="middle"
-        className="f2-overlay-label"
-        fill={feedbackActive ? "rgba(110,225,255,0.6)" : "rgba(110,225,255,0.2)"}
-      >
-        {feedbackActive ? `review → execute  ×${feedbackWip}` : "review → execute"}
-      </text>
-
-      {/* ── Failed exits: small red stub below each failing machine ── */}
-      {failedStations.map(s => {
-        const x = stationX[s.name];
-        const topY = stationTopY[s.name];
-        const bottomY = topY + (s.name === "execute" ? 31 : s.name === "deliver" ? 24 : 20);
-        return (
-          <g key={`fo-fail-${s.name}`}>
-            <line
-              x1={x - 2} y1={topY + 2}
-              x2={x - 6} y2={Math.min(bottomY + 4, 92)}
-              stroke="rgba(224,75,48,0.55)" strokeWidth="0.4"
-              strokeDasharray="1.5 1"
-              markerEnd="url(#fo-arr-fail)"
-            />
-            <text
-              x={x - 8} y={Math.min(bottomY + 8, 96)}
-              textAnchor="middle"
-              className="f2-overlay-label f2-overlay-fail"
-            >
-              {s.failed_count}✗
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
 /* ─── Factory Scene ──────────────────────────────────────────────────────── */
 
 function FactoryScene({
@@ -296,8 +200,6 @@ function FactoryScene({
         {/* factory floor surface */}
         <div aria-hidden className="f2-floor-surface" />
 
-        {/* flow overlay: paths between machines */}
-        <FlowOverlay snapshot={snapshot} />
 
         {/* machines + belt */}
         <div className="f2-factory-row" aria-label="Pipeline">
@@ -311,6 +213,7 @@ function FactoryScene({
                   4
                 ))
               : 1;
+            const feedbackWip = snapshot.stations.find(s => s.name === "pr_feedback")?.wip_count ?? 0;
 
             return (
               <div key={station.name} className="f2-station-slot">
@@ -324,6 +227,7 @@ function FactoryScene({
                 {/* the machine */}
                 <Machine
                   batchSize={batchSize}
+                  feedbackWip={feedbackWip}
                   isBottleneck={isBottleneck}
                   label={meta.label}
                   reduced={reduced}
@@ -403,6 +307,13 @@ function QueueStack({
 
 /* ─── Machine (4 distinct visual variants) ───────────────────────────────── */
 
+const STATION_NEXT: Record<StationName, string> = {
+  fetch:       "→ execute",
+  execute:     "→ review / deliver",
+  pr_feedback: "↩ execute · → deliver",
+  deliver:     "→ done",
+};
+
 function Machine({
   station,
   isBottleneck,
@@ -410,6 +321,7 @@ function Machine({
   role,
   reduced,
   batchSize = 1,
+  feedbackWip = 0,
 }: {
   station: FactoryStation;
   isBottleneck: boolean;
@@ -417,12 +329,17 @@ function Machine({
   role: string;
   reduced: boolean;
   batchSize?: number;
+  feedbackWip?: number;
 }) {
   const meta = META[station.name];
   const active = station.active_count > 0 || station.wip_count > 0;
   const lightCls =
     isBottleneck ? "warn" : station.failed_count > 0 ? "bad" : active ? "ok" : "idle";
   const speedCls = reduced ? "" : isBottleneck ? "fast" : active ? "slow" : "";
+
+  // Highlight the feedback path on execute and pr_feedback when loop is active
+  const feedbackHighlight =
+    feedbackWip > 0 && (station.name === "execute" || station.name === "pr_feedback");
 
   return (
     <div
@@ -457,8 +374,17 @@ function Machine({
           {batchSize > 1 && (
             <span className="f2-batch-badge" aria-label={`batch size ${batchSize}`}>×{batchSize}</span>
           )}
+          {station.failed_count > 0 && (
+            <span className="f2-fail-pip">{station.failed_count}✗</span>
+          )}
         </div>
         <span className="f2-nameplate-role">{role}</span>
+        <span
+          className={`f2-nameplate-path${feedbackHighlight ? " f2-nameplate-path-active" : ""}`}
+        >
+          {STATION_NEXT[station.name]}
+          {station.name === "pr_feedback" && feedbackWip > 0 ? ` ×${feedbackWip}` : ""}
+        </span>
       </div>
     </div>
   );

@@ -865,28 +865,30 @@
   margin-top: 3px;
 }
 
-/* ─── Flow overlay (SVG over the scene) ─────────────────────────────────── */
+/* ─── Nameplate path & fail pip ─────────────────────────────────────────── */
 
-.f2-flow-overlay {
-  height: 100%;
-  left: 0;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  width: 100%;
-  z-index: 8;
-}
-
-.f2-overlay-label {
+.f2-nameplate-path {
+  color: rgba(255, 255, 255, 0.2);
   font-family: var(--mono);
-  font-size: 2.4px;
-  font-weight: 700;
+  font-size: 0.5rem;
   letter-spacing: 0.04em;
+  margin-top: 1px;
+  transition: color 0.3s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.f2-overlay-fail {
-  fill: rgba(224, 75, 48, 0.7);
-  font-size: 2.2px;
+.f2-nameplate-path-active {
+  color: rgba(110, 225, 255, 0.75);
+}
+
+.f2-fail-pip {
+  color: #ffb0a4;
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  font-weight: 700;
+  margin-left: auto;
 }
 
 /* ─── Reduced motion ─────────────────────────────────────────────────────── */
