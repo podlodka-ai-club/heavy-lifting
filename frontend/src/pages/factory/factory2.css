@@ -865,6 +865,48 @@
   margin-top: 3px;
 }
 
+/* ─── Flow Map ───────────────────────────────────────────────────────────── */
+
+.f2-flow-map {
+  background: rgba(10, 7, 4, 0.7);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  margin-bottom: 14px;
+  padding: 12px 18px 8px;
+}
+
+.f2-flow-svg {
+  display: block;
+  height: auto;
+  max-height: 114px;
+  width: 100%;
+}
+
+.f2-flow-node-label {
+  font-family: var(--mono);
+  font-size: 7.5px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
+
+.f2-flow-badge-num {
+  fill: rgba(10, 7, 4, 1);
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.f2-flow-arc-label {
+  font-family: var(--mono);
+  font-size: 6.5px;
+}
+
+.f2-flow-fail-label {
+  fill: rgba(224, 75, 48, 0.75);
+  font-family: var(--mono);
+  font-size: 7px;
+}
+
 /* ─── Reduced motion ─────────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
