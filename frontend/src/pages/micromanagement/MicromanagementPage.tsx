@@ -68,7 +68,48 @@ function MetadataBlock({ data, label }: { data: Record<string, unknown> | null; 
   );
 }
 
-function TaskDetail({ task }: { task: TaskRecord }) {
+const CHAIN_ORDER = ["fetch", "execute", "pr_feedback", "deliver"];
+
+function statusColor(status: string): string {
+  const tone = normalizeStatus(status);
+  if (tone === "done") return "var(--green)";
+  if (tone === "failed") return "var(--red)";
+  if (tone === "processing") return "var(--orange)";
+  return "var(--cyan)";
+}
+
+function TaskChain({ task, allTasks }: { task: TaskRecord; allTasks: TaskRecord[] }) {
+  const rootId = task.root_id ?? task.id;
+  const chain = allTasks
+    .filter(t => (t.root_id ?? t.id) === rootId)
+    .sort((a, b) => CHAIN_ORDER.indexOf(a.task_type) - CHAIN_ORDER.indexOf(b.task_type));
+
+  if (chain.length <= 1) return null;
+
+  return (
+    <div>
+      <p className="mm-detail-section-label">Цепочка задач (root {rootId})</p>
+      <div className="mm-chain">
+        {chain.map((t, i) => (
+          <div key={t.id} className={`mm-chain-node${t.id === task.id ? " mm-chain-current" : ""}`}>
+            {i > 0 && <span className="mm-chain-arrow" aria-hidden>→</span>}
+            <div className="mm-chain-pill">
+              <span className="mm-type" style={{ fontSize: "0.62rem" }}>{t.task_type}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: "0.65rem", color: statusColor(t.status) }}>
+                {t.status}
+              </span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: "0.62rem", color: "var(--muted)" }}>
+                #{t.id}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TaskDetail({ task, allTasks }: { task: TaskRecord; allTasks: TaskRecord[] }) {
   const metadata = task.result_payload?.metadata as Record<string, unknown> | undefined;
   const hasMetadata = metadata && typeof metadata === "object" && Object.keys(metadata).length > 0;
   const contextClean = task.context
@@ -77,6 +118,8 @@ function TaskDetail({ task }: { task: TaskRecord }) {
 
   return (
     <div className="mm-detail-inner">
+      <TaskChain allTasks={allTasks} task={task} />
+
       <div>
         <p className="mm-detail-section-label">Детали задачи</p>
         <div className="mm-detail-grid">
@@ -138,10 +181,12 @@ function TaskDetail({ task }: { task: TaskRecord }) {
 
 function TaskRow({
   task,
+  allTasks,
   expanded,
   onToggle,
 }: {
   task: TaskRecord;
+  allTasks: TaskRecord[];
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -183,7 +228,7 @@ function TaskRow({
       {expanded && (
         <tr className="mm-detail-row">
           <td colSpan={colSpan}>
-            <TaskDetail task={task} />
+            <TaskDetail allTasks={allTasks} task={task} />
           </td>
         </tr>
       )}
@@ -297,6 +342,7 @@ export function MicromanagementPage() {
               {tasks.map(task => (
                 <TaskRow
                   key={task.id}
+                  allTasks={tasks}
                   expanded={expandedId === task.id}
                   task={task}
                   onToggle={() => setExpandedId(prev => prev === task.id ? null : task.id)}

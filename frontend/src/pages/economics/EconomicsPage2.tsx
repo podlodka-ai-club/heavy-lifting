@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { EconomicsRoot, EconomicsSeriesPoint, EconomicsSnapshot } from "../../api";
+import type { EconomicsPeriodParams, EconomicsRoot, EconomicsSeriesPoint, EconomicsSnapshot } from "../../api";
 import { generateMockRevenue, getEconomicsSnapshot } from "../../api";
 import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
 import { formatDateTime } from "../../lib/formatters";
@@ -8,6 +8,20 @@ import "./economics2.css";
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
 type ActionState = "idle" | "running" | "done" | "error";
+
+type PeriodPreset = "7d" | "30d" | "90d" | "all";
+
+function presetToPeriod(preset: PeriodPreset, bucket: "day" | "week" | "month"): EconomicsPeriodParams {
+  if (preset === "all") return { bucket };
+  const days = preset === "7d" ? 7 : preset === "30d" ? 30 : 90;
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 86_400_000);
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+    bucket,
+  };
+}
 
 const COIN_POSITIONS: Array<{ top: string; left: string }> = [
   { top: "16%", left: "15%" },
@@ -30,13 +44,18 @@ export function EconomicsPage2() {
   const [actionState, setActionState] = useState<ActionState>("idle");
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
+  const [preset, setPreset] = useState<PeriodPreset>("30d");
+  const [bucket, setBucket] = useState<"day" | "week" | "month">("day");
   const reducedMotion = usePrefersReducedMotion();
 
-  async function load(cancelled: () => boolean = () => false) {
+  async function load(
+    period?: EconomicsPeriodParams,
+    cancelled: () => boolean = () => false,
+  ) {
     setLoadState("loading");
     setError("");
     try {
-      const data = await getEconomicsSnapshot();
+      const data = await getEconomicsSnapshot(period);
       if (!cancelled()) {
         setSnapshot(data);
         setLoadState("loaded");
@@ -51,11 +70,9 @@ export function EconomicsPage2() {
 
   useEffect(() => {
     let cancelled = false;
-    void load(() => cancelled);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void load(presetToPeriod(preset, bucket), () => cancelled);
+    return () => { cancelled = true; };
+  }, [preset, bucket]);
 
   async function mockRevenue() {
     if (actionState === "running") return;
@@ -66,7 +83,7 @@ export function EconomicsPage2() {
       const result = await generateMockRevenue();
       setActionState("done");
       setActionMsg(`+${result.created_count} monetized`);
-      await load();
+      await load(presetToPeriod(preset, bucket));
     } catch (e) {
       setActionState("error");
       setError(e instanceof Error ? e.message : "Mock revenue failed");
@@ -111,6 +128,33 @@ export function EconomicsPage2() {
 
       {snapshot ? (
         <>
+          <section className="e2-period-bar" aria-label="Period filter">
+            <div className="e2-period-presets">
+              {(["7d", "30d", "90d", "all"] as PeriodPreset[]).map(p => (
+                <button
+                  key={p}
+                  className={`e2-period-btn${preset === p ? " active" : ""}`}
+                  type="button"
+                  onClick={() => setPreset(p)}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            <div className="e2-period-buckets">
+              {(["day", "week", "month"] as const).map(b => (
+                <button
+                  key={b}
+                  className={`e2-period-btn${bucket === b ? " active" : ""}`}
+                  type="button"
+                  onClick={() => setBucket(b)}
+                >
+                  {b}
+                </button>
+              ))}
+            </div>
+          </section>
+
           <section className="factory-telemetry" aria-label="Telemetry">
             <span>
               <strong>GET /economics</strong>
