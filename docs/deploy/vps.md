@@ -228,6 +228,8 @@ curl -fsS --user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>' \
 
 Production frontend работает в `network_mode: host`, поэтому Caddy слушает `FRONTEND_PORT` напрямую на сетевом namespace VPS. Это убирает Docker DNAT с публичного frontend path и не оставляет `ports` mapping у frontend.
 
+Runtime compression в Caddy отключен: для текущего VPS path большие zstd/gzip responses зависали при внешней загрузке, а uncompressed static files отдаются стабильно.
+
 Если большие static assets снаружи VPS зависают или обрываются, проверьте:
 
 - `docker compose --env-file .env.production -f docker-compose.prod.yml config` не должен показывать `ports` у service `frontend`;
