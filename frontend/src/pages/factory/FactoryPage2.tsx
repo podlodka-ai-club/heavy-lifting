@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
-import type { FactorySnapshot, FactoryStation } from "../../api";
-import { getFactorySnapshot } from "../../api";
+import type { FactorySnapshot, FactoryStation, RuntimeSetting } from "../../api";
+import { getFactorySnapshot, listRuntimeSettings, updateRuntimeSetting } from "../../api";
 import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
 import { formatAge, formatDateTime } from "../../lib/formatters";
 import "./factory2.css";
@@ -20,6 +20,13 @@ const META: Record<
   deliver:     { label: "DELIVER",   role: "Отгрузка",          color: "var(--violet)", cls: "deliver"    },
 };
 
+const STATION_SETTING_KEYS: Record<StationName, string[]> = {
+  fetch:       ["tracker_fetch_limit"],
+  execute:     ["execute_worker_batch_size", "cli_agent_preview_chars"],
+  pr_feedback: ["pr_feedback_fetch_limit"],
+  deliver:     [],
+};
+
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
 export function FactoryPage2() {
@@ -28,21 +35,62 @@ export function FactoryPage2() {
   const [error, setError] = useState("");
   const reduced = usePrefersReducedMotion();
 
+  const [settings, setSettings] = useState<RuntimeSetting[]>([]);
+  const [selectedStation, setSelectedStation] = useState<StationName | null>(null);
+  const [pendingValues, setPendingValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [saveError, setSaveError] = useState<Record<string, string>>({});
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoadState("loading");
       setError("");
       try {
-        const data = await getFactorySnapshot();
-        if (!cancelled) { setSnapshot(data); setLoadState("loaded"); }
+        const [data, settingsData] = await Promise.all([
+          getFactorySnapshot(),
+          listRuntimeSettings().catch(() => [] as RuntimeSetting[]),
+        ]);
+        if (!cancelled) {
+          setSnapshot(data);
+          setSettings(settingsData);
+          setLoadState("loaded");
+        }
       } catch (e) {
-        if (!cancelled) { setLoadState("error"); setError(e instanceof Error ? e.message : "Ошибка загрузки"); }
+        if (!cancelled) {
+          setLoadState("error");
+          setError(e instanceof Error ? e.message : "Ошибка загрузки");
+        }
       }
     }
     void load();
     return () => { cancelled = true; };
   }, []);
+
+  function handleStationToggle(name: StationName) {
+    setSelectedStation(prev => prev === name ? null : name);
+  }
+
+  function handleValueChange(key: string, value: string) {
+    setPendingValues(prev => ({ ...prev, [key]: value }));
+    setSaveError(prev => { const next = { ...prev }; delete next[key]; return next; });
+  }
+
+  async function handleSave(key: string) {
+    const value = pendingValues[key];
+    if (value === undefined) return;
+    setSaving(prev => ({ ...prev, [key]: true }));
+    setSaveError(prev => { const next = { ...prev }; delete next[key]; return next; });
+    try {
+      const updated = await updateRuntimeSetting(key, value);
+      setSettings(prev => prev.map(s => s.setting_key === key ? updated : s));
+      setPendingValues(prev => { const next = { ...prev }; delete next[key]; return next; });
+    } catch (e) {
+      setSaveError(prev => ({ ...prev, [key]: e instanceof Error ? e.message : "Save failed" }));
+    } finally {
+      setSaving(prev => ({ ...prev, [key]: false }));
+    }
+  }
 
   const bn = snapshot?.bottleneck?.station ?? null;
 
@@ -84,7 +132,19 @@ export function FactoryPage2() {
           </section>
 
           {/* Scene */}
-          <FactoryScene bottleneck={bn} reduced={reduced} snapshot={snapshot} />
+          <FactoryScene
+            bottleneck={bn}
+            reduced={reduced}
+            snapshot={snapshot}
+            selectedStation={selectedStation}
+            settings={settings}
+            pendingValues={pendingValues}
+            saving={saving}
+            saveError={saveError}
+            onStationToggle={handleStationToggle}
+            onValueChange={handleValueChange}
+            onSave={handleSave}
+          />
 
           {/* Data gaps */}
           {snapshot.data_gaps.length > 0 && (
@@ -110,10 +170,26 @@ function FactoryScene({
   snapshot,
   bottleneck,
   reduced,
+  selectedStation,
+  settings,
+  pendingValues,
+  saving,
+  saveError,
+  onStationToggle,
+  onValueChange,
+  onSave,
 }: {
   snapshot: FactorySnapshot;
   bottleneck: StationName | null;
   reduced: boolean;
+  selectedStation: StationName | null;
+  settings: RuntimeSetting[];
+  pendingValues: Record<string, string>;
+  saving: Record<string, boolean>;
+  saveError: Record<string, string>;
+  onStationToggle: (name: StationName) => void;
+  onValueChange: (key: string, value: string) => void;
+  onSave: (key: string) => Promise<void>;
 }) {
   return (
     <section className="f2-scene-wrap" aria-label="Factory floor">
@@ -165,9 +241,25 @@ function FactoryScene({
 
       {/* stats panels below scene */}
       <div className="f2-stats-row">
-        {snapshot.stations.map(station => (
-          <StationStats key={station.name} station={station} />
-        ))}
+        {snapshot.stations.map(station => {
+          const stationSettings = settings.filter(
+            s => STATION_SETTING_KEYS[station.name].includes(s.setting_key)
+          );
+          return (
+            <StationStats
+              key={station.name}
+              isSelected={selectedStation === station.name}
+              pendingValues={pendingValues}
+              saveError={saveError}
+              saving={saving}
+              station={station}
+              stationSettings={stationSettings}
+              onSave={onSave}
+              onToggle={() => onStationToggle(station.name)}
+              onValueChange={onValueChange}
+            />
+          );
+        })}
       </div>
     </section>
   );
@@ -387,15 +479,52 @@ function BeltSegment({
 
 /* ─── Station Stats (below scene) ────────────────────────────────────────── */
 
-function StationStats({ station }: { station: FactoryStation }) {
+function StationStats({
+  station,
+  isSelected,
+  onToggle,
+  stationSettings,
+  pendingValues,
+  saving,
+  saveError,
+  onValueChange,
+  onSave,
+}: {
+  station: FactoryStation;
+  isSelected: boolean;
+  onToggle: () => void;
+  stationSettings: RuntimeSetting[];
+  pendingValues: Record<string, string>;
+  saving: Record<string, boolean>;
+  saveError: Record<string, string>;
+  onValueChange: (key: string, value: string) => void;
+  onSave: (key: string) => Promise<void>;
+}) {
   const meta = META[station.name];
+  const hasTunableSettings = stationSettings.length > 0;
+
   return (
-    <div className="f2-station-stats" style={{ "--m-color": meta.color } as React.CSSProperties}>
-      <div className="f2-stats-header">
+    <div
+      className={`f2-station-stats${isSelected ? " f2-station-selected" : ""}`}
+      style={{ "--m-color": meta.color } as React.CSSProperties}
+    >
+      <div
+        className={`f2-stats-header${hasTunableSettings ? " f2-stats-header-clickable" : ""}`}
+        onClick={hasTunableSettings ? onToggle : undefined}
+        role={hasTunableSettings ? "button" : undefined}
+        tabIndex={hasTunableSettings ? 0 : undefined}
+        onKeyDown={hasTunableSettings ? (e) => { if (e.key === "Enter" || e.key === " ") onToggle(); } : undefined}
+        aria-expanded={hasTunableSettings ? isSelected : undefined}
+      >
         <span className="mono-label" style={{ color: meta.color }}>{meta.label}</span>
-        {station.failed_count > 0 && (
-          <span className="f2-fail-badge">{station.failed_count} fail</span>
-        )}
+        <div className="f2-stats-header-right">
+          {station.failed_count > 0 && (
+            <span className="f2-fail-badge">{station.failed_count} fail</span>
+          )}
+          {hasTunableSettings && (
+            <span className="f2-tune-btn" aria-hidden>{isSelected ? "▲" : "⚙"}</span>
+          )}
+        </div>
       </div>
       <div className="f2-wip-meter-bar" aria-label={`WIP ${station.wip_count}`}>
         <span style={{ width: `${Math.min(100, station.wip_count * 14)}%` }} />
@@ -418,6 +547,72 @@ function StationStats({ station }: { station: FactoryStation }) {
         <span>done {station.counts_by_status.done}</span>
         <span>fail {station.counts_by_status.failed}</span>
       </div>
+      {isSelected && (
+        <SettingsPanel
+          pendingValues={pendingValues}
+          saveError={saveError}
+          saving={saving}
+          stationSettings={stationSettings}
+          onSave={onSave}
+          onValueChange={onValueChange}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Settings Panel ─────────────────────────────────────────────────────── */
+
+function SettingsPanel({
+  stationSettings,
+  pendingValues,
+  saving,
+  saveError,
+  onValueChange,
+  onSave,
+}: {
+  stationSettings: RuntimeSetting[];
+  pendingValues: Record<string, string>;
+  saving: Record<string, boolean>;
+  saveError: Record<string, string>;
+  onValueChange: (key: string, value: string) => void;
+  onSave: (key: string) => Promise<void>;
+}) {
+  return (
+    <div className="f2-settings-panel">
+      <p className="f2-settings-title">Tune</p>
+      {stationSettings.map(s => {
+        const pending = pendingValues[s.setting_key];
+        const displayValue = pending ?? s.value;
+        const isDirty = pending !== undefined && pending !== s.value;
+        const isSaving = saving[s.setting_key] ?? false;
+        const errMsg = saveError[s.setting_key];
+        return (
+          <div key={s.setting_key} className="f2-setting-row">
+            <label className="f2-setting-label" title={s.description}>
+              {s.setting_key}
+            </label>
+            <div className="f2-setting-controls">
+              <input
+                className="f2-setting-input"
+                disabled={isSaving}
+                min={s.value_type === "int" ? 1 : undefined}
+                type={s.value_type === "int" ? "number" : "text"}
+                value={displayValue}
+                onChange={e => onValueChange(s.setting_key, e.target.value)}
+              />
+              <button
+                className={`f2-setting-save${isDirty ? " f2-setting-save-active" : ""}`}
+                disabled={!isDirty || isSaving}
+                onClick={() => void onSave(s.setting_key)}
+              >
+                {isSaving ? "…" : "Save"}
+              </button>
+            </div>
+            {errMsg ? <p className="f2-setting-error">{errMsg}</p> : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -65,10 +65,28 @@ class ExecuteWorker:
     settings: Settings = field(default_factory=get_settings)
 
     def poll_once(self) -> ExecuteWorkerReport:
+        batch_size = self._read_execute_batch_size()
         report = ExecuteWorkerReport()
-        report = _merge_reports(report, self._process_next_task(TaskType.EXECUTE))
+        for _ in range(batch_size):
+            report = _merge_reports(report, self._process_next_task(TaskType.EXECUTE))
         report = _merge_reports(report, self._process_next_task(TaskType.PR_FEEDBACK))
         return report
+
+    def _read_execute_batch_size(self) -> int:
+        try:
+            from backend.models import ApplicationSetting  # noqa: PLC0415
+
+            with session_scope(session_factory=self.session_factory) as session:
+                row = (
+                    session.query(ApplicationSetting)
+                    .filter_by(setting_key="execute_worker_batch_size")
+                    .first()
+                )
+                if row is not None:
+                    return max(1, min(int(row.value), 20))
+        except Exception:
+            pass
+        return 1
 
     def run_forever(
         self,
