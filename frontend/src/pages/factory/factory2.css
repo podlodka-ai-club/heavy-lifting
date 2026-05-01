@@ -865,46 +865,28 @@
   margin-top: 3px;
 }
 
-/* ─── Flow Map ───────────────────────────────────────────────────────────── */
+/* ─── Flow overlay (SVG over the scene) ─────────────────────────────────── */
 
-.f2-flow-map {
-  background: rgba(10, 7, 4, 0.7);
-  border: 1px solid var(--edge);
-  border-radius: 10px;
-  margin-bottom: 14px;
-  padding: 12px 18px 8px;
-}
-
-.f2-flow-svg {
-  display: block;
-  height: auto;
-  max-height: 114px;
+.f2-flow-overlay {
+  height: 100%;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
   width: 100%;
+  z-index: 8;
 }
 
-.f2-flow-node-label {
+.f2-overlay-label {
   font-family: var(--mono);
-  font-size: 7.5px;
-  font-weight: 800;
-  letter-spacing: 0.09em;
+  font-size: 2.4px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
-.f2-flow-badge-num {
-  fill: rgba(10, 7, 4, 1);
-  font-family: var(--mono);
-  font-size: 7px;
-  font-weight: 800;
-}
-
-.f2-flow-arc-label {
-  font-family: var(--mono);
-  font-size: 6.5px;
-}
-
-.f2-flow-fail-label {
-  fill: rgba(224, 75, 48, 0.75);
-  font-family: var(--mono);
-  font-size: 7px;
+.f2-overlay-fail {
+  fill: rgba(224, 75, 48, 0.7);
+  font-size: 2.2px;
 }
 
 /* ─── Reduced motion ─────────────────────────────────────────────────────── */

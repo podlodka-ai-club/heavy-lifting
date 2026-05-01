@@ -131,9 +131,6 @@ export function FactoryPage2() {
             ))}
           </section>
 
-          {/* Flow map */}
-          <FlowMap snapshot={snapshot} />
-
           {/* Scene */}
           <FactoryScene
             bottleneck={bn}
@@ -167,18 +164,15 @@ export function FactoryPage2() {
   );
 }
 
-/* ─── Flow Map ───────────────────────────────────────────────────────────── */
-
-const FLOW_NODES: Array<{ name: StationName; cx: number; short: string }> = [
-  { name: "fetch",       cx: 58,  short: "FETCH"  },
-  { name: "execute",     cx: 192, short: "EXEC"   },
-  { name: "pr_feedback", cx: 338, short: "REVIEW" },
-  { name: "deliver",     cx: 472, short: "DELIV"  },
-];
-const FR = 24; // node radius
-const FCY = 46; // node center y
-
-function FlowMap({ snapshot }: { snapshot: FactorySnapshot }) {
+/* ─── Flow Overlay ───────────────────────────────────────────────────────── */
+/*
+ * SVG absolute over the scene. viewBox="0 0 100 100" maps to scene %%.
+ * Approximate slot centers (4 equal slots, machines left-aligned):
+ *   FETCH   ≈ x=5   EXECUTE ≈ x=30   REVIEW ≈ x=55   DELIVER ≈ x=80
+ * Machine tops from scene top (scene h=540px):
+ *   EXECUTE (168px tall) top ≈ y=57%   REVIEW (110px tall) top ≈ y=68%
+ */
+function FlowOverlay({ snapshot }: { snapshot: FactorySnapshot }) {
   const byName = Object.fromEntries(
     snapshot.stations.map(s => [s.name, s])
   ) as Partial<Record<StationName, FactoryStation>>;
@@ -186,116 +180,83 @@ function FlowMap({ snapshot }: { snapshot: FactorySnapshot }) {
   const feedbackWip = byName["pr_feedback"]?.wip_count ?? 0;
   const feedbackActive = feedbackWip > 0;
 
+  // Failed stations (any with failed_count > 0)
+  const failedStations = snapshot.stations.filter(s => s.failed_count > 0);
+
+  // Approximate x-centers per station (in 0-100 viewBox units)
+  const stationX: Record<StationName, number> = {
+    fetch: 5, execute: 30, pr_feedback: 56, deliver: 80,
+  };
+  // Machine top y (% of scene height, from top)
+  const stationTopY: Record<StationName, number> = {
+    fetch: 70, execute: 57, pr_feedback: 68, deliver: 64,
+  };
+
   return (
-    <section className="f2-flow-map" aria-label="Process flow">
-      <svg
-        className="f2-flow-svg"
-        viewBox="0 0 560 114"
-        preserveAspectRatio="xMidYMid meet"
-        aria-hidden
+    <svg
+      aria-hidden
+      className="f2-flow-overlay"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+    >
+      <defs>
+        <marker id="fo-arr-back" viewBox="0 0 8 8" refX="4" refY="1"
+          markerWidth="4" markerHeight="4" orient="auto">
+          <polygon points="1,8 4,1 7,8" fill="rgba(110,225,255,0.8)" />
+        </marker>
+        <marker id="fo-arr-fail" viewBox="0 0 8 8" refX="4" refY="7"
+          markerWidth="3.5" markerHeight="3.5" orient="auto">
+          <polygon points="1,0 7,0 4,7" fill="rgba(224,75,48,0.65)" />
+        </marker>
+      </defs>
+
+      {/* ── Feedback arc: REVIEW → EXECUTE, curves over the machines ── */}
+      <path
+        d={`M ${stationX.pr_feedback},${stationTopY.pr_feedback}
+            C ${stationX.pr_feedback},28
+              ${stationX.execute},28
+              ${stationX.execute},${stationTopY.execute}`}
+        fill="none"
+        stroke={feedbackActive ? "rgba(110,225,255,0.65)" : "rgba(110,225,255,0.2)"}
+        strokeWidth={feedbackActive ? "0.5" : "0.3"}
+        strokeDasharray="2.5 1.5"
+        markerEnd="url(#fo-arr-back)"
+      />
+      <text
+        x={(stationX.pr_feedback + stationX.execute) / 2}
+        y="24"
+        textAnchor="middle"
+        className="f2-overlay-label"
+        fill={feedbackActive ? "rgba(110,225,255,0.6)" : "rgba(110,225,255,0.2)"}
       >
-        <defs>
-          {/* forward arrow → */}
-          <marker id="f2-arr-fwd" viewBox="0 0 8 8" refX="7" refY="4"
-            markerWidth="5" markerHeight="5" orient="auto">
-            <polygon points="0,1 7,4 0,7" fill="rgba(255,146,42,0.6)" />
-          </marker>
-          {/* feedback arrow ↑ (auto-rotated) */}
-          <marker id="f2-arr-back" viewBox="0 0 8 8" refX="4" refY="1"
-            markerWidth="5" markerHeight="5" orient="auto">
-            <polygon points="1,8 4,1 7,8" fill="rgba(110,225,255,0.75)" />
-          </marker>
-          {/* fail arrow ↓ (auto-rotated) */}
-          <marker id="f2-arr-fail" viewBox="0 0 8 8" refX="4" refY="7"
-            markerWidth="5" markerHeight="5" orient="auto">
-            <polygon points="1,0 7,0 4,7" fill="rgba(224,75,48,0.65)" />
-          </marker>
-        </defs>
+        {feedbackActive ? `review → execute  ×${feedbackWip}` : "review → execute"}
+      </text>
 
-        {/* ── Forward flow arrows ── */}
-        {FLOW_NODES.slice(0, -1).map((node, i) => (
-          <line key={node.name}
-            x1={node.cx + FR + 2} y1={FCY}
-            x2={FLOW_NODES[i + 1].cx - FR - 2} y2={FCY}
-            stroke="rgba(255,146,42,0.45)" strokeWidth="1.5"
-            markerEnd="url(#f2-arr-fwd)"
-          />
-        ))}
-
-        {/* ── Feedback arc: REVIEW → EXECUTE (dashed, below) ── */}
-        <path
-          d={`M ${338 - FR * 0.55},${FCY + FR - 3} C ${338 - FR * 0.55},100 ${192 + FR * 0.55},100 ${192 + FR * 0.55},${FCY + FR - 3}`}
-          fill="none"
-          stroke={feedbackActive ? "rgba(110,225,255,0.75)" : "rgba(110,225,255,0.25)"}
-          strokeWidth={feedbackActive ? "1.8" : "1.2"}
-          strokeDasharray="5 3"
-          markerEnd="url(#f2-arr-back)"
-        />
-        <text x="265" y="110" textAnchor="middle" className="f2-flow-arc-label"
-          fill={feedbackActive ? "rgba(110,225,255,0.65)" : "rgba(110,225,255,0.28)"}>
-          {feedbackActive ? `pr_feedback → execute  (${feedbackWip} WIP)` : "pr_feedback → execute"}
-        </text>
-
-        {/* ── Failed exits ── */}
-        {FLOW_NODES.map(({ name, cx }) => {
-          const s = byName[name];
-          if (!s || s.failed_count === 0) return null;
-          return (
-            <g key={`fail-${name}`}>
-              <line
-                x1={cx} y1={FCY + FR + 2}
-                x2={cx} y2={FCY + FR + 18}
-                stroke="rgba(224,75,48,0.6)" strokeWidth="1.5"
-                markerEnd="url(#f2-arr-fail)"
-              />
-              <text x={cx} y={FCY + FR + 30} textAnchor="middle" className="f2-flow-fail-label">
-                {s.failed_count}✗
-              </text>
-            </g>
-          );
-        })}
-
-        {/* ── Station nodes ── */}
-        {FLOW_NODES.map(({ name, cx, short }) => {
-          const s = byName[name];
-          const meta = META[name];
-          const active = (s?.active_count ?? 0) > 0 || (s?.wip_count ?? 0) > 0;
-          const failed = (s?.failed_count ?? 0) > 0;
-          const wip = s?.wip_count ?? 0;
-
-          return (
-            <g key={name}>
-              <circle
-                cx={cx} cy={FCY} r={FR}
-                fill="rgba(14,10,5,0.97)"
-                stroke={failed ? "rgba(224,75,48,0.75)" : meta.color}
-                strokeWidth={active ? 2 : 1}
-                strokeOpacity={active ? 0.9 : 0.35}
-              />
-              <text x={cx} y={FCY} textAnchor="middle" dominantBaseline="middle"
-                className="f2-flow-node-label"
-                fill={meta.color}
-                fillOpacity={active ? 1 : 0.38}>
-                {short}
-              </text>
-              {/* WIP badge */}
-              {wip > 0 && (
-                <>
-                  <circle cx={cx + FR - 5} cy={FCY - FR + 5} r={9}
-                    fill={meta.color} fillOpacity={0.9}
-                  />
-                  <text x={cx + FR - 5} y={FCY - FR + 5}
-                    textAnchor="middle" dominantBaseline="middle"
-                    className="f2-flow-badge-num">
-                    {wip}
-                  </text>
-                </>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-    </section>
+      {/* ── Failed exits: small red stub below each failing machine ── */}
+      {failedStations.map(s => {
+        const x = stationX[s.name];
+        const topY = stationTopY[s.name];
+        const bottomY = topY + (s.name === "execute" ? 31 : s.name === "deliver" ? 24 : 20);
+        return (
+          <g key={`fo-fail-${s.name}`}>
+            <line
+              x1={x - 2} y1={topY + 2}
+              x2={x - 6} y2={Math.min(bottomY + 4, 92)}
+              stroke="rgba(224,75,48,0.55)" strokeWidth="0.4"
+              strokeDasharray="1.5 1"
+              markerEnd="url(#fo-arr-fail)"
+            />
+            <text
+              x={x - 8} y={Math.min(bottomY + 8, 96)}
+              textAnchor="middle"
+              className="f2-overlay-label f2-overlay-fail"
+            >
+              {s.failed_count}✗
+            </text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
@@ -334,6 +295,9 @@ function FactoryScene({
 
         {/* factory floor surface */}
         <div aria-hidden className="f2-floor-surface" />
+
+        {/* flow overlay: paths between machines */}
+        <FlowOverlay snapshot={snapshot} />
 
         {/* machines + belt */}
         <div className="f2-factory-row" aria-label="Pipeline">
