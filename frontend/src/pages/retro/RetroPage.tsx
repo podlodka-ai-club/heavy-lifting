@@ -36,8 +36,7 @@ function dominantSeverity(counts: Record<string, number>): SeverityTone {
 function severityColor(severity: string): string {
   const tone = normalizeSeverity(severity);
   if (tone === "error") return "var(--red)";
-  if (severity === "warning") return "var(--orange)";
-  if (severity === "info") return "var(--cyan)";
+  if (tone === "warning") return "var(--orange-2)";
   return "var(--cyan)";
 }
 
