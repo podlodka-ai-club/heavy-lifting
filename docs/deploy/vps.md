@@ -228,7 +228,7 @@ curl -fsS --user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>' \
 
 Production frontend работает в `network_mode: host`, поэтому Caddy слушает `FRONTEND_PORT` напрямую на сетевом namespace VPS. Это убирает Docker DNAT с публичного frontend path и не оставляет `ports` mapping у frontend.
 
-Runtime compression в Caddy отключен: для текущего VPS path большие zstd/gzip responses зависали при внешней загрузке, а uncompressed static files отдаются стабильно.
+Runtime compression в Caddy включен только для CSS: на текущем VPS path большой JS в zstd/gzip зависал при внешней загрузке, а CSS без compression пересекал тот же проблемный размер ответа. Поэтому JS отдается uncompressed, а CSS остается compressed и меньше проблемного порога.
 
 Если большие static assets снаружи VPS зависают или обрываются, проверьте:
 

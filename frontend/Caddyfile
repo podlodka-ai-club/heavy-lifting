@@ -10,6 +10,12 @@
 		}
 	}
 
+	@css path *.css
+	handle @css {
+		encode zstd gzip
+		file_server
+	}
+
 	handle {
 		try_files {path} /index.html
 		file_server
