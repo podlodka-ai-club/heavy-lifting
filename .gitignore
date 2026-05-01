@@ -33,3 +33,4 @@ worklog/
 !.env.example
 
 temp/
+.worktrees/
