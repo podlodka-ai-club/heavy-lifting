@@ -88,6 +88,10 @@ POSTGRES_PORT=5432
 DATABASE_URL=postgresql://heavy_lifting:replace-with-strong-password@postgres:5432/heavy_lifting
 
 WORKSPACE_ROOT=/workspace/repos
+AGENT_RUNNER_ADAPTER=cli
+CLI_AGENT_COMMAND=opencode
+CLI_AGENT_SUBCOMMAND=run
+# OPENAI_API_KEY=replace-with-real-key
 WEB_CONCURRENCY=2
 GUNICORN_TIMEOUT=120
 ```
@@ -114,6 +118,8 @@ docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '<frontend-pas
 `API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` обязательны для текущего production-контракта shared Basic Auth. Caddy проксирует `/api/*` в `api:${APP_PORT:-8000}` со strip префикса `/api` и пропускает `Authorization` header к backend.
 
 MVP-контракт Basic Auth: backend API Basic Auth должен использовать тот же plaintext username/password, что и frontend Basic Auth. `FRONTEND_BASIC_AUTH_USERNAME` должен совпадать с `API_BASIC_AUTH_USERNAME`, а `FRONTEND_BASIC_AUTH_PASSWORD_HASH` должен быть hash от того же plaintext password, который лежит в `API_BASIC_AUTH_PASSWORD`. Deploy readiness проверяет `/api/health` через `--user API_BASIC_AUTH_USERNAME:API_BASIC_AUTH_PASSWORD`, но не может проверить hash против plaintext напрямую, поэтому это операционная обязанность того, кто готовит `.env.production`; ошибка здесь приведет к тому, что browser-запросы к `/api/*` пройдут только один из двух guard.
+
+Production backend image содержит `opencode` CLI, установленный через официальный npm package `opencode-ai`. Чтобы worker2 реально вызывал `opencode run`, задайте `AGENT_RUNNER_ADAPTER=cli`. `CLI_AGENT_COMMAND` и `CLI_AGENT_SUBCOMMAND` можно не задавать, если подходят defaults `opencode` и `run`, но в production `.env.production` их обычно фиксируют явно. Для реальных model calls нужен `OPENAI_API_KEY` или другой ключ в переменной, имя которой задано `CLI_AGENT_API_KEY_ENV_VAR`; без ключа CLI binary будет установлен, но agent run завершится ошибкой авторизации провайдера.
 
 Публичные URL после deploy:
 
