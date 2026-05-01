@@ -5,6 +5,7 @@ import { EconomicsPage2 } from "./pages/economics/EconomicsPage2";
 import { FactoryPage } from "./pages/factory/FactoryPage";
 import { FactoryPage2 } from "./pages/factory/FactoryPage2";
 import { HomePage } from "./pages/HomePage";
+import { MicromanagementPage } from "./pages/micromanagement/MicromanagementPage";
 import { RetroPage } from "./pages/retro/RetroPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 
@@ -15,6 +16,7 @@ type Route =
   | "/economics"
   | "/economics2"
   | "/retro"
+  | "/micromanagement"
   | "/settings";
 
 function getRoute(pathname: string): Route {
@@ -24,7 +26,8 @@ function getRoute(pathname: string): Route {
     pathname === "/factory2" ||
     pathname === "/economics" ||
     pathname === "/economics2" ||
-    pathname === "/retro"
+    pathname === "/retro" ||
+    pathname === "/micromanagement"
   ) {
     return pathname;
   }
@@ -89,6 +92,13 @@ export function App() {
             Retro
           </button>
           <button
+            className={route === "/micromanagement" ? "nav-link active" : "nav-link"}
+            type="button"
+            onClick={() => navigate("/micromanagement")}
+          >
+            Micro
+          </button>
+          <button
             className={route === "/settings" ? "nav-link active" : "nav-link"}
             type="button"
             onClick={() => navigate("/settings")}
@@ -103,6 +113,7 @@ export function App() {
       {route === "/economics" ? <EconomicsPage /> : null}
       {route === "/economics2" ? <EconomicsPage2 /> : null}
       {route === "/retro" ? <RetroPage /> : null}
+      {route === "/micromanagement" ? <MicromanagementPage /> : null}
       {route === "/" ? <HomePage /> : null}
     </div>
   );

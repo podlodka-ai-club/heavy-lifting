@@ -282,3 +282,34 @@ export async function upsertRevenue(
   const data = await parseJsonResponse<{ revenue: TaskRevenue }>(response);
   return data.revenue;
 }
+
+export type TaskRecord = {
+  id: number;
+  root_id: number | null;
+  parent_id: number | null;
+  task_type: string;
+  status: string;
+  tracker_name: string | null;
+  external_task_id: string | null;
+  external_parent_id: string | null;
+  repo_url: string | null;
+  repo_ref: string | null;
+  workspace_key: string | null;
+  branch_name: string | null;
+  pr_external_id: string | null;
+  pr_url: string | null;
+  role: string | null;
+  context: Record<string, unknown> | null;
+  input_payload: Record<string, unknown> | null;
+  result_payload: Record<string, unknown> | null;
+  error: string | null;
+  attempt: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function listTasks(): Promise<TaskRecord[]> {
+  const response = await fetch("/api/tasks");
+  const payload = await parseJsonResponse<{ tasks: TaskRecord[] }>(response);
+  return payload.tasks;
+}
