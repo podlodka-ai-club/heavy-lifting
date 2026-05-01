@@ -204,16 +204,16 @@
 /* ─── Machine dimensions per type ─────────────────────────────────────────── */
 
 /* FETCH — wide, low hopper */
-.f2-machine-fetch  { width: 110px; height: 110px; }
+.f2-machine-fetch  { width: 90px; height: 90px; }
 
 /* EXECUTE — tallest industrial press (the bottleneck candidate) */
-.f2-machine-execute { width: 120px; height: 200px; }
+.f2-machine-execute { width: 100px; height: 168px; }
 
 /* REVIEW — scanner, wider */
-.f2-machine-review  { width: 150px; height: 130px; }
+.f2-machine-review  { width: 125px; height: 110px; }
 
 /* DELIVER — dispatch station, medium */
-.f2-machine-deliver { width: 120px; height: 150px; }
+.f2-machine-deliver { width: 100px; height: 128px; }
 
 /* ─── WIP fill (liquid inside machine) ──────────────────────────────────── */
 
@@ -602,11 +602,11 @@
 
 .f2-belt-segment {
   align-self: flex-end;
-  flex-shrink: 0;
-  height: 28px;
+  flex: 1;           /* stretches to fill the gap between machines */
+  height: 38px;
+  min-width: 72px;
   overflow: hidden;
   position: relative;
-  width: 48px;
   z-index: 2;
 }
 
@@ -654,11 +654,11 @@
 
 .f2-belt-item {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), var(--b-color) 50%, color-mix(in srgb, var(--b-color) 60%, black));
-  border-radius: 2px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.6);
   display: block;
-  height: 14px;
-  width: 14px;
+  height: 20px;
+  width: 20px;
 }
 
 .f2-belt-item.f2-item-rolling {
@@ -886,12 +886,12 @@
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 1100px) {
-  .f2-scene { height: 460px; }
+  .f2-scene { height: 440px; }
 
-  .f2-machine-execute { height: 170px; }
-  .f2-machine-deliver { height: 130px; }
-  .f2-machine-review  { width: 130px; height: 110px; }
-  .f2-machine-fetch   { width: 100px; height: 95px; }
+  .f2-machine-execute { height: 140px; }
+  .f2-machine-deliver { height: 108px; }
+  .f2-machine-review  { width: 105px; height: 92px; }
+  .f2-machine-fetch   { width: 78px;  height: 78px; }
 }
 
 @media (max-width: 860px) {
