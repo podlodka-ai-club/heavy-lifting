@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { FactorySnapshot, FactoryStation, RuntimeSetting } from "../../api";
 import { getFactorySnapshot, listRuntimeSettings, updateRuntimeSetting } from "../../api";
@@ -164,50 +164,78 @@ export function FactoryPage2() {
   );
 }
 
-/* ─── Return Conveyor (feedback loop REVIEW → EXECUTE) ──────────────────── */
+/* ─── Feedback Arc (REVIEW → EXECUTE, measured from real DOM) ───────────── */
 
-function ReturnConveyor({
+function FeedbackArc({
   feedbackWip,
-  reduced,
-  stationCount,
+  sceneRef,
 }: {
   feedbackWip: number;
-  reduced: boolean;
-  stationCount: number;
+  sceneRef: { current: HTMLDivElement | null };
 }) {
-  const active = feedbackWip > 0;
-  const items = Math.min(feedbackWip, 4);
+  const [coords, setCoords] = useState<{ ex: number; ey: number; rx: number; ry: number } | null>(null);
 
-  // Slots: [fetch=empty] [execute=belt] [pr_feedback=belt] [deliver=empty]
-  // Belt spans slots 1 and 2 (execute + pr_feedback), going right-to-left
+  useEffect(() => {
+    function measure() {
+      const sceneEl = sceneRef.current;
+      if (!sceneEl) return;
+      const sr = sceneEl.getBoundingClientRect();
+      const execEl = sceneEl.querySelector('[data-machine="execute"]');
+      const reviewEl = sceneEl.querySelector('[data-machine="pr_feedback"]');
+      if (!execEl || !reviewEl) return;
+      const er = execEl.getBoundingClientRect();
+      const rr = reviewEl.getBoundingClientRect();
+      setCoords({
+        ex: er.left + er.width / 2 - sr.left,
+        ey: er.top - sr.top,
+        rx: rr.left + rr.width / 2 - sr.left,
+        ry: rr.top - sr.top,
+      });
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [sceneRef]);
+
+  if (!coords) return null;
+  const { ex, ey, rx, ry } = coords;
+  const peakY = Math.min(ey, ry) - 60;
+  const active = feedbackWip > 0;
+  const color = active ? "rgba(110,225,255,0.65)" : "rgba(110,225,255,0.22)";
+  const arrowColor = active ? "rgba(110,225,255,0.8)" : "rgba(110,225,255,0.3)";
+
   return (
-    <div className="f2-return-row" aria-label="Feedback return conveyor">
-      {Array.from({ length: stationCount }).map((_, i) => {
-        const inLoop = i === 1 || i === 2; // execute=1, pr_feedback=2
-        const isStart = i === 2; // REVIEW end (right side, where items enter)
-        const isEnd   = i === 1; // EXECUTE end (left side, where items exit)
-        if (!inLoop) return <div key={i} className="f2-return-slot" />;
-        return (
-          <div key={i} className={`f2-return-slot f2-return-slot-active`}>
-            {/* cap indicators */}
-            {isStart && <span className="f2-return-cap f2-return-cap-start">↩</span>}
-            {isEnd   && <span className="f2-return-cap f2-return-cap-end">↓</span>}
-            {/* belt surface */}
-            <div className={`f2-return-surface${active && !reduced ? " f2-return-moving" : ""}`} />
-            {/* items moving right-to-left */}
-            <div className="f2-return-items">
-              {Array.from({ length: items }).map((_, j) => (
-                <span
-                  key={j}
-                  className={`f2-return-item${active && !reduced ? " f2-return-item-roll" : ""}`}
-                  style={{ animationDelay: `${j * 0.55}s` }}
-                />
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    <svg
+      aria-hidden
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 8 }}
+    >
+      <defs>
+        <marker id="fb-arr" viewBox="0 0 8 8" refX="4" refY="7" markerWidth="5" markerHeight="5" orient="auto">
+          <polygon points="1,0 7,0 4,7" fill={arrowColor} />
+        </marker>
+      </defs>
+      <path
+        d={`M ${rx},${ry} C ${rx},${peakY} ${ex},${peakY} ${ex},${ey}`}
+        fill="none"
+        stroke={color}
+        strokeDasharray="6 4"
+        strokeWidth={active ? 1.5 : 1}
+        markerEnd="url(#fb-arr)"
+      />
+      <text
+        x={(rx + ex) / 2}
+        y={peakY - 10}
+        textAnchor="middle"
+        style={{
+          fill: color,
+          fontFamily: "var(--mono)",
+          fontSize: "11px",
+          fontWeight: 700,
+        }}
+      >
+        {active ? `review → execute ×${feedbackWip}` : "review → execute"}
+      </text>
+    </svg>
   );
 }
 
@@ -238,22 +266,20 @@ function FactoryScene({
   onValueChange: (key: string, value: string) => void;
   onSave: (key: string) => Promise<void>;
 }) {
+  const sceneRef = useRef<HTMLDivElement>(null);
+  const feedbackWip = snapshot.stations.find(s => s.name === "pr_feedback")?.wip_count ?? 0;
+
   return (
     <section className="f2-scene-wrap" aria-label="Factory floor">
-      <div className="f2-scene">
+      <div className="f2-scene" ref={sceneRef}>
         {/* isometric grid floor — decorative */}
         <div aria-hidden className="f2-grid" />
 
         {/* factory floor surface */}
         <div aria-hidden className="f2-floor-surface" />
 
-
-        {/* return conveyor — feedback loop REVIEW → EXECUTE */}
-        <ReturnConveyor
-          feedbackWip={snapshot.stations.find(s => s.name === "pr_feedback")?.wip_count ?? 0}
-          reduced={reduced}
-          stationCount={snapshot.stations.length}
-        />
+        {/* feedback arc: REVIEW → EXECUTE, measured from real DOM positions */}
+        <FeedbackArc feedbackWip={feedbackWip} sceneRef={sceneRef} />
 
         {/* machines + belt */}
         <div className="f2-factory-row" aria-label="Pipeline">
@@ -267,8 +293,6 @@ function FactoryScene({
                   4
                 ))
               : 1;
-            const feedbackWip = snapshot.stations.find(s => s.name === "pr_feedback")?.wip_count ?? 0;
-
             return (
               <div key={station.name} className="f2-station-slot">
                 {/* queue stack above belt, before machine */}
@@ -399,6 +423,7 @@ function Machine({
     <div
       className={`f2-machine f2-machine-${meta.cls}${isBottleneck ? " f2-bottleneck" : ""}`}
       aria-label={`${label} machine`}
+      data-machine={station.name}
       style={{ "--m-color": meta.color } as React.CSSProperties}
     >
       {/* Machine-specific interior (chimneys, pistons, etc.) */}
