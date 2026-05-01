@@ -14,6 +14,7 @@ from backend.logging_setup import configure_logging, get_logger
 from backend.models import Task
 from backend.protocols.agent_runner import AgentRunnerProtocol, AgentRunRequest, AgentRunResult
 from backend.protocols.scm import ScmProtocol
+from backend.protocols.telegram import TelegramProtocol
 from backend.repositories.task_repository import (
     TaskCreateParams,
     TaskRepository,
@@ -29,10 +30,16 @@ from backend.schemas import (
     ScmWorkspaceEnsurePayload,
     TaskLink,
     TaskResultPayload,
+    TelegramSendMessagePayload,
     TokenUsagePayload,
 )
 from backend.services.context_builder import ContextBuilder, parse_task_result_payload
 from backend.services.retro_service import RetroService
+from backend.services.telegram_clarification import (
+    TELEGRAM_CLARIFICATION_ROLE,
+    build_clarification_question,
+    should_route_to_telegram,
+)
 from backend.settings import Settings, get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
@@ -60,6 +67,7 @@ class ExecuteWorker:
     scm: ScmProtocol
     agent_runner: AgentRunnerProtocol
     session_factory: sessionmaker[Session]
+    telegram: TelegramProtocol | None = None
     poll_interval: int = 30
     context_builder: ContextBuilder = field(default_factory=ContextBuilder)
     settings: Settings = field(default_factory=get_settings)
@@ -137,6 +145,16 @@ class ExecuteWorker:
                     if task_type == TaskType.EXECUTE:
                         return ExecuteWorkerReport(failed_execute_tasks=1)
                     return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+                if task_type == TaskType.EXECUTE and self._should_route_to_telegram(
+                    agent_payload=run_result.payload
+                ):
+                    self._complete_execute_task_with_telegram_clarification(
+                        repository=repository,
+                        task=task,
+                        task_context=prepared_execution.task_context,
+                        agent_payload=run_result.payload,
+                    )
+                    return ExecuteWorkerReport(processed_execute_tasks=1)
                 if prepared_execution.skip_scm_artifacts:
                     self._complete_execute_task_without_scm(
                         repository=repository,
@@ -149,6 +167,12 @@ class ExecuteWorker:
                 branch_name = prepared_execution.branch_name
                 if branch_name is None:
                     raise ValueError("normal SCM execution requires branch_name")
+                branch_name = self._sync_branch(
+                    task=task,
+                    task_context=prepared_execution.task_context,
+                    workspace=prepared_execution.workspace,
+                    branch_name=branch_name,
+                )
 
                 commit_reference = self.scm.commit_changes(
                     ScmCommitChangesPayload(
@@ -229,9 +253,7 @@ class ExecuteWorker:
         )
         branch_name = None
         if not skip_scm_artifacts:
-            branch_name = self._sync_branch(
-                task=task, task_context=task_context, workspace=workspace
-            )
+            branch_name = self._resolve_branch_name(task=task, task_context=task_context)
         runtime_metadata: dict[str, object] = {
             "task_id": task.id,
             "task_type": task.task_type.value,
@@ -315,8 +337,8 @@ class ExecuteWorker:
         task: Task,
         task_context: EffectiveTaskContext,
         workspace: ScmWorkspace,
+        branch_name: str,
     ) -> str:
-        branch_name = self._resolve_branch_name(task=task, task_context=task_context)
         if task.task_type == TaskType.PR_FEEDBACK:
             return branch_name
 
@@ -333,6 +355,104 @@ class ExecuteWorker:
             )
         )
         return branch_name
+
+    def _complete_execute_task_with_telegram_clarification(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_context: EffectiveTaskContext,
+        agent_payload: TaskResultPayload,
+    ) -> None:
+        if self.telegram is None:
+            raise ValueError("Telegram clarification requires configured Telegram adapter")
+        if not self.settings.telegram_group_chat_id:
+            raise ValueError("TELEGRAM_GROUP_CHAT_ID must be set for Telegram clarification")
+
+        question = build_clarification_question(
+            task_context=task_context,
+            agent_payload=agent_payload,
+        )
+        message = self.telegram.send_message(
+            TelegramSendMessagePayload(
+                chat_id=self.settings.telegram_group_chat_id,
+                text=question,
+                message_thread_id=self.settings.telegram_message_thread_id,
+                metadata={"task_id": task.id, "role": TELEGRAM_CLARIFICATION_ROLE},
+            )
+        )
+        result_payload = self._build_result_payload(
+            agent_payload=agent_payload,
+            flow_type=TaskType.EXECUTE,
+            branch_name=None,
+            commit_sha=None,
+            pr_url=None,
+            branch_url=None,
+            workspace=None,
+            pr_action="skipped",
+        )
+        metadata = dict(result_payload.metadata)
+        metadata.update(
+            {
+                "delivery_mode": TELEGRAM_CLARIFICATION_ROLE,
+                "telegram": {
+                    "chat_id": message.chat_id,
+                    "message_thread_id": message.message_thread_id,
+                    "root_message_id": message.message_id,
+                    "update_offset": None,
+                    "transcript": [],
+                    "agent_payload": agent_payload.model_dump(mode="json"),
+                },
+            }
+        )
+        result_payload = result_payload.model_copy(update={"metadata": metadata})
+        self._mark_task_done(
+            task=task,
+            result_payload=result_payload,
+            branch_name=None,
+            pr_external_id=None,
+            pr_url=None,
+        )
+        clarification_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=task.id,
+                status=TaskStatus.PROCESSING,
+                tracker_name=task.tracker_name,
+                external_parent_id=task.external_parent_id,
+                repo_url=task.repo_url,
+                repo_ref=task.repo_ref,
+                workspace_key=task.workspace_key,
+                role=TELEGRAM_CLARIFICATION_ROLE,
+                context={
+                    "title": f"Telegram clarification for {self._build_pr_title(task_context)}",
+                    "description": question,
+                    "acceptance_criteria": [],
+                    "references": [],
+                    "metadata": {"source_execute_task_id": task.id},
+                },
+                input_payload=task.input_payload,
+                result_payload=result_payload.model_dump(mode="json"),
+            )
+        )
+        _task_logger(
+            task,
+            clarification_task_id=clarification_task.id,
+            telegram_chat_id=message.chat_id,
+            telegram_root_message_id=message.message_id,
+        ).info("telegram_clarification_task_created")
+        self._record_token_usage(
+            repository=repository, task_id=task.id, usage=result_payload.token_usage
+        )
+        self._record_agent_retro_feedback(
+            repository=repository, task=task, result_payload=result_payload
+        )
+
+    def _should_route_to_telegram(self, *, agent_payload: TaskResultPayload) -> bool:
+        return should_route_to_telegram(
+            agent_payload=agent_payload,
+            story_points_threshold=self.settings.telegram_story_points_threshold,
+        )
 
     def _complete_execute_task(
         self,
@@ -838,6 +958,7 @@ def build_execute_worker(
         scm=active_runtime.scm,
         agent_runner=active_runtime.agent_runner,
         session_factory=session_factory or get_session_factory(),
+        telegram=active_runtime.telegram,
         poll_interval=active_settings.tracker_poll_interval,
         settings=active_settings,
     )

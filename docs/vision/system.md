@@ -28,6 +28,7 @@ The target system is a reliable orchestration backend that:
 - Worker services: advance tasks through the orchestration pipeline.
 - Coding agent runner: performs research and implementation work inside a prepared workspace.
 - SCM platform: hosts branches, commits, pull requests, and review feedback.
+- Telegram group: hosts human clarification discussions for tasks that are too large or unclear for immediate execution.
 - Reviewer: leaves PR feedback that may trigger a follow-up iteration.
 
 ## Key Scenarios
@@ -55,6 +56,8 @@ The runner prepares a repository workspace, applies the requested changes, runs 
 For CLI-backed execution, the orchestrator runs `opencode run --format json` and extracts the final `step_finish` usage block into the normalized `token_usage` records. Human-readable delivery details still come from the streamed text events, while missing or malformed usage data remains explicit in execution metadata instead of silently fabricating token rows. `worker2` treats the run as failed when the CLI exits non-zero, when JSON stdout emits an explicit error event, or when stderr contains clearly error-like diagnostics even if the process exits `0`; in all of those cases it records the failed result on the task and stops before commit, push, PR, or downstream delivery side effects.
 
 Estimate-only intake is the current exception: `worker2` still runs the agent to obtain the estimate text, but it skips branch, commit, push, and PR side effects and hands the result straight to `worker3` for tracker delivery.
+
+Telegram clarification is the large-or-unclear-task exception. `worker2` runs the agent once, detects structured clarification routing or a story point estimate above the configured threshold, posts the question into the predefined Telegram group, and creates a local pending `execute` task with `role = "telegram_clarification"`. The monitor path keeps the Telegram transcript, proposes the final summary and subtask decomposition, waits for explicit human confirmation, then comments on the tracker parent, creates tracker subtasks through the tracker boundary, marks the parent tracker task done, and marks the local clarification task done. This path skips branch, commit, push, PR, and normal deliver side effects.
 
 ### PR Feedback
 
@@ -115,6 +118,7 @@ The MVP intentionally stays narrow:
 - explicit worker pipeline for intake, execution, and delivery;
 - protocol boundaries around tracker and SCM integrations;
 - local development support through `MockTracker` and `MockScm`;
+- local development support through `MockTracker`, `MockScm`, and `MockTelegram`;
 - durable persistence for orchestration tasks, token usage, seeded default agent prompts, and non-secret runtime settings;
 - durable persistence for root-task revenue in `task_revenue`;
 - machine-readable OpenAPI schema through `GET /openapi.json`;
@@ -126,6 +130,7 @@ The MVP intentionally stays narrow:
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
 - selection of previously estimated small tracker tasks into one executable subtask through the tracker boundary contract, with duplicate parent selection blocked through tracker metadata.
+- Telegram clarification flow for large or unclear tasks, ending in explicit human-confirmed tracker subtasks.
 
 ## Non-Goals
 

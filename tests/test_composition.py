@@ -5,7 +5,9 @@ import pytest
 from backend.adapters.github_scm import GitHubScm
 from backend.adapters.linear_tracker import LinearTracker
 from backend.adapters.mock_scm import MockScm
+from backend.adapters.mock_telegram import MockTelegram
 from backend.adapters.mock_tracker import MockTracker
+from backend.adapters.telegram_bot import TelegramBotApi
 from backend.api.app import create_app
 from backend.composition import (
     AdapterRegistry,
@@ -41,6 +43,7 @@ def test_create_runtime_container_uses_mock_adapters_by_default(monkeypatch) -> 
     assert isinstance(runtime.tracker, MockTracker)
     assert isinstance(runtime.scm, MockScm)
     assert isinstance(runtime.agent_runner, LocalAgentRunner)
+    assert runtime.telegram is None
     assert runtime.settings.tracker_adapter == "mock"
     assert runtime.settings.scm_adapter == "mock"
     assert runtime.settings.agent_runner_adapter == "local"
@@ -292,6 +295,47 @@ def test_create_runtime_container_builds_local_agent_runner_from_settings(monkey
     assert runtime.agent_runner.provider == "anthropic"
     assert runtime.agent_runner.model == "claude-opus-4.6"
     assert runtime.agent_runner.name == "local-test-runner"
+
+
+def test_create_runtime_container_builds_mock_telegram_from_settings(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(get_settings(), telegram_adapter="mock")
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.telegram, MockTelegram)
+
+
+def test_create_runtime_container_builds_telegram_bot_from_settings(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(
+        get_settings(),
+        telegram_adapter="bot",
+        telegram_bot_token_env_var="MY_TELEGRAM_TOKEN",
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.telegram, TelegramBotApi)
+    assert runtime.telegram._config.token_env_var == "MY_TELEGRAM_TOKEN"
+
+
+def test_create_runtime_container_rejects_unknown_telegram_adapter(monkeypatch) -> None:
+    monkeypatch.delenv("TRACKER_ADAPTER", raising=False)
+    monkeypatch.delenv("SCM_ADAPTER", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_ADAPTER", raising=False)
+    get_settings.cache_clear()
+    settings = replace(get_settings(), telegram_adapter="unknown")
+
+    with pytest.raises(ValueError) as exc_info:
+        create_runtime_container(settings=settings)
+    assert str(exc_info.value) == "Unsupported Telegram adapter: unknown"
 
 
 def test_create_runtime_container_rejects_invalid_cli_runner_timeout(monkeypatch) -> None:

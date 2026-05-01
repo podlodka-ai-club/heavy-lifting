@@ -63,7 +63,7 @@ Triage must end in one of these routing outcomes:
 - `route_to_research` - create a follow-up `execute` task with `input_payload.action = research`;
 - `route_to_implementation` - create a follow-up `execute` task with `input_payload.action = implementation`;
 - `reply_with_research_only` - create a downstream `deliver` task that returns findings without opening a longer execution branch;
-- `reply_with_clarification` - create a downstream `deliver` task that asks the tracker for missing information;
+- `reply_with_clarification` - ask for missing information; by default this can be a downstream `deliver` reply, but when Telegram clarification is required it enters the configured Telegram group flow instead;
 - `reply_with_rejection` - create a downstream `deliver` task that explains why the task is not accepted;
 - `reply_with_estimate_only` - create a downstream `deliver` task that returns an estimate or intake decision without further execution yet.
 
@@ -75,13 +75,22 @@ In the current MVP runtime, estimate-only intake is detected with an explicit te
 
 When that heuristic matches, `worker2` still runs the agent once to produce the estimate content, but the pipeline skips branch creation, commit, push, and PR creation and proceeds directly to a downstream `deliver` task.
 
+Telegram clarification is the full-cycle clarification path for large or unclear tasks. `worker2` detects it from structured `TaskResultPayload.metadata` when any of these signals are present:
+
+- `routing.outcome == "reply_with_clarification"`;
+- `telegram.required == true`;
+- a detected story point estimate above `TELEGRAM_STORY_POINTS_THRESHOLD`.
+
+For this path `worker2` still runs the agent once, but skips branch creation, commit, push, PR creation, and downstream `deliver`. It posts the clarification question to the configured Telegram group and creates a local pending `execute` task with `role = "telegram_clarification"`. Completion requires a later explicit confirmation in Telegram after the backend posts its final proposed summary and subtask decomposition.
+
 ## Routing Matrix
 
 The MVP routing matrix is:
 
 | Primary signals                                                         | Classification   | Outcome                    | Next task            |
 | ----------------------------------------------------------------------- | ---------------- | -------------------------- | -------------------- |
-| `missing_required_info`                                                 | `clarification`  | `reply_with_clarification` | downstream `deliver` |
+| `missing_required_info`, Telegram not required                          | `clarification`  | `reply_with_clarification` | downstream `deliver` |
+| `missing_required_info`, Telegram required or story points above threshold | `clarification` | `reply_with_clarification` | `execute` with `role=telegram_clarification` |
 | `unsafe_or_prohibited` or `out_of_scope`                                | `rejected`       | `reply_with_rejection`     | downstream `deliver` |
 | explicit estimate-only request and enough context to assess now         | `research`       | `reply_with_estimate_only` | downstream `deliver` |
 | `analysis_only_requested` and enough context to answer now              | `research`       | `reply_with_research_only` | downstream `deliver` |
@@ -118,6 +127,8 @@ If triage stops at a tracker reply, `routing.next_task_type` should be `deliver`
 If triage routes to another executable step, `routing.next_task_type` should be `execute`, `routing.next_role` should reflect the next action, and `delivery` should still contain enough tracker-facing context for later delivery if needed.
 
 If triage returns `reply_with_estimate_only`, `classification.task_kind` should remain `research` for MVP purposes because the system is still answering an analysis-style intake without entering a code-execution branch.
+
+If triage returns a Telegram clarification route, the result payload should include the question and, when known, a draft decomposition under `metadata.telegram`, for example `metadata.telegram.question`, `metadata.telegram.required`, and `metadata.telegram.subtasks`. The backend may still build a deterministic proposal from the Telegram transcript if no structured subtasks are supplied.
 
 ## MVP Limits
 

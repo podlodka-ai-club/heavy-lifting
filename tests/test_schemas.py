@@ -14,6 +14,9 @@ from backend.schemas import (
     TaskContext,
     TaskInputPayload,
     TaskResultPayload,
+    TelegramPollUpdatesQuery,
+    TelegramSendMessagePayload,
+    TelegramUpdateEnvelope,
     TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
@@ -338,6 +341,38 @@ def test_scm_workspace_ensure_payload_serializes_branch_name_when_provided() -> 
     }
 
 
+def test_telegram_payloads_apply_mvp_defaults() -> None:
+    send_payload = TelegramSendMessagePayload(chat_id="-1001", text="Clarify task")
+    update_query = TelegramPollUpdatesQuery(offset=42)
+    update = TelegramUpdateEnvelope(
+        update_id=42,
+        chat_id="-1001",
+        message_id=7,
+        text="ok",
+        author="alice",
+        reply_to_message_id=3,
+    )
+
+    assert send_payload.model_dump(mode="json") == {
+        "chat_id": "-1001",
+        "text": "Clarify task",
+        "message_thread_id": None,
+        "reply_to_message_id": None,
+        "metadata": {},
+    }
+    assert update_query.model_dump(mode="json") == {"offset": 42, "limit": 100}
+    assert update.model_dump(mode="json") == {
+        "update_id": 42,
+        "chat_id": "-1001",
+        "message_id": 7,
+        "text": "ok",
+        "author": "alice",
+        "message_thread_id": None,
+        "reply_to_message_id": 3,
+        "metadata": {},
+    }
+
+
 @pytest.mark.parametrize(
     ("schema", "payload"),
     [
@@ -382,6 +417,14 @@ def test_scm_workspace_ensure_payload_serializes_branch_name_when_provided() -> 
         (
             ScmReadPrFeedbackQuery,
             {"limit": 1001},
+        ),
+        (
+            TelegramSendMessagePayload,
+            {"chat_id": "-1001", "text": ""},
+        ),
+        (
+            TelegramPollUpdatesQuery,
+            {"limit": 0},
         ),
     ],
 )

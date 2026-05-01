@@ -10,6 +10,7 @@ from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
 from backend.logging_setup import get_logger
 from backend.protocols.scm import ScmProtocol
+from backend.protocols.telegram import TelegramProtocol
 from backend.protocols.tracker import TrackerProtocol
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
 from backend.schemas import (
@@ -18,8 +19,25 @@ from backend.schemas import (
     ScmPullRequestMetadata,
     ScmReadPrFeedbackQuery,
     TaskInputPayload,
+    TaskResultPayload,
+    TelegramPollUpdatesQuery,
+    TelegramSendMessagePayload,
+    TelegramUpdateEnvelope,
+    TrackerCommentCreatePayload,
     TrackerFetchTasksQuery,
+    TrackerStatusUpdatePayload,
+    TrackerSubtaskCreatePayload,
     TrackerTask,
+)
+from backend.services.context_builder import parse_task_context, parse_task_result_payload
+from backend.services.telegram_clarification import (
+    TELEGRAM_CLARIFICATION_ROLE,
+    build_proposal,
+    dump_proposal,
+    format_proposal_message,
+    is_confirmation,
+    load_proposal,
+    proposal_subtask_to_tracker_payload,
 )
 from backend.task_constants import TaskStatus, TaskType
 
@@ -34,6 +52,10 @@ class TrackerIntakeReport:
     created_pr_feedback_tasks: int = 0
     skipped_feedback_items: int = 0
     unmapped_feedback_items: int = 0
+    processed_telegram_updates: int = 0
+    proposed_telegram_clarifications: int = 0
+    finalized_telegram_clarifications: int = 0
+    failed_telegram_clarifications: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +77,15 @@ class TrackerIntakeWorker:
     scm: ScmProtocol
     tracker_name: str
     session_factory: sessionmaker[Session]
+    telegram: TelegramProtocol | None = None
     poll_interval: int = 30
     pr_poll_interval: int = 60
+    telegram_poll_interval: int = 15
     fetch_limit: int = 100
     feedback_limit: int = 100
+    telegram_fetch_limit: int = 100
+    telegram_group_chat_id: str | None = None
+    telegram_message_thread_id: int | None = None
     fetch_statuses: Sequence[TaskStatus] = (TaskStatus.NEW,)
 
     _PR_FEEDBACK_CURSOR_METADATA_KEY = "scm_pr_feedback_cursor"
@@ -68,6 +95,7 @@ class TrackerIntakeWorker:
         logger = _worker_logger(tracker_name=self.tracker_name)
         report = self.poll_tracker_once()
         feedback_report = self.poll_pr_feedback_once()
+        telegram_report = self.poll_telegram_once()
         combined_report = TrackerIntakeReport(
             fetched_count=report.fetched_count,
             created_fetch_tasks=report.created_fetch_tasks,
@@ -77,6 +105,10 @@ class TrackerIntakeWorker:
             created_pr_feedback_tasks=feedback_report.created_pr_feedback_tasks,
             skipped_feedback_items=feedback_report.skipped_feedback_items,
             unmapped_feedback_items=feedback_report.unmapped_feedback_items,
+            processed_telegram_updates=telegram_report.processed_telegram_updates,
+            proposed_telegram_clarifications=telegram_report.proposed_telegram_clarifications,
+            finalized_telegram_clarifications=telegram_report.finalized_telegram_clarifications,
+            failed_telegram_clarifications=telegram_report.failed_telegram_clarifications,
         )
         logger.info(
             "tracker_intake_cycle_completed",
@@ -88,6 +120,10 @@ class TrackerIntakeWorker:
             created_pr_feedback_tasks=combined_report.created_pr_feedback_tasks,
             skipped_feedback_items=combined_report.skipped_feedback_items,
             unmapped_feedback_items=combined_report.unmapped_feedback_items,
+            processed_telegram_updates=combined_report.processed_telegram_updates,
+            proposed_telegram_clarifications=combined_report.proposed_telegram_clarifications,
+            finalized_telegram_clarifications=combined_report.finalized_telegram_clarifications,
+            failed_telegram_clarifications=combined_report.failed_telegram_clarifications,
         )
         return combined_report
 
@@ -171,6 +207,42 @@ class TrackerIntakeWorker:
         )
         return report
 
+    def poll_telegram_once(self) -> TrackerIntakeReport:
+        if self.telegram is None or not self.telegram_group_chat_id:
+            return TrackerIntakeReport()
+
+        logger = _worker_logger(tracker_name=self.tracker_name)
+        logger.info(
+            "telegram_clarification_poll_started",
+            fetch_limit=self.telegram_fetch_limit,
+            telegram_chat_id=self.telegram_group_chat_id,
+        )
+        report = TrackerIntakeReport()
+        try:
+            with session_scope(session_factory=self.session_factory) as session:
+                repository = TaskRepository(session)
+                tasks = repository.list_pending_telegram_clarification_tasks(
+                    role=TELEGRAM_CLARIFICATION_ROLE
+                )
+                for task in tasks:
+                    report = self._poll_telegram_clarification_task(
+                        repository=repository,
+                        task=task,
+                        report=report,
+                    )
+        except Exception as exc:
+            logger.exception("telegram_clarification_poll_failed", error=str(exc))
+            raise
+
+        logger.info(
+            "telegram_clarification_poll_completed",
+            processed_telegram_updates=report.processed_telegram_updates,
+            proposed_telegram_clarifications=report.proposed_telegram_clarifications,
+            finalized_telegram_clarifications=report.finalized_telegram_clarifications,
+            failed_telegram_clarifications=report.failed_telegram_clarifications,
+        )
+        return report
+
     def run_forever(
         self,
         *,
@@ -180,6 +252,7 @@ class TrackerIntakeWorker:
         iteration = 0
         tracker_elapsed = self.poll_interval
         feedback_elapsed = self.pr_poll_interval
+        telegram_elapsed = self.telegram_poll_interval
 
         while max_iterations is None or iteration < max_iterations:
             if tracker_elapsed >= self.poll_interval:
@@ -190,6 +263,10 @@ class TrackerIntakeWorker:
                 self.poll_pr_feedback_once()
                 feedback_elapsed = 0
 
+            if telegram_elapsed >= self.telegram_poll_interval:
+                self.poll_telegram_once()
+                telegram_elapsed = 0
+
             iteration += 1
             if max_iterations is not None and iteration >= max_iterations:
                 break
@@ -197,10 +274,12 @@ class TrackerIntakeWorker:
             sleep_seconds = min(
                 self.poll_interval - tracker_elapsed,
                 self.pr_poll_interval - feedback_elapsed,
+                self.telegram_poll_interval - telegram_elapsed,
             )
             sleep_fn(sleep_seconds)
             tracker_elapsed += sleep_seconds
             feedback_elapsed += sleep_seconds
+            telegram_elapsed += sleep_seconds
 
     def _ingest_tracker_task(
         self,
@@ -440,6 +519,367 @@ class TrackerIntakeWorker:
         context["metadata"] = metadata
         execute_task.context = context
 
+    def _poll_telegram_clarification_task(
+        self,
+        *,
+        repository: TaskRepository,
+        task,
+        report: TrackerIntakeReport,
+    ) -> TrackerIntakeReport:
+        logger = _task_logger(task)
+        try:
+            if self.telegram is None:
+                return report
+            metadata = self._telegram_metadata(task)
+            offset = metadata.get("update_offset")
+            updates = self.telegram.poll_updates(
+                TelegramPollUpdatesQuery(
+                    offset=offset if isinstance(offset, int) else None,
+                    limit=self.telegram_fetch_limit,
+                )
+            )
+
+            transcript = _normalize_transcript(metadata.get("transcript"))
+            seen_update_ids = {item.get("update_id") for item in transcript}
+            accepted_updates: list[TelegramUpdateEnvelope] = []
+            latest_update_id = offset if isinstance(offset, int) else None
+            discussion_message_ids = self._telegram_discussion_message_ids(
+                metadata=metadata,
+                transcript=transcript,
+            )
+            for update in updates:
+                latest_update_id = (
+                    update.update_id
+                    if latest_update_id is None
+                    else max(latest_update_id, update.update_id)
+                )
+                if not self._is_relevant_telegram_update(
+                    update=update,
+                    discussion_message_ids=discussion_message_ids,
+                ):
+                    continue
+                if update.update_id in seen_update_ids:
+                    continue
+                transcript.append(
+                    {
+                        "update_id": update.update_id,
+                        "message_id": update.message_id,
+                        "author": update.author,
+                        "text": update.text,
+                        "reply_to_message_id": update.reply_to_message_id,
+                        "message_thread_id": update.message_thread_id,
+                    }
+                )
+                accepted_updates.append(update)
+                seen_update_ids.add(update.update_id)
+                discussion_message_ids.add(update.message_id)
+
+            if latest_update_id is not None:
+                metadata["update_offset"] = latest_update_id + 1
+            metadata["transcript"] = transcript
+            self._store_telegram_metadata(task, metadata)
+
+            updated_count = len(accepted_updates)
+            report = _merge_telegram_report(
+                report,
+                TrackerIntakeReport(processed_telegram_updates=updated_count),
+            )
+
+            confirmation_update = self._find_confirmation_update(
+                metadata=metadata,
+                updates=accepted_updates,
+            )
+            if confirmation_update is not None:
+                self._finalize_telegram_clarification(
+                    repository=repository,
+                    task=task,
+                    metadata=metadata,
+                    confirmation_update=confirmation_update,
+                )
+                logger.info(
+                    "telegram_clarification_finalized",
+                    confirmation_update_id=confirmation_update.update_id,
+                )
+                return _merge_telegram_report(
+                    report,
+                    TrackerIntakeReport(finalized_telegram_clarifications=1),
+                )
+
+            if self._should_send_telegram_proposal(metadata=metadata, updates=accepted_updates):
+                agent_payload = self._telegram_agent_payload(metadata)
+                original_context = (
+                    parse_task_context(task.parent) if task.parent is not None else None
+                )
+                proposal = build_proposal(
+                    original_context=original_context or parse_task_context(task),
+                    agent_payload=agent_payload,
+                    transcript=transcript,
+                )
+                if proposal.open_questions:
+                    return report
+                proposal_message = self.telegram.send_message(
+                    TelegramSendMessagePayload(
+                        chat_id=self.telegram_group_chat_id or str(metadata.get("chat_id")),
+                        text=format_proposal_message(proposal),
+                        message_thread_id=self.telegram_message_thread_id,
+                        reply_to_message_id=self._metadata_int(metadata, "root_message_id"),
+                        metadata={"task_id": task.id, "role": TELEGRAM_CLARIFICATION_ROLE},
+                    )
+                )
+                metadata["proposal"] = dump_proposal(proposal)
+                metadata["proposal_message_id"] = proposal_message.message_id
+                metadata["proposal_update_floor"] = metadata.get("update_offset")
+                self._store_telegram_metadata(task, metadata)
+                logger.info(
+                    "telegram_clarification_proposed",
+                    proposal_message_id=proposal_message.message_id,
+                    subtask_count=len(proposal.subtasks),
+                )
+                return _merge_telegram_report(
+                    report,
+                    TrackerIntakeReport(proposed_telegram_clarifications=1),
+                )
+
+            return report
+        except Exception as exc:
+            task.status = TaskStatus.FAILED
+            task.error = str(exc)
+            logger.exception("telegram_clarification_task_failed", error=str(exc))
+            return _merge_telegram_report(
+                report,
+                TrackerIntakeReport(failed_telegram_clarifications=1),
+            )
+
+    def _is_relevant_telegram_update(
+        self,
+        *,
+        update: TelegramUpdateEnvelope,
+        discussion_message_ids: set[int],
+    ) -> bool:
+        if update.chat_id != self.telegram_group_chat_id:
+            return False
+        configured_thread_id = self.telegram_message_thread_id
+        if configured_thread_id is not None and update.message_thread_id != configured_thread_id:
+            return False
+        if update.reply_to_message_id in discussion_message_ids:
+            return True
+        return update.message_id in discussion_message_ids
+
+    def _telegram_discussion_message_ids(
+        self,
+        *,
+        metadata: dict[str, object],
+        transcript: list[dict[str, object]],
+    ) -> set[int]:
+        message_ids = {
+            value
+            for value in (
+                self._metadata_int(metadata, "root_message_id"),
+                self._metadata_int(metadata, "proposal_message_id"),
+            )
+            if value is not None
+        }
+        for item in transcript:
+            message_id = item.get("message_id")
+            if isinstance(message_id, int):
+                message_ids.add(message_id)
+        return message_ids
+
+    def _find_confirmation_update(
+        self,
+        *,
+        metadata: dict[str, object],
+        updates: Sequence[TelegramUpdateEnvelope],
+    ) -> TelegramUpdateEnvelope | None:
+        proposal_message_id = self._metadata_int(metadata, "proposal_message_id")
+        if proposal_message_id is None:
+            return None
+        proposal_floor = self._metadata_int(metadata, "proposal_update_floor") or 0
+        for update in updates:
+            if update.update_id < proposal_floor:
+                continue
+            if is_confirmation(update.text):
+                return update
+        return None
+
+    def _should_send_telegram_proposal(
+        self,
+        *,
+        metadata: dict[str, object],
+        updates: Sequence[TelegramUpdateEnvelope],
+    ) -> bool:
+        if not metadata.get("transcript"):
+            return False
+        proposal_message_id = self._metadata_int(metadata, "proposal_message_id")
+        if proposal_message_id is None:
+            return True
+        proposal_floor = self._metadata_int(metadata, "proposal_update_floor") or 0
+        return any(
+            update.update_id >= proposal_floor and not is_confirmation(update.text)
+            for update in updates
+        )
+
+    def _finalize_telegram_clarification(
+        self,
+        *,
+        repository: TaskRepository,
+        task,
+        metadata: dict[str, object],
+        confirmation_update: TelegramUpdateEnvelope,
+    ) -> None:
+        proposal = load_proposal(metadata.get("proposal"))
+        if proposal is None:
+            raise ValueError("Telegram clarification has no valid proposal to finalize")
+        tracker_task_id = self._resolve_clarification_tracker_task_id(task)
+        self._persist_telegram_finalization_guard(
+            repository=repository,
+            task=task,
+            metadata=metadata,
+            tracker_task_id=tracker_task_id,
+            confirmation_update=confirmation_update,
+            subtask_count=len(proposal.subtasks),
+        )
+
+        final_comment = format_proposal_message(proposal)
+        self.tracker.add_comment(
+            TrackerCommentCreatePayload(
+                external_task_id=tracker_task_id,
+                body=final_comment,
+                metadata={
+                    "task_id": task.id,
+                    "role": TELEGRAM_CLARIFICATION_ROLE,
+                    "telegram_root_message_id": metadata.get("root_message_id"),
+                },
+            )
+        )
+        for subtask in proposal.subtasks:
+            context, input_payload = proposal_subtask_to_tracker_payload(
+                subtask=subtask,
+                source_metadata={"clarification_task_id": task.id},
+            )
+            self.tracker.create_subtask(
+                TrackerSubtaskCreatePayload(
+                    parent_external_id=tracker_task_id,
+                    context=context,
+                    task_type=TaskType.EXECUTE,
+                    status=TaskStatus.NEW,
+                    input_payload=input_payload,
+                    repo_url=task.repo_url,
+                    repo_ref=task.repo_ref,
+                    workspace_key=task.workspace_key,
+                    metadata={"source": TELEGRAM_CLARIFICATION_ROLE},
+                )
+            )
+        self.tracker.update_status(
+            TrackerStatusUpdatePayload(
+                external_task_id=tracker_task_id,
+                status=TaskStatus.DONE,
+            )
+        )
+        agent_payload = self._telegram_agent_payload(metadata)
+        finalization = dict(metadata.get("finalization") or {})
+        finalization["status"] = "completed"
+        metadata["finalization"] = finalization
+        result_metadata = dict(agent_payload.metadata)
+        result_metadata.update(
+            {
+                "delivery_mode": TELEGRAM_CLARIFICATION_ROLE,
+                "tracker_external_id": tracker_task_id,
+                "subtasks_created": len(proposal.subtasks),
+                "telegram": metadata,
+            }
+        )
+        task.status = TaskStatus.DONE
+        task.error = None
+        task.result_payload = TaskResultPayload(
+            summary=proposal.summary,
+            details=final_comment,
+            metadata=result_metadata,
+        ).model_dump(mode="json")
+
+    def _persist_telegram_finalization_guard(
+        self,
+        *,
+        repository: TaskRepository,
+        task,
+        metadata: dict[str, object],
+        tracker_task_id: str,
+        confirmation_update: TelegramUpdateEnvelope,
+        subtask_count: int,
+    ) -> None:
+        if task.status == TaskStatus.DONE:
+            raise ValueError("Telegram clarification finalization is already guarded")
+        if task.status != TaskStatus.PROCESSING:
+            raise ValueError(
+                f"Telegram clarification task must be processing, got {task.status.value}"
+            )
+
+        guarded_metadata = dict(metadata)
+        guarded_metadata["finalization"] = {
+            "status": "started",
+            "tracker_external_id": tracker_task_id,
+            "confirmation_update_id": confirmation_update.update_id,
+            "subtasks_planned": subtask_count,
+            "manual_repair_required_on_interruption": True,
+        }
+        metadata.clear()
+        metadata.update(guarded_metadata)
+        task.status = TaskStatus.DONE
+        task.error = None
+        task.result_payload = TaskResultPayload(
+            summary="Telegram clarification finalization started.",
+            details=(
+                "Local guard was persisted before external tracker side effects. "
+                "If finalization is interrupted, manual repair is required."
+            ),
+            metadata={
+                "delivery_mode": TELEGRAM_CLARIFICATION_ROLE,
+                "tracker_external_id": tracker_task_id,
+                "telegram": guarded_metadata,
+            },
+        ).model_dump(mode="json")
+        repository.session.commit()
+
+    def _resolve_clarification_tracker_task_id(self, task) -> str:
+        if task.external_parent_id:
+            return task.external_parent_id
+        if task.parent is not None and task.parent.external_parent_id:
+            return task.parent.external_parent_id
+        root = task.root
+        if root is not None and root.external_task_id:
+            return root.external_task_id
+        raise ValueError("Telegram clarification task requires tracker external id")
+
+    def _telegram_metadata(self, task) -> dict[str, object]:
+        result_payload = parse_task_result_payload(task)
+        if result_payload is None:
+            raise ValueError("Telegram clarification task requires result_payload")
+        telegram = result_payload.metadata.get("telegram")
+        if not isinstance(telegram, dict):
+            raise ValueError("Telegram clarification task requires metadata.telegram")
+        return {str(key): value for key, value in telegram.items() if isinstance(key, str)}
+
+    def _telegram_agent_payload(self, metadata: dict[str, object]) -> TaskResultPayload:
+        payload = metadata.get("agent_payload")
+        if isinstance(payload, dict):
+            return TaskResultPayload.model_validate(payload)
+        return TaskResultPayload(summary="Telegram clarification")
+
+    def _store_telegram_metadata(self, task, metadata: dict[str, object]) -> None:
+        result_payload = parse_task_result_payload(task)
+        if result_payload is None:
+            result_payload = TaskResultPayload(summary="Telegram clarification pending.")
+        result_metadata = dict(result_payload.metadata)
+        result_metadata["telegram"] = metadata
+        task.result_payload = result_payload.model_copy(
+            update={"metadata": result_metadata}
+        ).model_dump(mode="json")
+
+    @staticmethod
+    def _metadata_int(metadata: dict[str, object], key: str) -> int | None:
+        value = metadata.get(key)
+        return value if isinstance(value, int) else None
+
 
 def build_tracker_intake_worker(
     *,
@@ -452,10 +892,15 @@ def build_tracker_intake_worker(
         scm=active_runtime.scm,
         tracker_name=active_runtime.settings.tracker_adapter,
         session_factory=session_factory or get_session_factory(),
+        telegram=active_runtime.telegram,
         poll_interval=active_runtime.settings.tracker_poll_interval,
         pr_poll_interval=active_runtime.settings.pr_poll_interval,
+        telegram_poll_interval=active_runtime.settings.telegram_poll_interval,
         fetch_limit=active_runtime.settings.tracker_fetch_limit,
         feedback_limit=active_runtime.settings.pr_feedback_fetch_limit,
+        telegram_fetch_limit=active_runtime.settings.telegram_fetch_limit,
+        telegram_group_chat_id=active_runtime.settings.telegram_group_chat_id,
+        telegram_message_thread_id=active_runtime.settings.telegram_message_thread_id,
     )
 
 
@@ -463,6 +908,49 @@ def _dump_model_or_none(value: SchemaModel | None) -> dict[str, object] | None:
     if value is None:
         return None
     return value.model_dump(mode="python")
+
+
+def _normalize_transcript(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    transcript: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        transcript.append(
+            {str(key): item_value for key, item_value in item.items() if isinstance(key, str)}
+        )
+    return transcript
+
+
+def _merge_telegram_report(
+    left: TrackerIntakeReport,
+    right: TrackerIntakeReport,
+) -> TrackerIntakeReport:
+    return TrackerIntakeReport(
+        fetched_count=left.fetched_count + right.fetched_count,
+        created_fetch_tasks=left.created_fetch_tasks + right.created_fetch_tasks,
+        created_execute_tasks=left.created_execute_tasks + right.created_execute_tasks,
+        skipped_tasks=left.skipped_tasks + right.skipped_tasks,
+        fetched_feedback_items=left.fetched_feedback_items + right.fetched_feedback_items,
+        created_pr_feedback_tasks=(
+            left.created_pr_feedback_tasks + right.created_pr_feedback_tasks
+        ),
+        skipped_feedback_items=left.skipped_feedback_items + right.skipped_feedback_items,
+        unmapped_feedback_items=left.unmapped_feedback_items + right.unmapped_feedback_items,
+        processed_telegram_updates=(
+            left.processed_telegram_updates + right.processed_telegram_updates
+        ),
+        proposed_telegram_clarifications=(
+            left.proposed_telegram_clarifications + right.proposed_telegram_clarifications
+        ),
+        finalized_telegram_clarifications=(
+            left.finalized_telegram_clarifications + right.finalized_telegram_clarifications
+        ),
+        failed_telegram_clarifications=(
+            left.failed_telegram_clarifications + right.failed_telegram_clarifications
+        ),
+    )
 
 
 def _worker_logger(**fields: object):

@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from backend.adapters.mock_scm import MockScm
+from backend.adapters.mock_telegram import MockTelegram
 from backend.adapters.mock_tracker import MockTracker
 from backend.api.app import create_app
 from backend.composition import RuntimeContainer
@@ -98,6 +99,53 @@ class EstimateOnlyRecordingRunner:
                 },
             )
         )
+
+
+class TelegramClarificationRunner:
+    def __init__(self, *, include_structured_subtasks: bool = True) -> None:
+        self.requests: list[AgentRunRequest] = []
+        self.include_structured_subtasks = include_structured_subtasks
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        telegram_metadata: dict[str, object] = {
+            "required": True,
+            "question": "Нужно согласовать границы MVP и декомпозицию.",
+        }
+        if self.include_structured_subtasks:
+            telegram_metadata["subtasks"] = [
+                {
+                    "title": "Implement Telegram intake",
+                    "description": "Add Telegram polling and transcript storage.",
+                    "acceptance_criteria": ["Updates are deduplicated"],
+                },
+                {
+                    "title": "Create Linear subtasks",
+                    "description": "Create subtasks after explicit chat confirmation.",
+                },
+            ]
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary="Task requires Telegram clarification before implementation.",
+                metadata={
+                    "routing": {"outcome": "reply_with_clarification"},
+                    "telegram": telegram_metadata,
+                },
+            )
+        )
+
+
+class FailingAfterCommentTracker(MockTracker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_comment = True
+
+    def add_comment(self, payload):
+        reference = super().add_comment(payload)
+        if self.fail_next_comment:
+            self.fail_next_comment = False
+            raise RuntimeError("tracker comment persisted but response failed")
+        return reference
 
 
 def test_http_intake_flow_runs_workers_end_to_end(session_factory) -> None:
@@ -795,6 +843,345 @@ def test_orchestration_flow_routes_estimate_only_to_delivery_without_scm_side_ef
         "2 story points\nReason: adding CLI command logging is a small isolated change."
     )
     assert tracker._tasks[tracker_task.external_id].context.references == []
+
+
+def test_orchestration_flow_routes_telegram_clarification_to_subtasks(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    telegram = MockTelegram()
+    runner = TelegramClarificationRunner()
+    settings = replace(
+        get_settings(),
+        telegram_group_chat_id="-1001",
+        telegram_message_thread_id=7,
+    )
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Clarify large feature",
+                description="Feature is too large for immediate execution.",
+            ),
+            input_payload=TaskInputPayload(
+                instructions="Triage and ask for clarification if needed.",
+                base_branch="main",
+                branch_name="task-telegram/clarify",
+            ),
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-telegram",
+        )
+    )
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        telegram=telegram,
+        telegram_group_chat_id="-1001",
+        telegram_message_thread_id=7,
+        poll_interval=1,
+        pr_poll_interval=1,
+        telegram_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+        telegram=telegram,
+        settings=settings,
+    )
+
+    intake_report = intake_worker.poll_tracker_once()
+    execute_report = execute_worker.poll_once()
+
+    assert intake_report.created_execute_tasks == 1
+    assert execute_report.processed_execute_tasks == 1
+    assert execute_report.failed_execute_tasks == 0
+    assert len(runner.requests) == 1
+    assert scm._branches == {}
+    assert scm._pull_requests == {}
+    assert scm._commit_sequence == 0
+    assert len(telegram.sent_messages) == 1
+    root_message_id = 1
+    assert telegram.sent_messages[0].reply_to_message_id is None
+    assert telegram.sent_messages[0].message_thread_id == 7
+    assert "Нужно согласовать границы MVP" in telegram.sent_messages[0].text
+
+    telegram.add_update(
+        chat_id="-1001",
+        text="Согласовали MVP.\n- Telegram intake\n- Linear subtasks",
+        author="alice",
+        message_thread_id=7,
+        reply_to_message_id=root_message_id,
+    )
+    proposal_report = intake_worker.poll_telegram_once()
+
+    assert proposal_report.processed_telegram_updates == 1
+    assert proposal_report.proposed_telegram_clarifications == 1
+    assert len(telegram.sent_messages) == 2
+    proposal_message_id = 3
+    assert telegram.sent_messages[1].reply_to_message_id == root_message_id
+    assert "Implement Telegram intake" in telegram.sent_messages[1].text
+
+    telegram.add_update(
+        chat_id="-1001",
+        text="фиксируй",
+        author="alice",
+        message_thread_id=7,
+        reply_to_message_id=proposal_message_id,
+    )
+    final_report = intake_worker.poll_telegram_once()
+
+    assert final_report.processed_telegram_updates == 1
+    assert final_report.finalized_telegram_clarifications == 1
+    repeated_final_report = intake_worker.poll_telegram_once()
+    assert repeated_final_report.finalized_telegram_clarifications == 0
+    assert tracker._tasks[tracker_task.external_id].status == TaskStatus.DONE
+    assert len(tracker._comments[tracker_task.external_id]) == 1
+    assert "Финальный вариант" in tracker._comments[tracker_task.external_id][0].body
+
+    subtasks = [
+        task
+        for task in tracker._tasks.values()
+        if task.parent_external_id == tracker_task.external_id
+    ]
+    assert [subtask.context.title for subtask in subtasks] == [
+        "Implement Telegram intake",
+        "Create Linear subtasks",
+    ]
+    assert all(subtask.task_type == TaskType.EXECUTE for subtask in subtasks)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        clarification_tasks = [
+            task
+            for task in session.query(Task).filter(Task.parent_id == execute_task.id).all()
+            if task.role == "telegram_clarification"
+        ]
+        assert len(clarification_tasks) == 1
+        clarification_task = clarification_tasks[0]
+        assert clarification_task.status == TaskStatus.DONE
+        assert clarification_task.result_payload["metadata"]["subtasks_created"] == 2
+
+        deliver_task = repository.find_child_task(
+            parent_id=execute_task.id, task_type=TaskType.DELIVER
+        )
+        assert deliver_task is None
+
+
+def test_telegram_clarification_collects_reply_to_reply_discussion(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    telegram = MockTelegram()
+    runner = TelegramClarificationRunner(include_structured_subtasks=False)
+    settings = replace(
+        get_settings(),
+        telegram_group_chat_id="-1001",
+        telegram_message_thread_id=7,
+    )
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Clarify reply thread"),
+            input_payload=TaskInputPayload(
+                instructions="Ask Telegram if clarification is needed.",
+                base_branch="main",
+                branch_name="task-telegram/replies",
+            ),
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-telegram-replies",
+        )
+    )
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        telegram=telegram,
+        telegram_group_chat_id="-1001",
+        telegram_message_thread_id=7,
+        poll_interval=1,
+        pr_poll_interval=1,
+        telegram_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+        telegram=telegram,
+        settings=settings,
+    )
+
+    intake_worker.poll_tracker_once()
+    execute_worker.poll_once()
+    root_message_id = 1
+
+    alice_reply = telegram.add_update(
+        chat_id="-1001",
+        text="Согласовали общий MVP.",
+        author="alice",
+        message_thread_id=7,
+        reply_to_message_id=root_message_id,
+    )
+    telegram.add_update(
+        chat_id="-1001",
+        text="- Reply-to-reply subtask",
+        author="bob",
+        message_thread_id=7,
+        reply_to_message_id=alice_reply.message_id,
+    )
+    telegram.add_update(
+        chat_id="-1001",
+        text="- Unrelated root-level message",
+        author="mallory",
+        message_thread_id=7,
+    )
+
+    proposal_report = intake_worker.poll_telegram_once()
+
+    assert proposal_report.processed_telegram_updates == 2
+    assert proposal_report.proposed_telegram_clarifications == 1
+    assert len(telegram.sent_messages) == 2
+    assert "Reply-to-reply subtask" in telegram.sent_messages[1].text
+    assert "Unrelated root-level message" not in telegram.sent_messages[1].text
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        clarification_task = next(
+            task
+            for task in session.query(Task).filter(Task.parent_id == execute_task.id).all()
+            if task.role == "telegram_clarification"
+        )
+        transcript = clarification_task.result_payload["metadata"]["telegram"]["transcript"]
+        assert [item["text"] for item in transcript] == [
+            "Согласовали общий MVP.",
+            "- Reply-to-reply subtask",
+        ]
+
+
+def test_telegram_clarification_failure_after_guard_does_not_retry_side_effects(
+    session_factory,
+) -> None:
+    tracker = FailingAfterCommentTracker()
+    scm = MockScm()
+    telegram = MockTelegram()
+    runner = TelegramClarificationRunner()
+    settings = replace(
+        get_settings(),
+        telegram_group_chat_id="-1001",
+        telegram_message_thread_id=7,
+    )
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Clarify partial finalization"),
+            input_payload=TaskInputPayload(
+                instructions="Ask Telegram if clarification is needed.",
+                base_branch="main",
+                branch_name="task-telegram/partial",
+            ),
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-telegram-partial",
+        )
+    )
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        telegram=telegram,
+        telegram_group_chat_id="-1001",
+        telegram_message_thread_id=7,
+        poll_interval=1,
+        pr_poll_interval=1,
+        telegram_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+        telegram=telegram,
+        settings=settings,
+    )
+
+    intake_worker.poll_tracker_once()
+    execute_worker.poll_once()
+    root_message_id = 1
+    telegram.add_update(
+        chat_id="-1001",
+        text="Согласовали MVP.",
+        author="alice",
+        message_thread_id=7,
+        reply_to_message_id=root_message_id,
+    )
+    intake_worker.poll_telegram_once()
+    proposal_message_id = 3
+    telegram.add_update(
+        chat_id="-1001",
+        text="fix",
+        author="alice",
+        message_thread_id=7,
+        reply_to_message_id=proposal_message_id,
+    )
+
+    failed_report = intake_worker.poll_telegram_once()
+    repeated_report = intake_worker.poll_telegram_once()
+
+    assert failed_report.failed_telegram_clarifications == 1
+    assert repeated_report.finalized_telegram_clarifications == 0
+    assert repeated_report.failed_telegram_clarifications == 0
+    assert len(tracker._comments[tracker_task.external_id]) == 1
+    subtasks = [
+        task
+        for task in tracker._tasks.values()
+        if task.parent_external_id == tracker_task.external_id
+    ]
+    assert subtasks == []
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        clarification_task = next(
+            task
+            for task in session.query(Task).filter(Task.parent_id == execute_task.id).all()
+            if task.role == "telegram_clarification"
+        )
+        assert clarification_task.status == TaskStatus.FAILED
+        assert clarification_task.error == "tracker comment persisted but response failed"
+        assert (
+            clarification_task.result_payload["metadata"]["telegram"]["finalization"]["status"]
+            == "started"
+        )
 
 
 def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session_factory) -> None:

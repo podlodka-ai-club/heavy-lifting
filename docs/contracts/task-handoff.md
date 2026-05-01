@@ -222,6 +222,12 @@ For the backlog-selection branch, the system may first choose one already estima
 
 For the current estimate-only MVP branch, `worker2` may also complete an `execute` task without SCM artifacts. In that case the execute result keeps the tracker-facing estimate text in `tracker_comment`, leaves branch and PR fields empty, marks `metadata.delivery_mode = estimate_only`, and still creates a downstream `deliver` task.
 
+For the Telegram clarification branch, `worker2` completes the initial `execute` task without SCM artifacts and creates a child `execute` task with `role = "telegram_clarification"` and `status = processing`. The child task stores the Telegram root message id, transcript cursor, transcript, proposal state, and original agent payload in `result_payload.metadata.telegram`. This task is owned by the intake/monitor path, not by normal code execution, and it does not create a downstream `deliver` task.
+
+After the backend posts a final proposed summary and decomposition to Telegram, a human must explicitly confirm with a clear confirmation such as `да`, `ок`, `готово`, `фиксируй`, or `fix`. Only then the monitor finalizes the tracker task. Before the first tracker side effect, it persists a local finalization guard by moving the clarification task out of the pending set and recording `metadata.telegram.finalization.status = started`. Then it posts the final summary as a tracker comment, creates tracker subtasks through `TrackerProtocol.create_subtask`, updates the parent tracker task to done, and records the completed result locally.
+
+This guard intentionally prevents automatic retry if the process dies mid-finalization. A crash after the guard but before completed local result requires manual repair/reconciliation. If an exception is observed during tracker finalization, the local clarification task becomes failed with the error; the MVP does not roll back already-created comments or subtasks.
+
 ### PR Feedback
 
 - A PR feedback step uses `input_payload.action = respond_pr`.

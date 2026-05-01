@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from flask import Flask
@@ -9,10 +9,13 @@ from flask import Flask
 from backend.adapters.github_scm import GitHubScm, build_github_scm_config
 from backend.adapters.linear_tracker import LinearTracker, LinearTrackerConfig
 from backend.adapters.mock_scm import MockScm
+from backend.adapters.mock_telegram import MockTelegram
 from backend.adapters.mock_tracker import MockTracker
+from backend.adapters.telegram_bot import TelegramBotApi, TelegramBotConfig
 from backend.logging_setup import get_logger
 from backend.protocols.agent_runner import AgentRunnerProtocol
 from backend.protocols.scm import ScmProtocol
+from backend.protocols.telegram import TelegramProtocol
 from backend.protocols.tracker import TrackerProtocol
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.settings import Settings, get_settings
@@ -30,6 +33,7 @@ _TASK_STATUS_BY_STATE_ENV: Mapping[TaskStatus, str] = {
 TrackerFactory = Callable[[Settings], TrackerProtocol]
 ScmFactory = Callable[[Settings], ScmProtocol]
 AgentRunnerFactory = Callable[[Settings], AgentRunnerProtocol]
+TelegramFactory = Callable[[Settings], TelegramProtocol]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,7 @@ class AdapterRegistry:
     tracker_factories: Mapping[str, TrackerFactory]
     scm_factories: Mapping[str, ScmFactory]
     agent_runner_factories: Mapping[str, AgentRunnerFactory]
+    telegram_factories: Mapping[str, TelegramFactory] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +50,7 @@ class RuntimeContainer:
     tracker: TrackerProtocol
     scm: ScmProtocol
     agent_runner: AgentRunnerProtocol
+    telegram: TelegramProtocol | None = None
 
 
 def _build_mock_tracker(_: Settings) -> TrackerProtocol:
@@ -112,6 +118,18 @@ def _build_github_scm(settings: Settings) -> ScmProtocol:
     return GitHubScm(config)
 
 
+def _build_mock_telegram(_: Settings) -> TelegramProtocol:
+    return MockTelegram()
+
+
+def _build_telegram_bot(settings: Settings) -> TelegramProtocol:
+    if not settings.telegram_bot_token_env_var:
+        raise ValueError("TELEGRAM_BOT_TOKEN_ENV_VAR must be set when telegram_adapter='bot'")
+    return TelegramBotApi(
+        TelegramBotConfig(token_env_var=settings.telegram_bot_token_env_var)
+    )
+
+
 def _build_local_agent_runner(settings: Settings) -> AgentRunnerProtocol:
     return LocalAgentRunner(
         provider=settings.local_agent_provider,
@@ -155,6 +173,10 @@ DEFAULT_ADAPTER_REGISTRY = AdapterRegistry(
         "local": _build_local_agent_runner,
         "cli": _build_cli_agent_runner,
     },
+    telegram_factories={
+        "mock": _build_mock_telegram,
+        "bot": _build_telegram_bot,
+    },
 )
 
 
@@ -181,11 +203,22 @@ def create_runtime_container(
             f"Unsupported agent runner adapter: {active_settings.agent_runner_adapter}"
         ) from exc
 
+    telegram: TelegramProtocol | None = None
+    if active_settings.telegram_adapter != "none":
+        try:
+            telegram_factory = registry.telegram_factories[active_settings.telegram_adapter]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unsupported Telegram adapter: {active_settings.telegram_adapter}"
+            ) from exc
+        telegram = telegram_factory(active_settings)
+
     return RuntimeContainer(
         settings=active_settings,
         tracker=tracker_factory(active_settings),
         scm=scm_factory(active_settings),
         agent_runner=agent_runner_factory(active_settings),
+        telegram=telegram,
     )
 
 

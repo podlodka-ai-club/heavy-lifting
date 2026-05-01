@@ -59,6 +59,13 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "GITHUB_DEFAULT_REPO_URL",
         "SCM_DEFAULT_BASE_BRANCH",
         "SCM_BRANCH_PREFIX",
+        "TELEGRAM_ADAPTER",
+        "TELEGRAM_BOT_TOKEN_ENV_VAR",
+        "TELEGRAM_GROUP_CHAT_ID",
+        "TELEGRAM_MESSAGE_THREAD_ID",
+        "TELEGRAM_POLL_INTERVAL",
+        "TELEGRAM_FETCH_LIMIT",
+        "TELEGRAM_STORY_POINTS_THRESHOLD",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -119,6 +126,13 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.github_default_repo_url is None
     assert settings.scm_default_base_branch is None
     assert settings.scm_branch_prefix == "execute/"
+    assert settings.telegram_adapter == "none"
+    assert settings.telegram_bot_token_env_var == "TELEGRAM_BOT_TOKEN"
+    assert settings.telegram_group_chat_id is None
+    assert settings.telegram_message_thread_id is None
+    assert settings.telegram_poll_interval == 15
+    assert settings.telegram_fetch_limit == 100
+    assert settings.telegram_story_points_threshold == 8
 
 
 def test_get_settings_reads_env_overrides(monkeypatch) -> None:
@@ -176,6 +190,13 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("GITHUB_DEFAULT_REPO_URL", "https://github.com/acme/widgets")
     monkeypatch.setenv("SCM_DEFAULT_BASE_BRANCH", "develop")
     monkeypatch.setenv("SCM_BRANCH_PREFIX", "hl/")
+    monkeypatch.setenv("TELEGRAM_ADAPTER", "bot")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_ENV_VAR", "MY_TELEGRAM_TOKEN")
+    monkeypatch.setenv("TELEGRAM_GROUP_CHAT_ID", "-100123")
+    monkeypatch.setenv("TELEGRAM_MESSAGE_THREAD_ID", "77")
+    monkeypatch.setenv("TELEGRAM_POLL_INTERVAL", "11")
+    monkeypatch.setenv("TELEGRAM_FETCH_LIMIT", "33")
+    monkeypatch.setenv("TELEGRAM_STORY_POINTS_THRESHOLD", "13")
 
     get_settings.cache_clear()
     settings = get_settings()
@@ -232,6 +253,13 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.github_default_repo_url == "https://github.com/acme/widgets"
     assert settings.scm_default_base_branch == "develop"
     assert settings.scm_branch_prefix == "hl/"
+    assert settings.telegram_adapter == "bot"
+    assert settings.telegram_bot_token_env_var == "MY_TELEGRAM_TOKEN"
+    assert settings.telegram_group_chat_id == "-100123"
+    assert settings.telegram_message_thread_id == 77
+    assert settings.telegram_poll_interval == 11
+    assert settings.telegram_fetch_limit == 33
+    assert settings.telegram_story_points_threshold == 13
 
 
 def test_get_settings_prefers_explicit_database_url(monkeypatch) -> None:

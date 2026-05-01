@@ -297,6 +297,37 @@ class ScmReadPrFeedbackQuery(SchemaModel):
     limit: int = Field(default=100, ge=1, le=1000)
 
 
+class TelegramSendMessagePayload(SchemaModel):
+    chat_id: str
+    text: str = Field(min_length=1)
+    message_thread_id: int | None = Field(default=None, ge=1)
+    reply_to_message_id: int | None = Field(default=None, ge=1)
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class TelegramMessageReference(SchemaModel):
+    chat_id: str
+    message_id: int = Field(ge=1)
+    message_thread_id: int | None = Field(default=None, ge=1)
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class TelegramPollUpdatesQuery(SchemaModel):
+    offset: int | None = Field(default=None, ge=0)
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
+class TelegramUpdateEnvelope(SchemaModel):
+    update_id: int = Field(ge=0)
+    chat_id: str
+    message_id: int = Field(ge=1)
+    text: str | None = None
+    author: str | None = None
+    message_thread_id: int | None = Field(default=None, ge=1)
+    reply_to_message_id: int | None = Field(default=None, ge=1)
+    metadata: JsonObject = Field(default_factory=dict)
+
+
 __all__ = [
     "JsonObject",
     "JsonValue",
@@ -332,5 +363,9 @@ __all__ = [
     "TaskInputPayload",
     "TaskLink",
     "TaskResultPayload",
+    "TelegramMessageReference",
+    "TelegramPollUpdatesQuery",
+    "TelegramSendMessagePayload",
+    "TelegramUpdateEnvelope",
     "TokenUsagePayload",
 ]

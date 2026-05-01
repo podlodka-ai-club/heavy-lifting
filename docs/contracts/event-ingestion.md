@@ -17,6 +17,7 @@ For the MVP, the orchestrator distinguishes two entry categories:
 
 - `new_task_intake` - a brand-new tracker task that starts with triage;
 - `followup_event` - a tracker or SCM event that attaches to an existing task thread or creates a child follow-up task.
+- `telegram_clarification_event` - a Telegram group message that belongs to a pending clarification thread.
 
 The key rule is that follow-up events must not be confused with first-time intake.
 
@@ -30,6 +31,7 @@ The MVP supports these normalized follow-up event kinds:
 - `pr_review_requested_changes` - a PR review that requests changes;
 - `pr_review_approved` - a PR review that approves the change set;
 - `pr_state_change` - a PR state transition such as closed or merged.
+- `telegram_message` - a message from the configured Telegram group scoped to a pending clarification root message, reply, or topic.
 
 Not every event kind must produce a new executable task. Some events may be recorded and ignored for routing if they do not require action in the MVP.
 
@@ -122,6 +124,14 @@ If the footer is missing (legacy PR, edited body, fork mismatch), each feedback 
 
 After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. Subsequent polling cycles and child tasks see the resolved URL as durable.
 
+### Telegram Clarification Events
+
+Telegram clarification polling is owned by `worker1`'s monitor responsibility. The Telegram adapter exposes `send_message` and `poll_updates` envelopes; the real adapter uses the Telegram Bot API and resolves the token from `TELEGRAM_BOT_TOKEN_ENV_VAR` at call time so the token value is not logged or stored.
+
+The monitor only accepts updates from `TELEGRAM_GROUP_CHAT_ID`. If `TELEGRAM_MESSAGE_THREAD_ID` is configured, updates must also belong to that topic/thread. For each pending local `execute` task with `role = "telegram_clarification"`, updates are additionally scoped to the stored root Telegram message and the latest proposal message. The task stores `update_offset` and transcript entries in `result_payload.metadata.telegram`, making repeated polls idempotent.
+
+When the transcript has enough information to build a proposal, the backend posts a final summary and subtask list back to Telegram and records the proposal message id. Human replies can still correct the proposal; the backend can send a revised proposal before confirmation. A clear confirmation after the proposal triggers tracker finalization.
+
 ## Deduplication Rules
 
 Event ingestion must be idempotent. Repeated polling must not create duplicate follow-up tasks.
@@ -178,6 +188,7 @@ The MVP follow-up task creation rules are:
 - tracker status changes are `metadata_only` in the MVP;
 - actionable PR feedback may create a new `pr_feedback` child task;
 - PR approvals and PR state changes are `metadata_only` unless a later rule explicitly changes that behavior;
+- Telegram clarification messages update the pending local clarification task transcript, may trigger a proposal message, and on explicit confirmation create tracker subtasks through `TrackerProtocol.create_subtask`;
 - delivery tasks are still created only from upstream `result_payload.delivery`, not directly from raw external events.
 
 This keeps event ingestion separate from the worker handoff contract: external events first become normalized facts, then routing decides whether to create a task.
@@ -190,6 +201,7 @@ In the MVP, keep periodic event polling inside the current ingestion layer owned
 
 - intake responsibility - fetch new tracker tasks and create first-step triage work;
 - monitor responsibility - poll tracker follow-up comments and SCM follow-up events, normalize them, deduplicate them, and create child tasks when needed.
+- Telegram clarification monitor responsibility - poll the configured Telegram group, append transcript updates idempotently to pending clarification tasks, propose final decomposition, and finalize tracker subtasks after explicit confirmation.
 
 This means the MVP can stay on one worker process while preserving a future boundary for a dedicated monitor worker.
 

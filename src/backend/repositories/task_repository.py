@@ -162,6 +162,19 @@ class TaskRepository:
         )
         return list(self._session.execute(statement).scalars())
 
+    def list_pending_telegram_clarification_tasks(self, *, role: str) -> list[Task]:
+        statement = (
+            select(Task)
+            .where(
+                Task.task_type == TaskType.EXECUTE,
+                Task.role == role,
+                Task.status == TaskStatus.PROCESSING,
+            )
+            .order_by(Task.updated_at.asc(), Task.id.asc())
+            .with_for_update(skip_locked=True)
+        )
+        return list(self._session.execute(statement).scalars())
+
     def find_fetch_task_by_tracker_task(
         self,
         *,

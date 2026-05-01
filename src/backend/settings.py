@@ -13,6 +13,13 @@ def _get_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _get_optional_int(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    return int(value)
+
+
 def _get_tuple(name: str, default: str) -> tuple[str, ...]:
     val = os.getenv(name, default)
     if not val.strip():
@@ -110,6 +117,13 @@ class Settings:
     github_default_repo_url: str | None
     scm_default_base_branch: str | None
     scm_branch_prefix: str
+    telegram_adapter: str
+    telegram_bot_token_env_var: str
+    telegram_group_chat_id: str | None
+    telegram_message_thread_id: int | None
+    telegram_poll_interval: int
+    telegram_fetch_limit: int
+    telegram_story_points_threshold: int
 
 
 @lru_cache(maxsize=1)
@@ -180,6 +194,15 @@ def get_settings() -> Settings:
         github_default_repo_url=os.getenv("GITHUB_DEFAULT_REPO_URL") or None,
         scm_default_base_branch=os.getenv("SCM_DEFAULT_BASE_BRANCH") or None,
         scm_branch_prefix=os.getenv("SCM_BRANCH_PREFIX", "execute/"),
+        telegram_adapter=os.getenv("TELEGRAM_ADAPTER", "none"),
+        telegram_bot_token_env_var=os.getenv(
+            "TELEGRAM_BOT_TOKEN_ENV_VAR", "TELEGRAM_BOT_TOKEN"
+        ),
+        telegram_group_chat_id=os.getenv("TELEGRAM_GROUP_CHAT_ID") or None,
+        telegram_message_thread_id=_get_optional_int("TELEGRAM_MESSAGE_THREAD_ID"),
+        telegram_poll_interval=_get_int("TELEGRAM_POLL_INTERVAL", 15),
+        telegram_fetch_limit=_get_int("TELEGRAM_FETCH_LIMIT", 100),
+        telegram_story_points_threshold=_get_int("TELEGRAM_STORY_POINTS_THRESHOLD", 8),
     )
 
     return _apply_database_overrides(env_settings)
