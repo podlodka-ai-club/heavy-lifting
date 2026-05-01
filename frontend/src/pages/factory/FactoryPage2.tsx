@@ -206,6 +206,12 @@ function FactoryScene({
             const isLast = i === snapshot.stations.length - 1;
             const isBottleneck = station.name === bottleneck;
             const meta = META[station.name];
+            const batchSize = station.name === "execute"
+              ? Math.max(1, Math.min(
+                  parseInt(settings.find(s => s.setting_key === "execute_worker_batch_size")?.value ?? "1") || 1,
+                  4
+                ))
+              : 1;
 
             return (
               <div key={station.name} className="f2-station-slot">
@@ -218,6 +224,7 @@ function FactoryScene({
 
                 {/* the machine */}
                 <Machine
+                  batchSize={batchSize}
                   isBottleneck={isBottleneck}
                   label={meta.label}
                   reduced={reduced}
@@ -303,12 +310,14 @@ function Machine({
   label,
   role,
   reduced,
+  batchSize = 1,
 }: {
   station: FactoryStation;
   isBottleneck: boolean;
   label: string;
   role: string;
   reduced: boolean;
+  batchSize?: number;
 }) {
   const meta = META[station.name];
   const active = station.active_count > 0 || station.wip_count > 0;
@@ -325,6 +334,7 @@ function Machine({
       {/* Machine-specific interior (chimneys, pistons, etc.) */}
       <MachineInterior
         active={active}
+        batchSize={batchSize}
         isBottleneck={isBottleneck}
         reduced={reduced}
         speedCls={speedCls}
@@ -343,7 +353,12 @@ function Machine({
 
       {/* Machine nameplate */}
       <div className="f2-nameplate">
-        <span className="f2-nameplate-label">{label}</span>
+        <div className="f2-nameplate-top">
+          <span className="f2-nameplate-label">{label}</span>
+          {batchSize > 1 && (
+            <span className="f2-batch-badge" aria-label={`batch size ${batchSize}`}>×{batchSize}</span>
+          )}
+        </div>
         <span className="f2-nameplate-role">{role}</span>
       </div>
     </div>
@@ -358,12 +373,14 @@ function MachineInterior({
   isBottleneck,
   active,
   reduced,
+  batchSize = 1,
 }: {
   variant: string;
   speedCls: string;
   isBottleneck: boolean;
   active: boolean;
   reduced: boolean;
+  batchSize?: number;
 }) {
   if (variant === "fetch") {
     return (
@@ -382,6 +399,7 @@ function MachineInterior({
   }
 
   if (variant === "execute") {
+    const gearSize = batchSize === 1 ? 36 : batchSize === 2 ? 26 : batchSize === 3 ? 21 : 17;
     return (
       <>
         {/* Three chimneys */}
@@ -400,8 +418,20 @@ function MachineInterior({
           className={`f2-piston-arm${speedCls ? ` f2-piston-${speedCls}` : ""}`}
         />
         <div aria-hidden className="f2-piston-head" />
-        {/* Gear */}
-        <div aria-hidden className={`f2-gear${speedCls ? ` f2-gear-${speedCls}` : ""}`} />
+        {/* Gears — N copies for batch size */}
+        <div aria-hidden className="f2-gear-row">
+          {Array.from({ length: batchSize }).map((_, idx) => (
+            <div
+              key={idx}
+              className={`f2-gear${speedCls ? ` f2-gear-${speedCls}` : ""}`}
+              style={{
+                width: `${gearSize}px`,
+                height: `${gearSize}px`,
+                animationDelay: speedCls ? `${idx * 0.3}s` : undefined,
+              }}
+            />
+          ))}
+        </div>
       </>
     );
   }
