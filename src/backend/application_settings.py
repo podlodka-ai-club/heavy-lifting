@@ -30,6 +30,14 @@ DEFAULT_APPLICATION_SETTINGS: tuple[ApplicationSettingSpec, ...] = (
         display_order=10,
     ),
     ApplicationSettingSpec(
+        key="execute_worker_batch_size",
+        env_var="EXECUTE_WORKER_BATCH_SIZE",
+        value_type="int",
+        default_value="1",
+        description="Number of execute tasks processed per worker poll cycle.",
+        display_order=15,
+    ),
+    ApplicationSettingSpec(
         key="pr_feedback_fetch_limit",
         env_var="PR_FEEDBACK_FETCH_LIMIT",
         value_type="int",

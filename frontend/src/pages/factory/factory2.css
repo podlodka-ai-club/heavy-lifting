@@ -711,6 +711,130 @@
   padding-top: 8px;
 }
 
+/* ─── Station selected state ─────────────────────────────────────────────── */
+
+.f2-station-selected {
+  background: rgba(255, 146, 42, 0.04);
+}
+
+/* ─── Stats header click affordance ─────────────────────────────────────── */
+
+.f2-stats-header-right {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.f2-stats-header-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.f2-stats-header-clickable:hover .f2-tune-btn {
+  color: var(--orange);
+}
+
+.f2-tune-btn {
+  color: var(--muted);
+  font-size: 0.72rem;
+  transition: color 0.15s;
+}
+
+/* ─── Settings panel ─────────────────────────────────────────────────────── */
+
+.f2-settings-panel {
+  border-top: 1px solid var(--edge-soft);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.f2-settings-title {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.f2-setting-row {
+  margin-bottom: 8px;
+}
+
+.f2-setting-row:last-child {
+  margin-bottom: 0;
+}
+
+.f2-setting-label {
+  color: var(--muted);
+  cursor: default;
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  margin-bottom: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.f2-setting-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.f2-setting-input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--edge-soft);
+  border-radius: 4px;
+  color: var(--fg);
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  min-width: 0;
+  padding: 3px 6px;
+  transition: border-color 0.15s;
+}
+
+.f2-setting-input:focus {
+  border-color: rgba(255, 146, 42, 0.5);
+  outline: none;
+}
+
+.f2-setting-save {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--edge-soft);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: default;
+  font-family: var(--mono);
+  font-size: 0.67rem;
+  padding: 3px 7px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.f2-setting-save-active {
+  border-color: rgba(255, 146, 42, 0.5);
+  color: var(--orange);
+  cursor: pointer;
+}
+
+.f2-setting-save-active:hover:not(:disabled) {
+  background: rgba(255, 146, 42, 0.12);
+}
+
+.f2-setting-save:disabled {
+  opacity: 0.4;
+}
+
+.f2-setting-error {
+  color: #ffb0a4;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  margin-top: 3px;
+}
+
 /* ─── Reduced motion ─────────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
