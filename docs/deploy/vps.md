@@ -75,7 +75,7 @@ FRONTEND_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting-frontend:master
 FRONTEND_PORT=80
 
 FRONTEND_BASIC_AUTH_USERNAME=heavy
-FRONTEND_BASIC_AUTH_PASSWORD_HASH='$2a$14$replace-with-caddy-hash'
+FRONTEND_BASIC_AUTH_PASSWORD_HASH=$$2a$$14$$replace-with-caddy-hash
 API_BASIC_AUTH_USERNAME=heavy
 API_BASIC_AUTH_PASSWORD=lifting
 
@@ -97,13 +97,16 @@ GUNICORN_TIMEOUT=120
 
 `FRONTEND_PORT` задает внешний HTTP-порт VPS для frontend и `/api/*` reverse proxy. Если переменная не задана, production compose и deploy healthcheck используют `80`. Внутри compose backend остается доступен только как `api:8000`; direct `http://<vps-host>:8000/*` больше не публикуется.
 
-`FRONTEND_BASIC_AUTH_USERNAME` и `FRONTEND_BASIC_AUTH_PASSWORD_HASH` обязательны для production frontend: Caddyfile всегда включает Basic Auth на весь сайт, включая `/api/health`. Отсутствие любой из этих переменных является ошибкой deploy до rollout. В hash кладется результат `caddy hash-password`, а не plaintext:
+`FRONTEND_BASIC_AUTH_USERNAME` и `FRONTEND_BASIC_AUTH_PASSWORD_HASH` обязательны для production frontend: Caddyfile всегда включает Basic Auth на весь сайт, включая `/api/health`. Отсутствие любой из этих переменных является ошибкой deploy до rollout. В hash кладется результат `caddy hash-password`, а не plaintext.
+
+Docker Compose интерполирует `$...` внутри `.env.production`, поэтому каждый `$` в bcrypt hash должен быть записан как `$$`:
 
 ```bash
-docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '<frontend-password>'
+docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '<frontend-password>' \
+  | sed 's/\$/$$/g'
 ```
 
-Значение `FRONTEND_BASIC_AUTH_PASSWORD_HASH` в `.env.production` нужно брать в одинарные кавычки, потому что bcrypt hash содержит `$`, а Docker Compose интерпретирует `$...` как подстановку переменных.
+Одинарные кавычки в `.env.production` недостаточны для этого compose path: hash должен быть именно escaped через `$$`, иначе Caddy получит испорченный password hash и frontend не стартует.
 
 `API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` обязательны для текущего production-контракта shared Basic Auth. Caddy проксирует `/api/*` в `api:8000` со strip префикса `/api` и пропускает `Authorization` header к backend.
 
@@ -169,6 +172,11 @@ if [ -z "$api_basic_auth_username" ] || [ -z "$api_basic_auth_password" ]; then
 fi
 if [ "$frontend_basic_auth_username" != "$api_basic_auth_username" ]; then
   echo "FRONTEND_BASIC_AUTH_USERNAME must match API_BASIC_AUTH_USERNAME for the MVP shared Basic Auth contract" >&2
+  exit 1
+fi
+hash_without_escaped_dollars="${frontend_basic_auth_password_hash//\$\$/}"
+if [[ "$hash_without_escaped_dollars" == *'$'* ]]; then
+  echo 'FRONTEND_BASIC_AUTH_PASSWORD_HASH must escape each $ as $$ for Docker Compose interpolation' >&2
   exit 1
 fi
 
@@ -265,6 +273,11 @@ if [ -z "$api_basic_auth_username" ] || [ -z "$api_basic_auth_password" ]; then
 fi
 if [ "$frontend_basic_auth_username" != "$api_basic_auth_username" ]; then
   echo "FRONTEND_BASIC_AUTH_USERNAME must match API_BASIC_AUTH_USERNAME for the MVP shared Basic Auth contract" >&2
+  exit 1
+fi
+hash_without_escaped_dollars="${frontend_basic_auth_password_hash//\$\$/}"
+if [[ "$hash_without_escaped_dollars" == *'$'* ]]; then
+  echo 'FRONTEND_BASIC_AUTH_PASSWORD_HASH must escape each $ as $$ for Docker Compose interpolation' >&2
   exit 1
 fi
 

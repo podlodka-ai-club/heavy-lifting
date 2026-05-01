@@ -163,6 +163,11 @@ jobs:
             echo "FRONTEND_BASIC_AUTH_USERNAME must match API_BASIC_AUTH_USERNAME for the MVP shared Basic Auth contract" >&2
             exit 1
           fi
+          hash_without_escaped_dollars="${frontend_basic_auth_password_hash//\$\$/}"
+          if [[ "$hash_without_escaped_dollars" == *'$'* ]]; then
+            echo 'FRONTEND_BASIC_AUTH_PASSWORD_HASH must escape each $ as $$ for Docker Compose interpolation' >&2
+            exit 1
+          fi
 
           docker compose --env-file .env.production -f docker-compose.prod.yml pull
           docker compose --env-file .env.production -f docker-compose.prod.yml run --interactive=false -T --rm bootstrap
