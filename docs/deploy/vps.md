@@ -89,7 +89,7 @@ GUNICORN_TIMEOUT=120
 
 `APP_PORT` задает внешний порт VPS для API. Если переменная не задана, production compose и deploy healthcheck используют `8000`. Внутри контейнера API остается на `0.0.0.0:8000`.
 
-`API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` включают HTTP Basic Auth guard для non-local запросов к API. Если одна из переменных не задана, guard отключается для совместимости с локальной разработкой. Запросы с `127.0.0.1` и `::1` обходят guard, чтобы локальные healthcheck и deploy-команды продолжали работать.
+`API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` включают HTTP Basic Auth guard для API. Если одна из переменных не задана, guard отключается для совместимости с локальной разработкой. Штатный deploy readiness читает эти две переменные из `.env.production` без вывода значений и отправляет Basic Auth credentials в `/health`, когда обе переменные настроены.
 
 ## Штатный deploy
 
@@ -105,30 +105,47 @@ Workflow запускается на `push` в `master` и вручную чер
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.prod.yml pull
-docker compose --env-file .env.production -f docker-compose.prod.yml run --rm bootstrap
+docker compose --env-file .env.production -f docker-compose.prod.yml run --interactive=false -T --rm bootstrap
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --remove-orphans
 
-APP_PORT=8000
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    APP_PORT=*)
-      APP_PORT="${line#APP_PORT=}"
-      APP_PORT="${APP_PORT%\"}"
-      APP_PORT="${APP_PORT#\"}"
-      APP_PORT="${APP_PORT%\'}"
-      APP_PORT="${APP_PORT#\'}"
-      APP_PORT="${APP_PORT:-8000}"
-      break
-      ;;
-  esac
-done < .env.production
+read_env_value() {
+  local env_key="$1"
+  local default_value="${2:-}"
+  local env_line
+  local env_value="$default_value"
+
+  while IFS= read -r env_line || [ -n "$env_line" ]; do
+    case "$env_line" in
+      "$env_key="*)
+        env_value="${env_line#"$env_key="}"
+        env_value="${env_value%\"}"
+        env_value="${env_value#\"}"
+        env_value="${env_value%\'}"
+        env_value="${env_value#\'}"
+        env_value="${env_value:-$default_value}"
+        break
+        ;;
+    esac
+  done < .env.production
+
+  printf '%s' "$env_value"
+}
+
+APP_PORT="$(read_env_value APP_PORT 8000)"
+api_basic_auth_username="$(read_env_value API_BASIC_AUTH_USERNAME)"
+api_basic_auth_password="$(read_env_value API_BASIC_AUTH_PASSWORD)"
+
+healthcheck_curl_args=(-fsS)
+if [ -n "$api_basic_auth_username" ] && [ -n "$api_basic_auth_password" ]; then
+  healthcheck_curl_args+=(--user "${api_basic_auth_username}:${api_basic_auth_password}")
+fi
 
 healthcheck_url="http://127.0.0.1:${APP_PORT}/health"
 ready=0
 attempt=1
 while [ "$attempt" -le 30 ]; do
   echo "Checking API readiness (${attempt}/30): ${healthcheck_url}"
-  if curl -fsS "$healthcheck_url"; then
+  if curl "${healthcheck_curl_args[@]}" "$healthcheck_url"; then
     ready=1
     break
   fi
@@ -147,6 +164,13 @@ Healthcheck URL снаружи VPS зависит от `APP_PORT` из `.env.pro
 
 ```text
 http://<vps-host>:<APP_PORT-or-8000>/health
+```
+
+Если Basic Auth включен, ручные проверки `/health` тоже должны передавать `API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD`:
+
+```bash
+curl -fsS --user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>' \
+  "http://<vps-host>:<APP_PORT-or-8000>/health"
 ```
 
 Риск: Basic Auth поверх plain HTTP на внешнем `APP_PORT` не дает TLS, поэтому логин и пароль видны на сетевом пути. Это слабый MVP guard, а не полноценная защита. Минимум - firewall allowlist на доверенные IP; лучше - reverse proxy с TLS и закрытый direct access к опубликованному порту.
@@ -180,6 +204,6 @@ done < .env.production
 curl -fsS "http://127.0.0.1:${APP_PORT}/health"
 ```
 
-Одиночный `curl` здесь является ручной приемкой после rollback. Штатный deploy использует bounded readiness wait, показанный выше.
+Одиночный `curl` здесь является ручной приемкой после rollback. Если Basic Auth включен, добавьте `--user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>'`. Штатный deploy использует bounded readiness wait, показанный выше, и добавляет Basic Auth автоматически при наличии обеих переменных в `.env.production`.
 
 Если rollback требует миграции схемы назад, это отдельная операция. Текущий MVP bootstrap рассчитан на подготовку текущей схемы, а не на downgrade.
