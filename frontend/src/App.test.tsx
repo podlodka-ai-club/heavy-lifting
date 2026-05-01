@@ -465,7 +465,7 @@ describe("App", () => {
 
   it("loads money v2 from direct URL through the economics API", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (input.toString() === "/api/economics") {
+      if (input.toString().startsWith("/api/economics")) {
         return jsonResponse(economicsSnapshot);
       }
 
@@ -479,7 +479,7 @@ describe("App", () => {
     expect(await screen.findByText("GET /economics")).toBeInTheDocument();
     expect(screen.getByText("$1,495.00")).toBeInTheDocument();
     expect(screen.getByText("TASK-10")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/economics");
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/economics"));
   });
 
   it("opens retro from the topbar and shows loading state", async () => {

@@ -211,8 +211,19 @@ export async function getFactorySnapshot(): Promise<FactorySnapshot> {
   return parseJsonResponse<FactorySnapshot>(response);
 }
 
-export async function getEconomicsSnapshot(): Promise<EconomicsSnapshot> {
-  const response = await fetch("/api/economics");
+export type EconomicsPeriodParams = {
+  from?: string;
+  to?: string;
+  bucket?: "day" | "week" | "month";
+};
+
+export async function getEconomicsSnapshot(period?: EconomicsPeriodParams): Promise<EconomicsSnapshot> {
+  const params = new URLSearchParams();
+  if (period?.from) params.set("from", period.from);
+  if (period?.to) params.set("to", period.to);
+  if (period?.bucket) params.set("bucket", period.bucket);
+  const qs = params.toString();
+  const response = await fetch(qs ? `/api/economics?${qs}` : "/api/economics");
   return parseJsonResponse<EconomicsSnapshot>(response);
 }
 
@@ -312,4 +323,34 @@ export async function listTasks(): Promise<TaskRecord[]> {
   const response = await fetch("/api/tasks");
   const payload = await parseJsonResponse<{ tasks: TaskRecord[] }>(response);
   return payload.tasks;
+}
+
+export type UsageBucket = {
+  entries_count: number;
+  tokens: { input: number; output: number; cached: number; total: number };
+  cost_usd: string;
+};
+
+export type StatsSnapshot = {
+  generated_at: string;
+  tasks: {
+    total: number;
+    by_status: Record<string, number>;
+    by_type: Record<string, number>;
+    by_type_and_status: Record<string, Record<string, number>>;
+  };
+  token_usage: {
+    entries_count: number;
+    estimated_entries_count: number;
+    tokens: { input: number; output: number; cached: number; total: number };
+    cost_usd: { total: string; estimated_share: string };
+    by_provider: Record<string, UsageBucket>;
+    by_model: Record<string, UsageBucket>;
+    by_task_type: Record<string, UsageBucket>;
+  };
+};
+
+export async function getStatsSnapshot(): Promise<StatsSnapshot> {
+  const response = await fetch("/api/stats");
+  return parseJsonResponse<StatsSnapshot>(response);
 }

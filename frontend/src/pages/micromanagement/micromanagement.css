@@ -297,3 +297,38 @@
   font-size: 0.85rem;
   padding: 0.5rem 0;
 }
+
+/* ── Task chain ─────────────────────────────────────────────────────────── */
+
+.mm-chain {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.mm-chain-node {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.mm-chain-arrow {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.mm-chain-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-soft);
+  border-radius: 5px;
+  padding: 0.25rem 0.5rem;
+}
+
+.mm-chain-current .mm-chain-pill {
+  border-color: var(--orange);
+  background: rgba(255, 131, 28, 0.08);
+}

@@ -8,6 +8,7 @@ import { HomePage } from "./pages/HomePage";
 import { MicromanagementPage } from "./pages/micromanagement/MicromanagementPage";
 import { RetroPage } from "./pages/retro/RetroPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
+import { StatsPage } from "./pages/stats/StatsPage";
 
 type Route =
   | "/"
@@ -17,6 +18,7 @@ type Route =
   | "/economics2"
   | "/retro"
   | "/micromanagement"
+  | "/stats"
   | "/settings";
 
 function getRoute(pathname: string): Route {
@@ -27,7 +29,8 @@ function getRoute(pathname: string): Route {
     pathname === "/economics" ||
     pathname === "/economics2" ||
     pathname === "/retro" ||
-    pathname === "/micromanagement"
+    pathname === "/micromanagement" ||
+    pathname === "/stats"
   ) {
     return pathname;
   }
@@ -99,6 +102,13 @@ export function App() {
             Micro
           </button>
           <button
+            className={route === "/stats" ? "nav-link active" : "nav-link"}
+            type="button"
+            onClick={() => navigate("/stats")}
+          >
+            Stats
+          </button>
+          <button
             className={route === "/settings" ? "nav-link active" : "nav-link"}
             type="button"
             onClick={() => navigate("/settings")}
@@ -114,6 +124,7 @@ export function App() {
       {route === "/economics2" ? <EconomicsPage2 /> : null}
       {route === "/retro" ? <RetroPage /> : null}
       {route === "/micromanagement" ? <MicromanagementPage /> : null}
+      {route === "/stats" ? <StatsPage /> : null}
       {route === "/" ? <HomePage /> : null}
     </div>
   );
