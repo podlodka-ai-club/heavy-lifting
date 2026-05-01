@@ -40,6 +40,8 @@ services:
         "-c",
         "exec uv run gunicorn 'backend.api.app:create_app()' --bind 0.0.0.0:8000 --workers $${WEB_CONCURRENCY:-2} --timeout $${GUNICORN_TIMEOUT:-120}",
       ]
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
     restart: unless-stopped
 
   frontend:
@@ -48,8 +50,9 @@ services:
       - .env.production
     depends_on:
       - api
-    ports:
-      - "${FRONTEND_PORT:-80}:80"
+    network_mode: host
+    extra_hosts:
+      - "api:127.0.0.1"
     restart: unless-stopped
 
   worker1:

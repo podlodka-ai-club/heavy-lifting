@@ -9,7 +9,7 @@
 - Рабочий каталог приложения: `/opt/heavy-lifting`.
 - Файл `/opt/heavy-lifting/.env.production` с production-переменными.
 - Открытый внешний HTTP-порт для frontend, по умолчанию `80`.
-- Закрытый внешний доступ к Postgres и API: production compose не публикует порты `5432` и `8000`.
+- Закрытый внешний доступ к Postgres и API: production compose не публикует порт `5432`, а backend bind для `8000` ограничен loopback.
 
 Каталог готовится один раз:
 
@@ -73,6 +73,7 @@ echo '<github-pat-with-read-packages>' | docker login ghcr.io -u '<github-userna
 APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:master
 FRONTEND_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting-frontend:master
 FRONTEND_PORT=80
+APP_PORT=8000
 
 FRONTEND_BASIC_AUTH_USERNAME=heavy
 FRONTEND_BASIC_AUTH_PASSWORD_HASH=$$2a$$14$$replace-with-caddy-hash
@@ -95,7 +96,9 @@ GUNICORN_TIMEOUT=120
 
 `FRONTEND_IMAGE` из файла нужен для ручных команд и rollback. Во время штатного GitHub Actions deploy workflow передает `FRONTEND_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting-frontend:sha-<commit>` явно.
 
-`FRONTEND_PORT` задает внешний HTTP-порт VPS для frontend и `/api/*` reverse proxy. Если переменная не задана, production compose и deploy healthcheck используют `80`. Внутри compose backend остается доступен только как `api:8000`; direct `http://<vps-host>:8000/*` больше не публикуется.
+`FRONTEND_PORT` задает HTTP listener Caddy на host network для frontend и `/api/*` reverse proxy. Если переменная не задана, production Caddy и deploy healthcheck используют `80`.
+
+`APP_PORT` задает loopback host bind backend API: `127.0.0.1:${APP_PORT:-8000}:8000`. Caddy в host network ходит в backend через `api:${APP_PORT:-8000}`, где `api` резолвится в `127.0.0.1`. Direct external `http://<vps-host>:8000/*` должен оставаться закрытым; backend доступен на VPS только через loopback.
 
 `FRONTEND_BASIC_AUTH_USERNAME` и `FRONTEND_BASIC_AUTH_PASSWORD_HASH` обязательны для production frontend: Caddyfile всегда включает Basic Auth на весь сайт, включая `/api/health`. Отсутствие любой из этих переменных является ошибкой deploy до rollout. В hash кладется результат `caddy hash-password`, а не plaintext.
 
@@ -108,7 +111,7 @@ docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '<frontend-pas
 
 Одинарные кавычки в `.env.production` недостаточны для этого compose path: hash должен быть именно escaped через `$$`, иначе Caddy получит испорченный password hash и frontend не стартует.
 
-`API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` обязательны для текущего production-контракта shared Basic Auth. Caddy проксирует `/api/*` в `api:8000` со strip префикса `/api` и пропускает `Authorization` header к backend.
+`API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` обязательны для текущего production-контракта shared Basic Auth. Caddy проксирует `/api/*` в `api:${APP_PORT:-8000}` со strip префикса `/api` и пропускает `Authorization` header к backend.
 
 MVP-контракт Basic Auth: backend API Basic Auth должен использовать тот же plaintext username/password, что и frontend Basic Auth. `FRONTEND_BASIC_AUTH_USERNAME` должен совпадать с `API_BASIC_AUTH_USERNAME`, а `FRONTEND_BASIC_AUTH_PASSWORD_HASH` должен быть hash от того же plaintext password, который лежит в `API_BASIC_AUTH_PASSWORD`. Deploy readiness проверяет `/api/health` через `--user API_BASIC_AUTH_USERNAME:API_BASIC_AUTH_PASSWORD`, но не может проверить hash против plaintext напрямую, поэтому это операционная обязанность того, кто готовит `.env.production`; ошибка здесь приведет к тому, что browser-запросы к `/api/*` пройдут только один из двух guard.
 
@@ -220,6 +223,17 @@ curl -fsS --user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>' \
 ```
 
 Риск: Basic Auth поверх plain HTTP на внешнем `FRONTEND_PORT` не дает TLS, поэтому логин и пароль видны на сетевом пути. Это слабый MVP guard, а не полноценная защита. Минимум - firewall allowlist на доверенные IP; лучше - TLS и закрытый direct access ко всем внутренним сервисам.
+
+### Troubleshooting: frontend static assets зависают
+
+Production frontend работает в `network_mode: host`, поэтому Caddy слушает `FRONTEND_PORT` напрямую на сетевом namespace VPS. Это убирает Docker DNAT с публичного frontend path и не оставляет `ports` mapping у frontend.
+
+Если большие static assets снаружи VPS зависают или обрываются, проверьте:
+
+- `docker compose --env-file .env.production -f docker-compose.prod.yml config` не должен показывать `ports` у service `frontend`;
+- `frontend` должен иметь `network_mode: host`;
+- `api` должен публиковать только `127.0.0.1:${APP_PORT:-8000}:8000`;
+- внешний `http://<vps-host>:8000/*` должен быть недоступен, а `http://127.0.0.1:${APP_PORT:-8000}/health` на VPS должен отвечать только локально.
 
 ## Rollback
 
