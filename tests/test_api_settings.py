@@ -32,6 +32,7 @@ def test_get_settings_lists_runtime_settings_ordered_by_display_order(session_fa
     assert payload is not None
     assert [setting["setting_key"] for setting in payload["settings"]] == [
         "tracker_fetch_limit",
+        "execute_worker_batch_size",
         "pr_feedback_fetch_limit",
         "local_agent_provider",
         "local_agent_model",
@@ -40,6 +41,7 @@ def test_get_settings_lists_runtime_settings_ordered_by_display_order(session_fa
     ]
     assert [setting["value"] for setting in payload["settings"]] == [
         "100",
+        "1",
         "100",
         "openai",
         "gpt-5.4",
@@ -68,6 +70,7 @@ def test_get_settings_bootstraps_missing_application_settings_table(tmp_path) ->
     assert payload is not None
     assert [setting["setting_key"] for setting in payload["settings"]] == [
         "tracker_fetch_limit",
+        "execute_worker_batch_size",
         "pr_feedback_fetch_limit",
         "local_agent_provider",
         "local_agent_model",

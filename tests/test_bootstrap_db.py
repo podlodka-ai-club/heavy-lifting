@@ -99,6 +99,7 @@ def test_bootstrap_schema_seeds_default_application_settings(tmp_path) -> None:
 
     assert [setting.setting_key for setting in settings] == [
         "tracker_fetch_limit",
+        "execute_worker_batch_size",
         "pr_feedback_fetch_limit",
         "local_agent_provider",
         "local_agent_model",
@@ -107,6 +108,7 @@ def test_bootstrap_schema_seeds_default_application_settings(tmp_path) -> None:
     ]
     assert [setting.value for setting in settings] == [
         "100",
+        "1",
         "100",
         "openai",
         "gpt-5.4",
@@ -141,7 +143,7 @@ def test_bootstrap_schema_preserves_existing_application_setting_value(tmp_path)
             .one()
         )
 
-    assert setting_count == 6
+    assert setting_count == 7
     assert setting.value == "25"
     assert setting.description == "Maximum tracker tasks fetched by worker1 in one poll."
 

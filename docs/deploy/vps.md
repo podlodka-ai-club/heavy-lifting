@@ -8,7 +8,8 @@
 - Пользователь для деплоя, например `heavy-lifting`, с правом запускать Docker.
 - Рабочий каталог приложения: `/opt/heavy-lifting`.
 - Файл `/opt/heavy-lifting/.env.production` с production-переменными.
-- Закрытый внешний доступ к Postgres: production compose не публикует порт `5432`.
+- Открытый внешний HTTP-порт для frontend, по умолчанию `80`.
+- Закрытый внешний доступ к Postgres и API: production compose не публикует порты `5432` и `8000`.
 
 Каталог готовится один раз:
 
@@ -51,13 +52,14 @@ Runtime-секреты приложения не передаются через
 
 ## GHCR на VPS
 
-GitHub Actions публикует image в:
+GitHub Actions публикует images в:
 
 ```text
 ghcr.io/podlodka-ai-club/heavy-lifting
+ghcr.io/podlodka-ai-club/heavy-lifting-frontend
 ```
 
-На VPS нужен GitHub PAT с правом `read:packages`, чтобы Docker мог выполнить pull из GHCR:
+На VPS нужен GitHub PAT с правом `read:packages`, чтобы Docker мог выполнить pull обоих packages из GHCR:
 
 ```bash
 echo '<github-pat-with-read-packages>' | docker login ghcr.io -u '<github-username>' --password-stdin
@@ -69,7 +71,11 @@ echo '<github-pat-with-read-packages>' | docker login ghcr.io -u '<github-userna
 
 ```dotenv
 APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:master
-APP_PORT=8000
+FRONTEND_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting-frontend:master
+FRONTEND_PORT=80
+
+FRONTEND_BASIC_AUTH_USERNAME=heavy
+FRONTEND_BASIC_AUTH_PASSWORD_HASH='$2a$14$replace-with-caddy-hash'
 API_BASIC_AUTH_USERNAME=heavy
 API_BASIC_AUTH_PASSWORD=lifting
 
@@ -87,9 +93,28 @@ GUNICORN_TIMEOUT=120
 
 `APP_IMAGE` из файла нужен для ручных команд и rollback. Во время штатного GitHub Actions deploy workflow передает `APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:sha-<commit>` явно, чтобы поднять ровно собранный commit.
 
-`APP_PORT` задает внешний порт VPS для API. Если переменная не задана, production compose и deploy healthcheck используют `8000`. Внутри контейнера API остается на `0.0.0.0:8000`.
+`FRONTEND_IMAGE` из файла нужен для ручных команд и rollback. Во время штатного GitHub Actions deploy workflow передает `FRONTEND_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting-frontend:sha-<commit>` явно.
 
-`API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` включают HTTP Basic Auth guard для API. Если одна из переменных не задана, guard отключается для совместимости с локальной разработкой. Штатный deploy readiness читает эти две переменные из `.env.production` без вывода значений и отправляет Basic Auth credentials в `/health`, когда обе переменные настроены.
+`FRONTEND_PORT` задает внешний HTTP-порт VPS для frontend и `/api/*` reverse proxy. Если переменная не задана, production compose и deploy healthcheck используют `80`. Внутри compose backend остается доступен только как `api:8000`; direct `http://<vps-host>:8000/*` больше не публикуется.
+
+`FRONTEND_BASIC_AUTH_USERNAME` и `FRONTEND_BASIC_AUTH_PASSWORD_HASH` обязательны для production frontend: Caddyfile всегда включает Basic Auth на весь сайт, включая `/api/health`. Отсутствие любой из этих переменных является ошибкой deploy до rollout. В hash кладется результат `caddy hash-password`, а не plaintext:
+
+```bash
+docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '<frontend-password>'
+```
+
+Значение `FRONTEND_BASIC_AUTH_PASSWORD_HASH` в `.env.production` нужно брать в одинарные кавычки, потому что bcrypt hash содержит `$`, а Docker Compose интерпретирует `$...` как подстановку переменных.
+
+`API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD` обязательны для текущего production-контракта shared Basic Auth. Caddy проксирует `/api/*` в `api:8000` со strip префикса `/api` и пропускает `Authorization` header к backend.
+
+MVP-контракт Basic Auth: backend API Basic Auth должен использовать тот же plaintext username/password, что и frontend Basic Auth. `FRONTEND_BASIC_AUTH_USERNAME` должен совпадать с `API_BASIC_AUTH_USERNAME`, а `FRONTEND_BASIC_AUTH_PASSWORD_HASH` должен быть hash от того же plaintext password, который лежит в `API_BASIC_AUTH_PASSWORD`. Deploy readiness проверяет `/api/health` через `--user API_BASIC_AUTH_USERNAME:API_BASIC_AUTH_PASSWORD`, но не может проверить hash против plaintext напрямую, поэтому это операционная обязанность того, кто готовит `.env.production`; ошибка здесь приведет к тому, что browser-запросы к `/api/*` пройдут только один из двух guard.
+
+Публичные URL после deploy:
+
+```text
+http://<vps-host-or-domain>/        -> frontend
+http://<vps-host-or-domain>/api/*   -> backend через frontend reverse proxy
+```
 
 ## Штатный deploy
 
@@ -98,15 +123,108 @@ Workflow запускается на `push` в `master` и вручную чер
 Порядок действий:
 
 1. Выполняет `make lint`, `make typecheck`, `make test`.
-2. Логинится в `ghcr.io` через `GITHUB_TOKEN`.
-3. Собирает и публикует image с тегами `master` и `sha-<commit>`.
-4. Копирует `docker-compose.prod.yml` в `VPS_APP_DIR`.
-5. На VPS выполняет:
+2. Выполняет frontend-проверки: `make frontend-install`, `make frontend-test`, `make frontend-build`.
+3. Логинится в `ghcr.io` через `GITHUB_TOKEN`.
+4. Собирает и публикует backend/frontend images с тегами `master` и `sha-<commit>`.
+5. Копирует `docker-compose.prod.yml` в `VPS_APP_DIR`.
+6. На VPS выполняет:
 
 ```bash
+read_env_value() {
+  local env_key="$1"
+  local default_value="${2:-}"
+  local env_line
+  local env_value="$default_value"
+
+  while IFS= read -r env_line || [ -n "$env_line" ]; do
+    case "$env_line" in
+      "$env_key="*)
+        env_value="${env_line#"$env_key="}"
+        env_value="${env_value%\"}"
+        env_value="${env_value#\"}"
+        env_value="${env_value%\'}"
+        env_value="${env_value#\'}"
+        env_value="${env_value:-$default_value}"
+        break
+        ;;
+    esac
+  done < .env.production
+
+  printf '%s' "$env_value"
+}
+
+FRONTEND_PORT="$(read_env_value FRONTEND_PORT 80)"
+frontend_basic_auth_username="$(read_env_value FRONTEND_BASIC_AUTH_USERNAME)"
+frontend_basic_auth_password_hash="$(read_env_value FRONTEND_BASIC_AUTH_PASSWORD_HASH)"
+api_basic_auth_username="$(read_env_value API_BASIC_AUTH_USERNAME)"
+api_basic_auth_password="$(read_env_value API_BASIC_AUTH_PASSWORD)"
+
+if [ -z "$frontend_basic_auth_username" ] || [ -z "$frontend_basic_auth_password_hash" ]; then
+  echo "FRONTEND_BASIC_AUTH_USERNAME and FRONTEND_BASIC_AUTH_PASSWORD_HASH are required for production frontend Basic Auth" >&2
+  exit 1
+fi
+if [ -z "$api_basic_auth_username" ] || [ -z "$api_basic_auth_password" ]; then
+  echo "API_BASIC_AUTH_USERNAME and API_BASIC_AUTH_PASSWORD are required for the MVP shared Basic Auth contract" >&2
+  exit 1
+fi
+if [ "$frontend_basic_auth_username" != "$api_basic_auth_username" ]; then
+  echo "FRONTEND_BASIC_AUTH_USERNAME must match API_BASIC_AUTH_USERNAME for the MVP shared Basic Auth contract" >&2
+  exit 1
+fi
+
 docker compose --env-file .env.production -f docker-compose.prod.yml pull
 docker compose --env-file .env.production -f docker-compose.prod.yml run --interactive=false -T --rm bootstrap
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --remove-orphans
+
+healthcheck_curl_args=(-fsS --user "${api_basic_auth_username}:${api_basic_auth_password}")
+healthcheck_url="http://127.0.0.1:${FRONTEND_PORT}/api/health"
+ready=0
+attempt=1
+while [ "$attempt" -le 30 ]; do
+  echo "Checking frontend proxy readiness (${attempt}/30): ${healthcheck_url}"
+  if curl "${healthcheck_curl_args[@]}" "$healthcheck_url"; then
+    ready=1
+    break
+  fi
+  sleep 2
+  attempt=$((attempt + 1))
+done
+
+if [ "$ready" -ne 1 ]; then
+  echo "Frontend proxy did not become ready before timeout" >&2
+  docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=100 frontend >&2 || true
+  docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=100 api >&2 || true
+  exit 1
+fi
+```
+
+Healthcheck URL снаружи VPS зависит от `FRONTEND_PORT` из `.env.production`; если он не задан, используется порт `80`:
+
+```text
+http://<vps-host>:<FRONTEND_PORT-or-80>/api/health
+```
+
+Ручные проверки `/api/health` должны передавать `API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD`; эти plaintext credentials должны соответствовать username и password, из которого получен `FRONTEND_BASIC_AUTH_PASSWORD_HASH`. Эти credentials не печатаются штатным deploy workflow:
+
+```bash
+curl -fsS --user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>' \
+  "http://<vps-host>:<FRONTEND_PORT-or-80>/api/health"
+```
+
+Риск: Basic Auth поверх plain HTTP на внешнем `FRONTEND_PORT` не дает TLS, поэтому логин и пароль видны на сетевом пути. Это слабый MVP guard, а не полноценная защита. Минимум - firewall allowlist на доверенные IP; лучше - TLS и закрытый direct access ко всем внутренним сервисам.
+
+## Rollback
+
+Rollback выполняется сменой `APP_IMAGE` и `FRONTEND_IMAGE` на нужные immutable tags:
+
+```bash
+cd /opt/heavy-lifting
+APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:sha-<commit> \
+FRONTEND_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting-frontend:sha-<commit> \
+  docker compose --env-file .env.production -f docker-compose.prod.yml pull
+APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:sha-<commit> \
+FRONTEND_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting-frontend:sha-<commit> \
+  docker compose --env-file .env.production -f docker-compose.prod.yml up -d --remove-orphans
 
 read_env_value() {
   local env_key="$1"
@@ -131,79 +249,29 @@ read_env_value() {
   printf '%s' "$env_value"
 }
 
-APP_PORT="$(read_env_value APP_PORT 8000)"
+FRONTEND_PORT="$(read_env_value FRONTEND_PORT 80)"
+frontend_basic_auth_username="$(read_env_value FRONTEND_BASIC_AUTH_USERNAME)"
+frontend_basic_auth_password_hash="$(read_env_value FRONTEND_BASIC_AUTH_PASSWORD_HASH)"
 api_basic_auth_username="$(read_env_value API_BASIC_AUTH_USERNAME)"
 api_basic_auth_password="$(read_env_value API_BASIC_AUTH_PASSWORD)"
 
-healthcheck_curl_args=(-fsS)
-if [ -n "$api_basic_auth_username" ] && [ -n "$api_basic_auth_password" ]; then
-  healthcheck_curl_args+=(--user "${api_basic_auth_username}:${api_basic_auth_password}")
-fi
-
-healthcheck_url="http://127.0.0.1:${APP_PORT}/health"
-ready=0
-attempt=1
-while [ "$attempt" -le 30 ]; do
-  echo "Checking API readiness (${attempt}/30): ${healthcheck_url}"
-  if curl "${healthcheck_curl_args[@]}" "$healthcheck_url"; then
-    ready=1
-    break
-  fi
-  sleep 2
-  attempt=$((attempt + 1))
-done
-
-if [ "$ready" -ne 1 ]; then
-  echo "API did not become ready before timeout" >&2
-  docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=100 api >&2 || true
+if [ -z "$frontend_basic_auth_username" ] || [ -z "$frontend_basic_auth_password_hash" ]; then
+  echo "FRONTEND_BASIC_AUTH_USERNAME and FRONTEND_BASIC_AUTH_PASSWORD_HASH are required for production frontend Basic Auth" >&2
   exit 1
 fi
+if [ -z "$api_basic_auth_username" ] || [ -z "$api_basic_auth_password" ]; then
+  echo "API_BASIC_AUTH_USERNAME and API_BASIC_AUTH_PASSWORD are required for the MVP shared Basic Auth contract" >&2
+  exit 1
+fi
+if [ "$frontend_basic_auth_username" != "$api_basic_auth_username" ]; then
+  echo "FRONTEND_BASIC_AUTH_USERNAME must match API_BASIC_AUTH_USERNAME for the MVP shared Basic Auth contract" >&2
+  exit 1
+fi
+
+healthcheck_curl_args=(-fsS --user "${api_basic_auth_username}:${api_basic_auth_password}")
+curl "${healthcheck_curl_args[@]}" "http://127.0.0.1:${FRONTEND_PORT}/api/health"
 ```
 
-Healthcheck URL снаружи VPS зависит от `APP_PORT` из `.env.production`; если он не задан, используется порт `8000`:
-
-```text
-http://<vps-host>:<APP_PORT-or-8000>/health
-```
-
-Если Basic Auth включен, ручные проверки `/health` тоже должны передавать `API_BASIC_AUTH_USERNAME` и `API_BASIC_AUTH_PASSWORD`:
-
-```bash
-curl -fsS --user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>' \
-  "http://<vps-host>:<APP_PORT-or-8000>/health"
-```
-
-Риск: Basic Auth поверх plain HTTP на внешнем `APP_PORT` не дает TLS, поэтому логин и пароль видны на сетевом пути. Это слабый MVP guard, а не полноценная защита. Минимум - firewall allowlist на доверенные IP; лучше - reverse proxy с TLS и закрытый direct access к опубликованному порту.
-
-## Rollback
-
-Rollback выполняется сменой `APP_IMAGE` на нужный immutable tag:
-
-```bash
-cd /opt/heavy-lifting
-APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:sha-<commit> \
-  docker compose --env-file .env.production -f docker-compose.prod.yml pull
-APP_IMAGE=ghcr.io/podlodka-ai-club/heavy-lifting:sha-<commit> \
-  docker compose --env-file .env.production -f docker-compose.prod.yml up -d --remove-orphans
-
-APP_PORT=8000
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    APP_PORT=*)
-      APP_PORT="${line#APP_PORT=}"
-      APP_PORT="${APP_PORT%\"}"
-      APP_PORT="${APP_PORT#\"}"
-      APP_PORT="${APP_PORT%\'}"
-      APP_PORT="${APP_PORT#\'}"
-      APP_PORT="${APP_PORT:-8000}"
-      break
-      ;;
-  esac
-done < .env.production
-
-curl -fsS "http://127.0.0.1:${APP_PORT}/health"
-```
-
-Одиночный `curl` здесь является ручной приемкой после rollback. Если Basic Auth включен, добавьте `--user '<API_BASIC_AUTH_USERNAME>:<API_BASIC_AUTH_PASSWORD>'`. Штатный deploy использует bounded readiness wait, показанный выше, и добавляет Basic Auth автоматически при наличии обеих переменных в `.env.production`.
+Одиночный `curl` здесь является ручной приемкой после rollback. Штатный deploy использует bounded readiness wait, показанный выше. Readiness и rollback используют `API_BASIC_AUTH_USERNAME`/`API_BASIC_AUTH_PASSWORD` и требуют совпадения username с `FRONTEND_BASIC_AUTH_USERNAME`; hash должен быть получен из того же plaintext password.
 
 Если rollback требует миграции схемы назад, это отдельная операция. Текущий MVP bootstrap рассчитан на подготовку текущей схемы, а не на downgrade.

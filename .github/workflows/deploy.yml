@@ -12,6 +12,7 @@ permissions:
 
 env:
   APP_IMAGE_REPOSITORY: ghcr.io/podlodka-ai-club/heavy-lifting
+  FRONTEND_IMAGE_REPOSITORY: ghcr.io/podlodka-ai-club/heavy-lifting-frontend
 
 jobs:
   deploy:
@@ -20,6 +21,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,22 +49,44 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Install frontend dependencies
+        run: make frontend-install
+
+      - name: Test frontend
+        run: make frontend-test
+
+      - name: Build frontend
+        run: make frontend-build
+
       - name: Log in to GHCR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Build image
+      - name: Build backend image
         run: |
           docker build \
             --tag "${APP_IMAGE_REPOSITORY}:master" \
             --tag "${APP_IMAGE_REPOSITORY}:sha-${GITHUB_SHA}" \
             .
 
-      - name: Push image
+      - name: Build frontend image
+        run: |
+          docker build \
+            --file frontend/Dockerfile \
+            --tag "${FRONTEND_IMAGE_REPOSITORY}:master" \
+            --tag "${FRONTEND_IMAGE_REPOSITORY}:sha-${GITHUB_SHA}" \
+            frontend
+
+      - name: Push backend image
         run: |
           docker push "${APP_IMAGE_REPOSITORY}:master"
           docker push "${APP_IMAGE_REPOSITORY}:sha-${GITHUB_SHA}"
+
+      - name: Push frontend image
+        run: |
+          docker push "${FRONTEND_IMAGE_REPOSITORY}:master"
+          docker push "${FRONTEND_IMAGE_REPOSITORY}:sha-${GITHUB_SHA}"
 
       - name: Configure SSH
         env:
@@ -72,6 +102,7 @@ jobs:
       - name: Deploy to VPS
         env:
           APP_IMAGE: ghcr.io/podlodka-ai-club/heavy-lifting:sha-${{ github.sha }}
+          FRONTEND_IMAGE: ghcr.io/podlodka-ai-club/heavy-lifting-frontend:sha-${{ github.sha }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
@@ -85,15 +116,11 @@ jobs:
           ssh -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p \"$VPS_APP_DIR\""
           scp -P "$SSH_PORT" docker-compose.prod.yml "$SSH_TARGET:$VPS_APP_DIR/docker-compose.prod.yml"
 
-          ssh -p "$SSH_PORT" "$SSH_TARGET" "APP_IMAGE='$APP_IMAGE' VPS_APP_DIR='$VPS_APP_DIR' bash -s" <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_TARGET" "APP_IMAGE='$APP_IMAGE' FRONTEND_IMAGE='$FRONTEND_IMAGE' VPS_APP_DIR='$VPS_APP_DIR' bash -s" <<'REMOTE'
           set -euo pipefail
 
           cd "$VPS_APP_DIR"
           test -f .env.production
-
-          docker compose --env-file .env.production -f docker-compose.prod.yml pull
-          docker compose --env-file .env.production -f docker-compose.prod.yml run --interactive=false -T --rm bootstrap
-          docker compose --env-file .env.production -f docker-compose.prod.yml up -d --remove-orphans
 
           read_env_value() {
             local env_key="$1"
@@ -118,20 +145,35 @@ jobs:
             printf '%s' "$env_value"
           }
 
-          APP_PORT="$(read_env_value APP_PORT 8000)"
+          FRONTEND_PORT="$(read_env_value FRONTEND_PORT 80)"
+          frontend_basic_auth_username="$(read_env_value FRONTEND_BASIC_AUTH_USERNAME)"
+          frontend_basic_auth_password_hash="$(read_env_value FRONTEND_BASIC_AUTH_PASSWORD_HASH)"
           api_basic_auth_username="$(read_env_value API_BASIC_AUTH_USERNAME)"
           api_basic_auth_password="$(read_env_value API_BASIC_AUTH_PASSWORD)"
 
-          healthcheck_curl_args=(-fsS)
-          if [ -n "$api_basic_auth_username" ] && [ -n "$api_basic_auth_password" ]; then
-            healthcheck_curl_args+=(--user "${api_basic_auth_username}:${api_basic_auth_password}")
+          if [ -z "$frontend_basic_auth_username" ] || [ -z "$frontend_basic_auth_password_hash" ]; then
+            echo "FRONTEND_BASIC_AUTH_USERNAME and FRONTEND_BASIC_AUTH_PASSWORD_HASH are required for production frontend Basic Auth" >&2
+            exit 1
+          fi
+          if [ -z "$api_basic_auth_username" ] || [ -z "$api_basic_auth_password" ]; then
+            echo "API_BASIC_AUTH_USERNAME and API_BASIC_AUTH_PASSWORD are required for the MVP shared Basic Auth contract" >&2
+            exit 1
+          fi
+          if [ "$frontend_basic_auth_username" != "$api_basic_auth_username" ]; then
+            echo "FRONTEND_BASIC_AUTH_USERNAME must match API_BASIC_AUTH_USERNAME for the MVP shared Basic Auth contract" >&2
+            exit 1
           fi
 
-          healthcheck_url="http://127.0.0.1:${APP_PORT}/health"
+          docker compose --env-file .env.production -f docker-compose.prod.yml pull
+          docker compose --env-file .env.production -f docker-compose.prod.yml run --interactive=false -T --rm bootstrap
+          docker compose --env-file .env.production -f docker-compose.prod.yml up -d --remove-orphans
+
+          healthcheck_curl_args=(-fsS --user "${api_basic_auth_username}:${api_basic_auth_password}")
+          healthcheck_url="http://127.0.0.1:${FRONTEND_PORT}/api/health"
           ready=0
           attempt=1
           while [ "$attempt" -le 30 ]; do
-            echo "Checking API readiness (${attempt}/30): ${healthcheck_url}"
+            echo "Checking frontend proxy readiness (${attempt}/30): ${healthcheck_url}"
             if curl "${healthcheck_curl_args[@]}" "$healthcheck_url"; then
               ready=1
               break
@@ -141,7 +183,8 @@ jobs:
           done
 
           if [ "$ready" -ne 1 ]; then
-            echo "API did not become ready before timeout" >&2
+            echo "Frontend proxy did not become ready before timeout" >&2
+            docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=100 frontend >&2 || true
             docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=100 api >&2 || true
             exit 1
           fi

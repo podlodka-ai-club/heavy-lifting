@@ -34,14 +34,22 @@ services:
 
   api:
     <<: *app
-    ports:
-      - "${APP_PORT:-8000}:8000"
     command:
       [
         "sh",
         "-c",
         "exec uv run gunicorn 'backend.api.app:create_app()' --bind 0.0.0.0:8000 --workers $${WEB_CONCURRENCY:-2} --timeout $${GUNICORN_TIMEOUT:-120}",
       ]
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}
+    env_file:
+      - .env.production
+    depends_on:
+      - api
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
     restart: unless-stopped
 
   worker1:
