@@ -10,6 +10,7 @@ class AgentRunRequest:
     task_context: EffectiveTaskContext
     workspace_path: str
     metadata: dict[str, object] = field(default_factory=dict)
+    prompt_override: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

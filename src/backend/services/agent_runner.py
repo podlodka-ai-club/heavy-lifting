@@ -138,7 +138,7 @@ class CliAgentRunner:
     config: CliAgentRunnerConfig
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
-        prompt = self._build_prompt(request)
+        prompt = request.prompt_override or self._build_prompt(request)
         command = self._build_command(request=request, prompt=prompt)
         logger = _runner_logger(
             request,
