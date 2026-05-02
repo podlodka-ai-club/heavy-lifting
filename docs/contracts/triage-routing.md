@@ -71,9 +71,9 @@ The "only estimate" scenario is a routing outcome, not a separate business task 
 
 `reply_with_estimate_only` is used when the intake explicitly asks for estimation or take-in-work assessment, and triage has enough information to answer that question without launching research or implementation.
 
-In the current MVP runtime, estimate-only intake is detected with an explicit text heuristic taken from the observed CLI verification flow: the normalized tracker title, description, or step instructions must contain both an estimate marker such as `story point`, `estimate only`, or `оцен...` and a no-code marker such as `do not modify code`, `without code changes`, or `не изменять код`.
+A legacy text heuristic (`_should_skip_scm_artifacts` matching `story point` together with `do not modify code` markers) remains in the worker for backwards compatibility but is deprecated. The current MVP runtime distinguishes triage and implementation through `input_payload.action` rather than free-text matching: `worker1` (`tracker_intake`) sets `action = "triage"` on the first execute task, and `worker2` routes that task into the dedicated triage path that never touches branches, commits, or PRs regardless of the description content.
 
-When that heuristic matches, `worker2` still runs the agent once to produce the estimate content, but the pipeline skips branch creation, commit, push, and PR creation and proceeds directly to a downstream `deliver` task.
+The deprecated heuristic will be removed once all callers migrate to the `action`-based path; until then it is logged as a fallback but does not affect routing for tasks that already carry an explicit `action` value.
 
 ## Routing Matrix
 
@@ -98,24 +98,73 @@ When multiple signals conflict, triage resolves them in this priority order:
 
 Rejection wins over clarification when both apply. If a request is clearly prohibited or out of scope, triage should reject it rather than ask for more detail.
 
+## Story Point Estimation
+
+Triage produces an estimate as one of six allowed Story Point values: `1`, `2`, `3`, `5`, `8`, `13`. No other values are valid; the agent prompt forbids interpolation such as `4`, `6`, or `10`.
+
+The Story Point value drives downstream routing and tracker writes:
+
+| Story Points | State                                          | Routing                                   | Sibling impl-execute? | Tracker labels (added)        | `delivery.escalation_kind` |
+| ------------ | ---------------------------------------------- | ----------------------------------------- | --------------------- | ----------------------------- | -------------------------- |
+| 1            | Zero-shot, all context available               | `route_to_implementation`                 | yes                   | `sp:1`, `triage:ready`        | `null`                     |
+| 2            | Local dependencies (1-2 files)                 | `route_to_implementation`                 | yes                   | `sp:2`, `triage:ready`        | `null`                     |
+| 3            | Multiple modules, edge cases, dependency graph | `route_to_implementation`                 | yes                   | `sp:3`, `triage:ready`        | `null`                     |
+| 5            | Information deficit                            | `reply_with_clarification` (RFI)          | no                    | `sp:5`, `triage:rfi`          | `rfi`                      |
+| 8            | Macro-task / epic                              | reply with decomposition plan             | no                    | `sp:8`, `triage:split`        | `decomposition`            |
+| 13           | Architectural ambiguity                        | hard block, escalate to system design     | no                    | `sp:13`, `triage:block`       | `system_design`            |
+
+For Story Points `1`, `2`, or `3`, triage stores a Handover Brief in `result_payload.metadata.handover_brief` (full markdown) and copies the same text inline into the new sibling implementation task as `input_payload.handoff.brief_markdown`. The implementation worker reads this brief through `EffectiveTaskContext.handover_brief` (resolved primarily from the inline handoff, with a repository fallback to the originating triage task).
+
+For Story Points `5`, `8`, or `13`, triage produces a tracker-facing markdown comment (`## RFI`, `## Decomposition`, or `## Needs System Design`) and stores it in `result_payload.delivery.comment_body`. No follow-up executable task is created for these escalations; the next triage cycle starts only when the tracker user edits the issue (detected through a content hash; see `## Re-Triage Protocol`).
+
+The resulting executable tasks form a sibling structure under one `fetch` parent:
+
+```
+fetch
+  |-- execute(action=triage, DONE)
+  |     `-- deliver (tracker labels + comment, no status update)
+  `-- execute(action=implementation, NEW)         <-- only for SP 1/2/3
+        `-- deliver (PR summary, may update status to DONE)
+```
+
+The implementation execute is a sibling of triage (both have `parent_id = fetch.id`), not a child. This avoids implementation and its deliver picking up the triage result through `ContextBuilder._find_relevant_execute_for_current`.
+
+## Tracker State Semantics
+
+Triage never updates the tracker issue status itself. The triage `deliver` task sets `result_payload.delivery.tracker_status = null`, so `worker3` skips `update_status` and only calls `add_comment` and `update_estimate`. The tracker issue stays in its incoming state until a later step (typically the implementation `deliver`) explicitly closes it.
+
+Special workflow states such as "Needs Decomposition" or "Needs System Design" are expressed through `delivery.tracker_labels` (`triage:split`, `triage:block`) and a tracker comment, not through new `TaskStatus` enum values. The internal `tasks.status` column remains in the base `{new, processing, done, failed}` set: a successful triage resolves to `DONE` regardless of the Story Point outcome, because the operation completed; the lack of follow-up implementation is encoded in the routing and delivery sections of the payload.
+
+## Re-Triage Protocol
+
+After an SP `5/8/13` escalation, the implementation flow does not continue automatically. The tracker user must edit the issue (title, description, acceptance criteria, or attached references) for a new triage cycle to start. The orchestrator detects user edits with a SHA-256 content hash over the user-controlled fields of `TrackerTask.context`, excluding any reference whose `TaskLink.origin == "own_write"` (so the orchestrator's own attachments and comments cannot trigger a self-loop).
+
+The hash is stored in `fetch.context.metadata.last_triage_user_content_hash`. When `tracker_intake` ingests an existing fetch task and the incoming hash differs from the stored value, the orchestrator refreshes `fetch.context` to the latest snapshot and either updates a pending `NEW` triage execute in place or creates a new one, depending on impl-execute state. Reopen of the tracker issue (status returning to `NEW` after a previous `DONE` implementation) is treated as an independent trigger that can also start a new triage cycle, gated to fire only once per closed pipeline.
+
+The full re-triage decision tree (pending vs processing vs done implementation, reopen detection, deliver-window race protection) is materialized in `tracker_intake._ingest_tracker_task` and exercised by the integration tests under `tests/workers/test_tracker_intake_retriage.py`.
+
 ## Result Payload Expectations
 
 The triage step must populate at least:
 
 - `classification.task_kind`
 - `classification.signals`
-- `estimate.story_points`
+- `estimate.story_points` (one of `1/2/3/5/8/13`)
 - `estimate.complexity`
 - `estimate.can_take_in_work`
+- `estimate.blocking_reasons`
 - `routing.next_task_type`
 - `routing.next_role`
 - `routing.create_followup_task`
-- `delivery.tracker_status`
+- `delivery.tracker_status` (always `null` for triage outcomes)
+- `delivery.tracker_estimate` (the Story Point value)
+- `delivery.tracker_labels` (`sp:N` plus one of `triage:ready/rfi/split/block`)
+- `delivery.escalation_kind` (`null` for SP `1/2/3`; `rfi`/`decomposition`/`system_design` otherwise)
 - `delivery.comment_body`
 
-If triage stops at a tracker reply, `routing.next_task_type` should be `deliver`, `routing.next_role` should be `deliver`, and `routing.create_followup_task` should be `true`.
+If triage stops at a tracker reply (SP `5/8/13`), `routing.next_task_type` should be `deliver`, `routing.next_role` should be `deliver`, and `routing.create_followup_task` should be `false`.
 
-If triage routes to another executable step, `routing.next_task_type` should be `execute`, `routing.next_role` should reflect the next action, and `delivery` should still contain enough tracker-facing context for later delivery if needed.
+If triage routes to implementation (SP `1/2/3`), `routing.next_task_type` should be `execute`, `routing.next_role` should be `implementation`, `routing.create_followup_task` should be `true`, and `result_payload.metadata.handover_brief` should carry the full Handover Brief markdown.
 
 If triage returns `reply_with_estimate_only`, `classification.task_kind` should remain `research` for MVP purposes because the system is still answering an analysis-style intake without entering a code-execution branch.
 
@@ -125,3 +174,5 @@ If triage returns `reply_with_estimate_only`, `classification.task_kind` should 
 - Triage does not split one intake task into multiple parallel execution branches.
 - Triage does not make permanent roadmap decisions; it chooses the next operational step only.
 - Triage does not bypass the structured contract by encoding decisions only in `summary` or `details`.
+- Triage does not close the tracker issue; it never sets `tracker_status` and never calls `update_status`.
+- Triage does not validate file paths or symbols mentioned in the Handover Brief; downstream implementation is responsible for repository-level checks.

@@ -61,6 +61,7 @@ These cross-cutting rules apply to every subagent unless a role prompt explicitl
 
 - `DEV` is the implementation subagent. It may modify repository files, `docs/`, and the active local worklog.
 - `REVIEW` is the review subagent running on `gpt-5.4`. It must stay read-only for source files and may only write numbered review files in the active worklog.
+- `Triage` is the gate-keeper agent that runs as the first execute step for every new tracker intake. It is read-only with respect to the repository and the database; it may only write to its own `result_payload` (classification, estimate, routing, delivery, and the Handover Brief in metadata). It must never modify code, configuration, or shared state, and it never closes the tracker issue. The full contract lives in `docs/contracts/triage-routing.md` and the prompt lives in `prompts/agents/triage.md`.
 
 ## Implementation Notes
 
