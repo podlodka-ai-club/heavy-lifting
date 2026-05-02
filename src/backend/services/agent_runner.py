@@ -219,6 +219,9 @@ class CliAgentRunner:
         if context.instructions:
             parts.extend(["instructions:", context.instructions])
 
+        if context.handover_brief:
+            parts.extend(["handover_brief:", context.handover_brief])
+
         tracker_context = context.tracker_context
         if tracker_context is not None:
             parts.extend(self._render_context_block("tracker_context", tracker_context))

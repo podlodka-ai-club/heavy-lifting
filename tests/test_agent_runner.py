@@ -877,6 +877,46 @@ def _build_task_context(tmp_path):
         )
 
 
+def test_cli_agent_runner_prompt_includes_handover_brief() -> None:
+    """``CliAgentRunner._build_prompt`` must emit ``handover_brief:`` block.
+
+    The block is rendered as two consecutive lines:
+    ``handover_brief:`` followed by the raw brief body. This protects the
+    contract consumed by the implementation-agent prompt template
+    (``temp/plans/triage-story-point-agent.md`` §6.6 / §8.2).
+    """
+
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=120,
+        )
+    )
+
+    class _Context:
+        flow_type = TaskType.EXECUTE
+        repo_url = None
+        repo_ref = None
+        branch_name = None
+        base_branch = None
+        instructions = "Implement the change."
+        tracker_context = None
+        execution_context = None
+        current_feedback = None
+        feedback_history = ()
+        handover_brief = "BRIEF-X"
+
+    prompt = runner._build_prompt(
+        AgentRunRequest(task_context=_Context(), workspace_path="/workspace/task09")
+    )
+
+    lines = prompt.splitlines()
+    assert "handover_brief:" in lines
+    handover_index = lines.index("handover_brief:")
+    assert lines[handover_index + 1] == "BRIEF-X"
+
+
 def _build_task_context_for_command():
     class _Context:
         flow_type = TaskType.EXECUTE
@@ -889,5 +929,6 @@ def _build_task_context_for_command():
         execution_context = None
         current_feedback = None
         feedback_history = ()
+        handover_brief = None
 
     return _Context()

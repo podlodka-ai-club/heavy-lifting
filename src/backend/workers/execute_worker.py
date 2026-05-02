@@ -218,7 +218,23 @@ class ExecuteWorker:
         task: Task,
         task_chain: list[Task],
     ) -> PreparedExecution:
-        task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
+        def _resolve_handover_brief(from_task_id: int) -> str | None:
+            triage_task = repository.get_task(from_task_id)
+            if triage_task is None:
+                return None
+            payload = parse_task_result_payload(triage_task)
+            if payload is None:
+                return None
+            raw = payload.metadata.get("handover_brief")
+            if isinstance(raw, str) and raw.strip():
+                return raw
+            return None
+
+        task_context = self.context_builder.build_for_task(
+            task=task,
+            task_chain=task_chain,
+            brief_resolver=_resolve_handover_brief,
+        )
         skip_scm_artifacts = self._should_skip_scm_artifacts(task_context=task_context)
         workspace = self._ensure_workspace(task_context=task_context)
         repository.update_task_workspace_context(

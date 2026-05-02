@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -33,7 +33,13 @@ def parse_task_result_payload(task: Task) -> TaskResultPayload | None:
 class ContextBuilder:
     name: str = "context-builder"
 
-    def build_for_task(self, *, task: Task, task_chain: Sequence[Task]) -> EffectiveTaskContext:
+    def build_for_task(
+        self,
+        *,
+        task: Task,
+        task_chain: Sequence[Task],
+        brief_resolver: Callable[[int], str | None] | None = None,
+    ) -> EffectiveTaskContext:
         if not task_chain:
             raise ValueError("task_chain must not be empty")
 
@@ -70,6 +76,11 @@ class ContextBuilder:
             execute_entry=execute_entry,
             current_task=current_task,
             current_index=current_index,
+        )
+
+        handover_brief = self._resolve_handover_brief(
+            current_entry=current_entry,
+            brief_resolver=brief_resolver,
         )
 
         return EffectiveTaskContext(
@@ -114,7 +125,56 @@ class ContextBuilder:
             ),
             instructions=_resolve_input_attr(lineage, "instructions"),
             commit_message_hint=_resolve_input_attr(lineage, "commit_message_hint"),
+            handover_brief=handover_brief,
         )
+
+    def _resolve_handover_brief(
+        self,
+        *,
+        current_entry: TaskChainEntry,
+        brief_resolver: Callable[[int], str | None] | None,
+    ) -> str | None:
+        """Resolve the handover brief for the current task.
+
+        Resolution order:
+
+        1. **Primary** — inline brief stored in
+           ``current_entry.input_payload.handoff.brief_markdown``. This is the
+           source of truth introduced by the sibling-impl-execute model
+           (task07): the impl-execute is a sibling of the triage-execute and is
+           created with the brief inlined into ``handoff``.
+        2. **Fallback** — when the inline brief is missing but the handoff
+           still references the originating task via
+           ``handoff.from_task_id`` and a ``brief_resolver`` is provided, the
+           resolver is invoked to fetch the brief from that task's stored
+           result payload (typically ``triage.result_payload.metadata``).
+        3. Otherwise — ``None``.
+
+        Lineage / ``execute_entry.result_payload`` is intentionally **not**
+        consulted here: the sibling-model means the triage-execute is not an
+        ancestor of the impl-execute, so a lineage-based lookup would silently
+        break on any future hierarchy change.
+        """
+        input_payload = current_entry.input_payload
+        if input_payload is None:
+            return None
+
+        handoff = input_payload.handoff
+        if handoff is None:
+            return None
+
+        inline_brief = handoff.brief_markdown
+        if isinstance(inline_brief, str) and inline_brief.strip():
+            return inline_brief
+
+        if brief_resolver is None:
+            return None
+
+        from_task_id = handoff.from_task_id
+        resolved = brief_resolver(from_task_id)
+        if isinstance(resolved, str) and resolved.strip():
+            return resolved
+        return None
 
     def _find_relevant_execute_for_current(
         self,
