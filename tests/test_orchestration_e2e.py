@@ -75,26 +75,41 @@ class RecordingAgentRunner:
 
 
 class EstimateOnlyRecordingRunner:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        stdout_preview: str | None = None,
+        tracker_comment: str | None = None,
+        details: str | None = None,
+    ) -> None:
         self.requests: list[AgentRunRequest] = []
+        self.stdout_preview = stdout_preview
+        self.tracker_comment = tracker_comment
+        self.details = details
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         self.requests.append(request)
+        stdout_preview = self.stdout_preview
+        if stdout_preview is None:
+            stdout_preview = (
+                "2 story points\nReason: adding CLI command logging is a small isolated change."
+            )
+        details = self.details
+        if details is None:
+            details = (
+                "stdout:\n2 story points\nReason: adding CLI command logging "
+                "is a small isolated change."
+            )
         return AgentRunResult(
             payload=TaskResultPayload(
                 summary="CLI agent run completed successfully.",
-                details=(
-                    "stdout:\n2 story points\nReason: adding CLI command logging "
-                    "is a small isolated change."
-                ),
+                details=details,
+                tracker_comment=self.tracker_comment,
                 metadata={
                     "runner_adapter": "cli",
                     "request_metadata": dict(request.metadata),
                     "workspace_path": request.workspace_path,
-                    "stdout_preview": (
-                        "2 story points\nReason: adding CLI command logging "
-                        "is a small isolated change."
-                    ),
+                    "stdout_preview": stdout_preview,
                 },
             )
         )
@@ -795,6 +810,58 @@ def test_orchestration_flow_routes_estimate_only_to_delivery_without_scm_side_ef
         "2 story points\nReason: adding CLI command logging is a small isolated change."
     )
     assert tracker._tasks[tracker_task.external_id].context.references == []
+
+
+def test_orchestration_flow_merges_estimate_and_rationale_for_estimate_only_delivery(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    runner = EstimateOnlyRecordingRunner(
+        stdout_preview="2 story points",
+        details="Reason: adding CLI command logging is a small isolated change.",
+    )
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Estimate CLI logging task",
+                description="Estimate only. Do not modify code.",
+                acceptance_criteria=["Return story point estimate to tracker"],
+            ),
+            input_payload=TaskInputPayload(
+                instructions="Give only a story point estimate and do not modify code.",
+                base_branch="main",
+                branch_name="task63/estimate-only",
+            ),
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-63",
+        )
+    )
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    intake_worker.poll_once()
+    execute_report = execute_worker.poll_once()
+    deliver_report = deliver_worker.poll_once()
+
+    assert execute_report.processed_execute_tasks == 1
+    assert deliver_report.processed_deliver_tasks == 1
+    assert tracker._comments[tracker_task.external_id][0].body == (
+        "2 story points\nReason: adding CLI command logging is a small isolated change."
+    )
 
 
 def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session_factory) -> None:

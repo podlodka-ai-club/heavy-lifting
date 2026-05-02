@@ -222,6 +222,8 @@ For the backlog-selection branch, the system may first choose one already estima
 
 For the current estimate-only MVP branch, `worker2` may also complete an `execute` task without SCM artifacts. In that case the execute result keeps the tracker-facing estimate text in `tracker_comment`, leaves branch and PR fields empty, marks `metadata.delivery_mode = estimate_only`, and still creates a downstream `deliver` task.
 
+When estimate-only agent output is split across multiple text fields, `worker2` normalizes the final `tracker_comment` by merging `metadata.stdout_preview`, `tracker_comment`, and `details` in that order. The merged comment must preserve an already complete message, append missing rationale when only the estimate is present in the first field, and avoid duplicating the same estimate or reason twice.
+
 ### PR Feedback
 
 - A PR feedback step uses `input_payload.action = respond_pr`.
@@ -235,7 +237,7 @@ For the current estimate-only MVP branch, `worker2` may also complete an `execut
 - It runs as a `deliver` task owned by `worker3`.
 - The delivery worker reads tracker instructions from upstream `result_payload.delivery` rather than from `summary` or `details`.
 - Delivery may attach links from `result_payload.artifacts` when present.
-- If the upstream execute result is estimate-only, delivery sends the estimate text from `tracker_comment` and attaches no SCM links.
+- If the upstream execute result is estimate-only, delivery sends the normalized estimate text from `tracker_comment` and attaches no SCM links.
 
 ## Scenario Summary
 

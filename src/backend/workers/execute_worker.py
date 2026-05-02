@@ -693,17 +693,38 @@ class ExecuteWorker:
         )
 
     def _build_delivery_only_comment(self, *, agent_payload: TaskResultPayload) -> str:
+        comment = ""
+        for candidate in self._delivery_only_comment_sources(agent_payload=agent_payload):
+            if not comment:
+                comment = candidate
+                continue
+            comment = _merge_delivery_comment_text(comment, candidate)
+        return comment or agent_payload.summary
+
+    def _delivery_only_comment_sources(self, *, agent_payload: TaskResultPayload) -> list[str]:
+        sources: list[str | None] = []
         stdout_preview = agent_payload.metadata.get("stdout_preview")
-        if isinstance(stdout_preview, str) and stdout_preview.strip():
-            return stdout_preview.strip()
-        if agent_payload.tracker_comment:
-            return agent_payload.tracker_comment
-        if agent_payload.details:
-            details = agent_payload.details.strip()
-            if details.startswith("stdout:\n"):
-                return details.removeprefix("stdout:\n").strip()
-            return details
-        return agent_payload.summary
+        if isinstance(stdout_preview, str):
+            sources.append(stdout_preview)
+        sources.extend(
+            [
+                agent_payload.tracker_comment,
+                _normalize_delivery_comment_text(agent_payload.details),
+            ]
+        )
+
+        unique_sources: list[str] = []
+        seen: set[str] = set()
+        for source in sources:
+            normalized = _normalize_delivery_comment_text(source)
+            if normalized is None:
+                continue
+            canonical = _canonicalize_delivery_comment_text(normalized)
+            if canonical in seen:
+                continue
+            unique_sources.append(normalized)
+            seen.add(canonical)
+        return unique_sources
 
     def _should_skip_scm_artifacts(self, *, task_context: EffectiveTaskContext) -> bool:
         if task_context.flow_type != TaskType.EXECUTE:
@@ -876,6 +897,47 @@ def _append_link_once(links: list[TaskLink], *, label: str, url: str | None) -> 
     if any(existing_link.url == url for existing_link in links):
         return
     links.append(TaskLink(label=label, url=url))
+
+
+def _normalize_delivery_comment_text(text: str | None) -> str | None:
+    if text is None:
+        return None
+    normalized = text.strip()
+    if not normalized:
+        return None
+    if normalized.startswith("stdout:\n"):
+        normalized = normalized.removeprefix("stdout:\n").strip()
+    return normalized or None
+
+
+def _canonicalize_delivery_comment_text(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _merge_delivery_comment_text(current: str, candidate: str) -> str:
+    current_canonical = _canonicalize_delivery_comment_text(current)
+    candidate_canonical = _canonicalize_delivery_comment_text(candidate)
+    if current_canonical == candidate_canonical:
+        return current
+    if current_canonical in candidate_canonical:
+        return candidate
+    if candidate_canonical in current_canonical:
+        return current
+
+    merged_lines = list(current.splitlines())
+    existing_lines = {
+        _canonicalize_delivery_comment_text(line) for line in merged_lines if line.strip()
+    }
+    for line in candidate.splitlines():
+        normalized_line = line.strip()
+        if not normalized_line:
+            continue
+        canonical_line = _canonicalize_delivery_comment_text(normalized_line)
+        if canonical_line in existing_lines:
+            continue
+        merged_lines.append(normalized_line)
+        existing_lines.add(canonical_line)
+    return "\n".join(line for line in merged_lines if line.strip())
 
 
 def _slugify(value: str) -> str:

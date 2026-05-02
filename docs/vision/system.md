@@ -54,7 +54,7 @@ The runner prepares a repository workspace, applies the requested changes, runs 
 
 For CLI-backed execution, the orchestrator runs `opencode run --format json` and extracts the final `step_finish` usage block into the normalized `token_usage` records. Human-readable delivery details still come from the streamed text events, while missing or malformed usage data remains explicit in execution metadata instead of silently fabricating token rows. `worker2` treats the run as failed when the CLI exits non-zero, when JSON stdout emits an explicit error event, or when stderr contains clearly error-like diagnostics even if the process exits `0`; in all of those cases it records the failed result on the task and stops before commit, push, PR, or downstream delivery side effects.
 
-Estimate-only intake is the current exception: `worker2` still runs the agent to obtain the estimate text, but it skips branch, commit, push, and PR side effects and hands the result straight to `worker3` for tracker delivery.
+Estimate-only intake is the current exception: `worker2` still runs the agent to obtain the estimate text, but it skips branch, commit, push, and PR side effects and hands the result straight to `worker3` for tracker delivery. Before handoff it normalizes the tracker comment so the final delivery keeps both the estimate and its rationale when the runner splits them across `stdout_preview`, `tracker_comment`, or `details`, without repeating the same text twice.
 
 ### PR Feedback
 

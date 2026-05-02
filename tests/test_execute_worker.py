@@ -58,18 +58,36 @@ class FailingAgentRunner:
 
 
 class EstimateOnlyAgentRunner:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        stdout_preview: str | None = None,
+        tracker_comment: str | None = None,
+        details: str | None = None,
+    ) -> None:
         self.requests: list[AgentRunRequest] = []
+        self.stdout_preview = stdout_preview
+        self.tracker_comment = tracker_comment
+        self.details = details
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         self.requests.append(request)
+        stdout_preview = self.stdout_preview
+        if stdout_preview is None:
+            stdout_preview = (
+                "2 story points\nReason: logging the CLI command is a small isolated change."
+            )
+        details = self.details
+        if details is None:
+            details = (
+                "stdout:\n2 story points\nReason: logging the CLI command "
+                "is a small isolated change."
+            )
         return AgentRunResult(
             payload=TaskResultPayload(
                 summary="CLI agent run completed successfully.",
-                details=(
-                    "stdout:\n2 story points\nReason: logging the CLI command "
-                    "is a small isolated change."
-                ),
+                details=details,
+                tracker_comment=self.tracker_comment,
                 links=[
                     TaskLink(
                         label="artifact",
@@ -78,10 +96,7 @@ class EstimateOnlyAgentRunner:
                 ],
                 metadata={
                     "runner_adapter": "cli",
-                    "stdout_preview": (
-                        "2 story points\nReason: logging the CLI command "
-                        "is a small isolated change."
-                    ),
+                    "stdout_preview": stdout_preview,
                 },
             )
         )
@@ -610,6 +625,107 @@ def test_execute_worker_skips_scm_artifacts_for_estimate_only_requests(tmp_path)
         assert deliver_task.branch_name is None
         assert deliver_task.pr_external_id is None
         assert deliver_task.pr_url is None
+
+
+def test_build_delivery_only_comment_keeps_existing_stdout_preview_with_reason(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    comment = worker._build_delivery_only_comment(
+        agent_payload=TaskResultPayload(
+            summary="Estimate completed.",
+            details=(
+                "stdout:\n2 story points\nReason: logging the CLI command "
+                "is a small isolated change."
+            ),
+            metadata={
+                "stdout_preview": (
+                    "2 story points\nReason: logging the CLI command is a small isolated change."
+                )
+            },
+        )
+    )
+
+    assert comment == (
+        "2 story points\nReason: logging the CLI command is a small isolated change."
+    )
+
+
+def test_build_delivery_only_comment_appends_rationale_when_stdout_preview_has_only_estimate(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    comment = worker._build_delivery_only_comment(
+        agent_payload=TaskResultPayload(
+            summary="Estimate completed.",
+            details="Reason: logging the CLI command is a small isolated change.",
+            metadata={"stdout_preview": "2 story points"},
+        )
+    )
+
+    assert comment == (
+        "2 story points\nReason: logging the CLI command is a small isolated change."
+    )
+
+
+def test_build_delivery_only_comment_uses_combined_tracker_comment_without_duplication(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    comment = worker._build_delivery_only_comment(
+        agent_payload=TaskResultPayload(
+            summary="Estimate completed.",
+            details="Reason: logging the CLI command is a small isolated change.",
+            tracker_comment=(
+                "2 story points\nReason: logging the CLI command is a small isolated change."
+            ),
+            metadata={"stdout_preview": "2 story points"},
+        )
+    )
+
+    assert comment == (
+        "2 story points\nReason: logging the CLI command is a small isolated change."
+    )
+
+
+def test_build_delivery_only_comment_uses_combined_details_without_duplication(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    comment = worker._build_delivery_only_comment(
+        agent_payload=TaskResultPayload(
+            summary="Estimate completed.",
+            details=(
+                "stdout:\n2 story points\nReason: logging the CLI command "
+                "is a small isolated change."
+            ),
+            metadata={"stdout_preview": "2 story points"},
+        )
+    )
+
+    assert comment == (
+        "2 story points\nReason: logging the CLI command is a small isolated change."
+    )
 
 
 def test_execute_worker_marks_task_failed_when_workspace_key_is_missing(tmp_path) -> None:
