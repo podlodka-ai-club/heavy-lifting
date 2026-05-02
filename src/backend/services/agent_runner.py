@@ -206,6 +206,8 @@ class CliAgentRunner:
     def _build_prompt(self, request: AgentRunRequest) -> str:
         context = request.task_context
         parts = [
+            "runtime_contract:",
+            *self._build_runtime_contract(context),
             f"workspace_path: {request.workspace_path}",
             f"flow_type: {context.flow_type.value}",
         ]
@@ -249,6 +251,34 @@ class CliAgentRunner:
                 )
 
         return "\n".join(parts)
+
+    def _build_runtime_contract(self, context: EffectiveTaskContext) -> list[str]:
+        if context.flow_type == TaskType.EXECUTE and not _is_estimate_only_context(context):
+            return [
+                "- Apply concrete file changes directly in the workspace.",
+                "- Do not stop at analysis, explanation, or a plan when edits are required.",
+                "- Update only the files needed to complete the task.",
+                "- Return a concise implementation summary after editing the workspace.",
+            ]
+        if context.flow_type == TaskType.EXECUTE:
+            return [
+                "- This is an estimate-only task.",
+                "- Do not modify code or create SCM artifacts.",
+                "- Return the estimate together with a short rationale.",
+            ]
+        if context.flow_type == TaskType.TRACKER_FEEDBACK and _is_estimate_thread(context):
+            return [
+                "- Reply in the existing tracker thread.",
+                "- Do not modify code or create SCM artifacts.",
+                "- Answer the latest tracker comment directly and concisely.",
+            ]
+        if context.flow_type == TaskType.PR_FEEDBACK:
+            return [
+                "- Apply follow-up code changes on the existing branch for the PR.",
+                "- Do not replace the PR with a new branch.",
+                "- Return a concise summary of the follow-up changes.",
+            ]
+        return ["- Follow the provided task instructions in the current workspace."]
 
     def _render_context_block(self, label: str, context: TaskContext) -> list[str]:
         lines = [f"{label}:"]
@@ -747,6 +777,47 @@ class _CliStderrParseResult:
     preview: str | None
     is_error_like: bool
     metadata: dict[str, object]
+
+
+def _is_estimate_only_context(context: EffectiveTaskContext) -> bool:
+    text_parts = [
+        context.instructions,
+        context.tracker_context.title if context.tracker_context else None,
+        context.tracker_context.description if context.tracker_context else None,
+        context.execution_context.title if context.execution_context else None,
+        context.execution_context.description if context.execution_context else None,
+    ]
+    normalized_text = "\n".join(part.lower() for part in text_parts if part)
+    estimate_markers = (
+        "estimate only",
+        "only estimate",
+        "story point",
+        "story-point",
+        "оцен",
+        "только оцен",
+    )
+    no_code_markers = (
+        "do not modify code",
+        "don't modify code",
+        "do not change code",
+        "without code changes",
+        "no code changes",
+        "не изменяй код",
+        "не изменять код",
+        "не менять код",
+        "без изменений кода",
+    )
+    return any(marker in normalized_text for marker in estimate_markers) and any(
+        marker in normalized_text for marker in no_code_markers
+    )
+
+
+def _is_estimate_thread(context: EffectiveTaskContext) -> bool:
+    execute_result = context.execute_result
+    if execute_result is None:
+        return False
+    delivery_mode = execute_result.metadata.get("delivery_mode")
+    return delivery_mode == "estimate_only"
 
 
 __all__ = ["CliAgentRunner", "CliAgentRunnerConfig", "LocalAgentRunner"]
