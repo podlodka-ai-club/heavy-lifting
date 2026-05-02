@@ -275,6 +275,79 @@ class TaskRepository:
                 return task
         return None
 
+    def find_pending_implementation_execute_for_root(
+        self, *, root_id: int
+    ) -> Task | None:
+        """Return earliest NEW execute under ``root_id`` with ``action='implementation'``.
+
+        Used by the re-triage flow (task18b §6.7a) to detect impl-execute tasks
+        that were created by triage but not yet picked up by the worker. A user
+        edit while a pending impl exists supersedes that impl with FAILED state
+        and triggers a new triage with the fresh context.
+        """
+        statement = (
+            select(Task)
+            .where(
+                Task.root_id == root_id,
+                Task.task_type == TaskType.EXECUTE,
+                Task.status == TaskStatus.NEW,
+            )
+            .order_by(Task.created_at.asc(), Task.id.asc())
+        )
+        for task in self._session.execute(statement).scalars():
+            payload = task.input_payload
+            if isinstance(payload, dict) and payload.get("action") == "implementation":
+                return task
+        return None
+
+    def find_processing_implementation_execute_for_root(
+        self, *, root_id: int
+    ) -> Task | None:
+        """Return PROCESSING execute under ``root_id`` with ``action='implementation'``.
+
+        PROCESSING impl blocks re-triage unconditionally (the worker already
+        owns the task; user edits during this window go through PR-feedback).
+        """
+        statement = (
+            select(Task)
+            .where(
+                Task.root_id == root_id,
+                Task.task_type == TaskType.EXECUTE,
+                Task.status == TaskStatus.PROCESSING,
+            )
+            .order_by(Task.id.asc())
+        )
+        for task in self._session.execute(statement).scalars():
+            payload = task.input_payload
+            if isinstance(payload, dict) and payload.get("action") == "implementation":
+                return task
+        return None
+
+    def find_done_implementation_execute_for_root(
+        self, *, root_id: int
+    ) -> Task | None:
+        """Return DONE execute under ``root_id`` with ``action='implementation'``.
+
+        Returned separately from PROCESSING so the re-triage flow can express
+        the reopen condition ``tracker_task.status == NEW AND done_impl != None
+        AND done_impl_delivered``. Latest by ``created_at DESC`` so a fresh
+        post-reopen pipeline supersedes any older history.
+        """
+        statement = (
+            select(Task)
+            .where(
+                Task.root_id == root_id,
+                Task.task_type == TaskType.EXECUTE,
+                Task.status == TaskStatus.DONE,
+            )
+            .order_by(Task.created_at.desc(), Task.id.desc())
+        )
+        for task in self._session.execute(statement).scalars():
+            payload = task.input_payload
+            if isinstance(payload, dict) and payload.get("action") == "implementation":
+                return task
+        return None
+
     def find_last_completed_triage_execute(self, *, parent_id: int) -> Task | None:
         """Return latest DONE execute under fetch with ``action='triage'``.
 

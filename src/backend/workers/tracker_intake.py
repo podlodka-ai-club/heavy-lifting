@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
@@ -10,6 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
 from backend.logging_setup import get_logger
+from backend.models import Task
 from backend.protocols.scm import ScmProtocol
 from backend.protocols.tracker import TrackerProtocol
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
@@ -26,6 +28,7 @@ from backend.services.user_content_hash import compute_user_content_hash
 from backend.task_constants import TaskStatus, TaskType
 
 _LAST_TRIAGE_USER_CONTENT_HASH_KEY = "last_triage_user_content_hash"
+_LAST_REOPEN_CONSUMED_DONE_IMPL_ID_KEY = "last_reopen_consumed_done_impl_id"
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,142 +220,151 @@ class TrackerIntakeWorker:
             tracker_name=self.tracker_name,
             external_task_id=tracker_task.external_id,
         )
-        created_fetch_task = False
-
-        incoming_hash = compute_user_content_hash(tracker_task)
 
         if fetch_task is None:
-            initial_context = tracker_task.context.model_dump(mode="python")
-            initial_metadata = dict(initial_context.get("metadata") or {})
-            initial_metadata[_LAST_TRIAGE_USER_CONTENT_HASH_KEY] = incoming_hash
-            initial_context["metadata"] = initial_metadata
-            fetch_task = repository.create_task(
-                TaskCreateParams(
-                    task_type=TaskType.FETCH,
-                    status=TaskStatus.DONE,
-                    tracker_name=self.tracker_name,
-                    external_task_id=tracker_task.external_id,
-                    external_parent_id=tracker_task.parent_external_id,
-                    repo_url=tracker_task.repo_url,
-                    repo_ref=tracker_task.repo_ref,
-                    workspace_key=tracker_task.workspace_key,
-                    context=initial_context,
-                    input_payload=_dump_model_or_none(tracker_task.input_payload),
-                )
-            )
-            created_fetch_task = True
-            logger.info(
-                "fetch_task_created",
-                task_id=fetch_task.id,
-                root_task_id=fetch_task.root_id or fetch_task.id,
-                repo_url=fetch_task.repo_url,
-                repo_ref=fetch_task.repo_ref,
-                workspace_key=fetch_task.workspace_key,
-            )
-        else:
-            self._refresh_fetch_on_user_edit(
+            return self._create_initial_fetch_and_execute(
                 repository=repository,
-                fetch_task=fetch_task,
                 tracker_task=tracker_task,
-                incoming_hash=incoming_hash,
                 logger=logger,
             )
 
-        execute_task = repository.find_child_task(
-            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
-        )
-        created_execute_task = False
-
-        if execute_task is None:
-            # The first execute-task created from a tracker task must default
-            # `action="triage"` so the execute worker routes through the triage
-            # flow. We dump the (possibly None) tracker payload, then merge the
-            # default action without overwriting an explicit override.
-            existing_payload = tracker_task.input_payload or TaskInputPayload()
-            execute_input_payload = existing_payload.model_dump(mode="python")
-            if execute_input_payload.get("action") is None:
-                execute_input_payload["action"] = "triage"
-            execute_task = repository.create_task(
-                TaskCreateParams(
-                    task_type=TaskType.EXECUTE,
-                    parent_id=fetch_task.id,
-                    status=TaskStatus.NEW,
-                    tracker_name=self.tracker_name,
-                    external_parent_id=tracker_task.external_id,
-                    repo_url=tracker_task.repo_url,
-                    repo_ref=tracker_task.repo_ref,
-                    workspace_key=tracker_task.workspace_key,
-                    context=tracker_task.context.model_dump(mode="python"),
-                    input_payload=execute_input_payload,
-                )
-            )
-            created_execute_task = True
-
-        if created_execute_task:
-            logger.info(
-                "execute_task_created",
-                task_id=execute_task.id,
-                root_task_id=execute_task.root_id or execute_task.id,
-                parent_id=execute_task.parent_id,
-                repo_url=execute_task.repo_url,
-                repo_ref=execute_task.repo_ref,
-                workspace_key=execute_task.workspace_key,
-            )
-
-        if not created_fetch_task and not created_execute_task:
-            logger.info("task_intake_skipped")
-
-        return IntakeOutcome(
-            created_fetch_task=created_fetch_task,
-            created_execute_task=created_execute_task,
+        return self._handle_existing_fetch(
+            repository=repository,
+            fetch_task=fetch_task,
+            tracker_task=tracker_task,
+            logger=logger,
         )
 
-    def _refresh_fetch_on_user_edit(
+    def _create_initial_fetch_and_execute(
         self,
         *,
         repository: TaskRepository,
-        fetch_task,  # backend.models.Task
         tracker_task: TrackerTask,
-        incoming_hash: str,
         logger,
-    ) -> None:
-        """Refresh ``fetch_task.context`` when the user has edited the tracker issue.
+    ) -> IntakeOutcome:
+        incoming_hash = compute_user_content_hash(tracker_task)
+        initial_context = tracker_task.context.model_dump(mode="python")
+        initial_metadata = dict(initial_context.get("metadata") or {})
+        initial_metadata[_LAST_TRIAGE_USER_CONTENT_HASH_KEY] = incoming_hash
+        initial_context["metadata"] = initial_metadata
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                status=TaskStatus.DONE,
+                tracker_name=self.tracker_name,
+                external_task_id=tracker_task.external_id,
+                external_parent_id=tracker_task.parent_external_id,
+                repo_url=tracker_task.repo_url,
+                repo_ref=tracker_task.repo_ref,
+                workspace_key=tracker_task.workspace_key,
+                context=initial_context,
+                input_payload=_dump_model_or_none(tracker_task.input_payload),
+            )
+        )
+        logger.info(
+            "fetch_task_created",
+            task_id=fetch_task.id,
+            root_task_id=fetch_task.root_id or fetch_task.id,
+            repo_url=fetch_task.repo_url,
+            repo_ref=fetch_task.repo_ref,
+            workspace_key=fetch_task.workspace_key,
+        )
+        execute_task = self._create_triage_execute(
+            repository=repository,
+            fetch_task=fetch_task,
+            tracker_task=tracker_task,
+            logger=logger,
+            event_name="execute_task_created",
+        )
+        return IntakeOutcome(
+            created_fetch_task=True,
+            created_execute_task=execute_task is not None,
+        )
 
-        See plan §6.7a: own-writes (our ``add_comment``/``update_estimate``/
-        ``attach_links`` operations) must not trigger this path. Provenance is
-        carried by ``TaskLink.origin == 'own_write'`` (excluded by
-        ``compute_user_content_hash``); ``metadata`` is also excluded from the
-        hash because it is our own bookkeeping channel.
+    def _handle_existing_fetch(
+        self,
+        *,
+        repository: TaskRepository,
+        fetch_task: Task,
+        tracker_task: TrackerTask,
+        logger,
+    ) -> IntakeOutcome:
+        """Re-triage protocol for an existing fetch (plan §6.7a).
 
-        Behaviour:
-
-        * If ``incoming_hash == stored_hash`` → no-op.
-        * Otherwise → re-assign ``fetch_task.context`` with the latest tracker
-          snapshot (incl. references), preserving existing ``metadata`` keys
-          and updating ``last_triage_user_content_hash`` ONLY when no triage
-          execute is currently ``PROCESSING`` (so a user edit during an
-          in-flight triage is not silently dropped after that triage finishes).
-        * If a pending ``NEW`` triage execute exists, also refresh its
-          ``context`` with the same fresh snapshot so the worker picks up the
-          latest user-authored fields when it eventually runs.
-
-        This method is the task18a slice of the re-triage protocol — creating a
-        new triage execute or superseding pending impl belongs to task18b and
-        is intentionally NOT performed here.
+        Detects user edits via content-hash, decides whether the cluster needs
+        a new triage execute, supersedes pending impl tasks when needed, and
+        defends against reopen self-loops via ``done_impl_delivered`` and the
+        ``last_reopen_consumed_done_impl_id`` marker.
         """
 
+        # Recovery path: fetch exists but its first execute child is missing
+        # (defective cluster state — possible after a partial migration or a
+        # crash between fetch and execute creation). Restore by creating the
+        # initial triage execute so the cluster can make forward progress.
+        if (
+            repository.find_child_task(
+                parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+            )
+            is None
+        ):
+            execute_task = self._create_triage_execute(
+                repository=repository,
+                fetch_task=fetch_task,
+                tracker_task=tracker_task,
+                logger=logger,
+                event_name="execute_task_created",
+            )
+            return IntakeOutcome(created_execute_task=execute_task is not None)
+
+        incoming_hash = compute_user_content_hash(tracker_task)
         existing_context = fetch_task.context or {}
         existing_metadata = dict(existing_context.get("metadata") or {})
         stored_hash = existing_metadata.get(_LAST_TRIAGE_USER_CONTENT_HASH_KEY)
+        content_changed = incoming_hash != stored_hash
 
-        if incoming_hash == stored_hash:
-            return
-
-        processing_triage = repository.find_processing_triage_execute(
-            parent_id=fetch_task.id
-        )
         pending_triage = repository.find_pending_triage_execute(parent_id=fetch_task.id)
+        processing_triage = repository.find_processing_triage_execute(parent_id=fetch_task.id)
+        root_id = fetch_task.root_id or fetch_task.id
+        pending_impl = repository.find_pending_implementation_execute_for_root(
+            root_id=root_id
+        )
+        processing_impl = repository.find_processing_implementation_execute_for_root(
+            root_id=root_id
+        )
+        done_impl = repository.find_done_implementation_execute_for_root(root_id=root_id)
 
+        # Reopen detection (plan §6.7a — closures CC1 / DD1 / EE1).
+        last_consumed_id = existing_metadata.get(_LAST_REOPEN_CONSUMED_DONE_IMPL_ID_KEY)
+        reopen_already_consumed = (
+            done_impl is not None and last_consumed_id == done_impl.id
+        )
+
+        deliver_for_done_impl = (
+            repository.find_child_task(parent_id=done_impl.id, task_type=TaskType.DELIVER)
+            if done_impl is not None
+            else None
+        )
+        done_impl_delivered = (
+            deliver_for_done_impl is not None
+            and deliver_for_done_impl.status == TaskStatus.DONE
+        )
+
+        is_reopen = (
+            tracker_task.status == TaskStatus.NEW
+            and done_impl is not None
+            and done_impl_delivered
+            and pending_impl is None
+            and processing_impl is None
+            and pending_triage is None
+            and processing_triage is None
+            and not reopen_already_consumed
+        )
+
+        if not content_changed and not is_reopen:
+            logger.info("task_intake_skipped")
+            return IntakeOutcome()
+
+        # Always refresh fetch.context (incl. references) when something changed.
         new_context = tracker_task.context.model_dump(mode="python")
         merged_metadata = dict(existing_metadata)
         merged_metadata.update(new_context.get("metadata") or {})
@@ -361,19 +373,163 @@ class TrackerIntakeWorker:
         new_context["metadata"] = merged_metadata
         fetch_task.context = new_context
         flag_modified(fetch_task, "context")
-
-        if pending_triage is not None:
-            pending_triage.context = tracker_task.context.model_dump(mode="python")
-            flag_modified(pending_triage, "context")
-
         logger.info(
             "fetch_context_refreshed_on_user_edit",
             task_id=fetch_task.id,
-            root_task_id=fetch_task.root_id or fetch_task.id,
+            root_task_id=root_id,
             processing_triage_present=processing_triage is not None,
-            pending_triage_updated=pending_triage is not None,
+            pending_triage_present=pending_triage is not None,
             hash_updated=processing_triage is None,
+            content_changed=content_changed,
+            is_reopen=is_reopen,
         )
+
+        if processing_triage is not None:
+            return IntakeOutcome()
+
+        if pending_triage is not None:
+            # Collapse subsequent edits into the still-pending triage snapshot.
+            pending_triage.context = tracker_task.context.model_dump(mode="python")
+            flag_modified(pending_triage, "context")
+            logger.info(
+                "pending_triage_context_refreshed",
+                task_id=pending_triage.id,
+                root_task_id=root_id,
+            )
+            return IntakeOutcome()
+
+        last_triage = repository.find_last_completed_triage_execute(parent_id=fetch_task.id)
+        last_was_escalation = (
+            last_triage is not None
+            and _read_escalation_kind(last_triage)
+            in {"rfi", "decomposition", "system_design"}
+        )
+
+        if processing_impl is not None:
+            # In-flight impl: edits during this window go through PR feedback.
+            return IntakeOutcome()
+
+        # Order is important (plan §6.7a — closure AA1): pending impl is
+        # always fresher than any done impl in the same root_id, so it must be
+        # checked first to avoid stale-Brief regressions on reopen+edit.
+        if pending_impl is not None:
+            superseded_marker = (
+                f"superseded_by_user_edit_after_triage_"
+                f"{last_triage.id if last_triage is not None else 'unknown'}"
+            )
+            pending_impl.status = TaskStatus.FAILED
+            pending_impl.error = superseded_marker
+            pending_impl.result_payload = {
+                "schema_version": 1,
+                "outcome": "blocked",
+                "summary": (
+                    "Implementation execute superseded by user edit before "
+                    "start; re-triage created."
+                ),
+                "metadata": {
+                    "superseded_reason": "user_edit",
+                    "superseded_at": datetime.now(UTC).isoformat(),
+                },
+            }
+            logger.info(
+                "pending_implementation_execute_superseded",
+                task_id=pending_impl.id,
+                root_task_id=root_id,
+                marker=superseded_marker,
+            )
+            execute_task = self._create_triage_execute(
+                repository=repository,
+                fetch_task=fetch_task,
+                tracker_task=tracker_task,
+                logger=logger,
+                event_name="retriage_execute_task_created",
+            )
+            return IntakeOutcome(created_execute_task=execute_task is not None)
+
+        if done_impl is not None:
+            # Plan §6.7a closure EE1: reopen-branch must trigger on
+            # ``is_reopen`` (which includes ``done_impl_delivered``), NOT on
+            # the raw ``tracker_task.status == NEW``. Otherwise a user edit
+            # during the impl-DONE / deliver_impl-DONE race would create a
+            # phantom triage even though Linear had not yet been advanced to
+            # DONE.
+            if is_reopen:
+                # Mark consumed BEFORE creating the new triage so a subsequent
+                # poll without further changes does not loop (plan §6.7a DD1).
+                merged_metadata[_LAST_REOPEN_CONSUMED_DONE_IMPL_ID_KEY] = done_impl.id
+                new_context["metadata"] = merged_metadata
+                fetch_task.context = new_context
+                flag_modified(fetch_task, "context")
+                logger.info(
+                    "reopen_consumed_marker_set",
+                    task_id=fetch_task.id,
+                    root_task_id=root_id,
+                    consumed_done_impl_id=done_impl.id,
+                )
+                execute_task = self._create_triage_execute(
+                    repository=repository,
+                    fetch_task=fetch_task,
+                    tracker_task=tracker_task,
+                    logger=logger,
+                    event_name="retriage_execute_task_created",
+                )
+                return IntakeOutcome(created_execute_task=execute_task is not None)
+            # Edit during deliver-window OR after pipeline completion without
+            # a Linear reopen — snapshot already updated, no triage created.
+            return IntakeOutcome()
+
+        if last_was_escalation:
+            execute_task = self._create_triage_execute(
+                repository=repository,
+                fetch_task=fetch_task,
+                tracker_task=tracker_task,
+                logger=logger,
+                event_name="retriage_execute_task_created",
+            )
+            return IntakeOutcome(created_execute_task=execute_task is not None)
+
+        # Strange state: last triage was SP=1/2/3 but no impl exists and no
+        # earlier escalation either. Diagnosed via retro-feedback, not
+        # auto-recovered.
+        return IntakeOutcome()
+
+    def _create_triage_execute(
+        self,
+        *,
+        repository: TaskRepository,
+        fetch_task: Task,
+        tracker_task: TrackerTask,
+        logger,
+        event_name: str,
+    ) -> Task | None:
+        existing_payload = tracker_task.input_payload or TaskInputPayload()
+        execute_input_payload = existing_payload.model_dump(mode="python")
+        if execute_input_payload.get("action") is None:
+            execute_input_payload["action"] = "triage"
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.NEW,
+                tracker_name=self.tracker_name,
+                external_parent_id=tracker_task.external_id,
+                repo_url=tracker_task.repo_url,
+                repo_ref=tracker_task.repo_ref,
+                workspace_key=tracker_task.workspace_key,
+                context=tracker_task.context.model_dump(mode="python"),
+                input_payload=execute_input_payload,
+            )
+        )
+        logger.info(
+            event_name,
+            task_id=execute_task.id,
+            root_task_id=execute_task.root_id or execute_task.id,
+            parent_id=execute_task.parent_id,
+            repo_url=execute_task.repo_url,
+            repo_ref=execute_task.repo_ref,
+            workspace_key=execute_task.workspace_key,
+        )
+        return execute_task
 
     def _ingest_pr_feedback(
         self,
@@ -557,6 +713,25 @@ def _dump_model_or_none(value: SchemaModel | None) -> dict[str, object] | None:
     if value is None:
         return None
     return value.model_dump(mode="python")
+
+
+def _read_escalation_kind(task: Task) -> str | None:
+    """Read ``result_payload.delivery.escalation_kind`` defensively.
+
+    Returns ``None`` if the payload is missing or malformed — callers treat the
+    ``None`` outcome as "not an escalation" so the re-triage flow stays
+    permissive in the face of legacy or partial payloads.
+    """
+    payload = task.result_payload
+    if not isinstance(payload, dict):
+        return None
+    delivery = payload.get("delivery")
+    if not isinstance(delivery, dict):
+        return None
+    kind = delivery.get("escalation_kind")
+    if isinstance(kind, str):
+        return kind
+    return None
 
 
 def _worker_logger(**fields: object):
