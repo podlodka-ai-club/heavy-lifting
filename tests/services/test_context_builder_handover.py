@@ -206,3 +206,71 @@ def test_handover_brief_none_when_resolver_returns_none(session_factory) -> None
         )
 
     assert effective.handover_brief is None
+
+
+def test_deliver_under_impl_uses_impl_as_execute_task_not_triage(session_factory) -> None:
+    """Lineage-corruption regression for gap #10 (task16 + task11).
+
+    When a degenerate chain ``[fetch, triage, impl, deliver]`` appears (impl
+    parented under triage instead of fetch — sibling-model violation), the
+    deliver-task's ``EffectiveTaskContext.execute_task`` MUST point at the
+    implementation execute, NOT at the triage. This is what
+    ``ContextBuilder._find_relevant_execute_for_current`` guarantees by
+    walking ``lineage`` from leaf to root and returning the **last**
+    EXECUTE-ancestor.
+    """
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                context={"title": "Tracker task"},
+            )
+        )
+        triage = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch.id,
+                context={"title": "Triage execute"},
+                input_payload={"action": "triage"},
+                result_payload={
+                    "summary": "Triage routed.",
+                    "metadata": {"handover_brief": "## Agent Handover Brief\nbody"},
+                },
+            )
+        )
+        # Degenerate parenting: impl as a CHILD of triage instead of a sibling.
+        impl = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=triage.id,
+                context={"title": "Implementation execute"},
+                input_payload={
+                    "action": "implementation",
+                    "handoff": {
+                        "from_task_id": triage.id,
+                        "from_role": "triage",
+                        "brief_markdown": "## Agent Handover Brief\nbody",
+                    },
+                },
+            )
+        )
+        deliver = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.DELIVER,
+                parent_id=impl.id,
+                context={"title": "Deliver impl"},
+            )
+        )
+
+        chain = repository.load_task_chain(fetch.root_id or fetch.id)
+        effective = ContextBuilder().build_for_task(
+            task=deliver,
+            task_chain=chain,
+            brief_resolver=None,
+        )
+
+    assert effective.execute_task is not None
+    assert effective.execute_task.task.id == impl.id
+    assert effective.execute_task.task.id != triage.id

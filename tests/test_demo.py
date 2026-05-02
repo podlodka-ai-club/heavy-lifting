@@ -24,12 +24,33 @@ def session_factory(tmp_path):
     return build_session_factory(engine)
 
 
+_DEMO_TRIAGE_STDOUT = (
+    "<triage_result>\n"
+    "story_points: 2\n"
+    "task_kind: implementation\n"
+    "outcome: routed\n"
+    "</triage_result>\n"
+    "<markdown>\n"
+    "## Agent Handover Brief\n"
+    "**Assigned Story Points:** 2\n\n"
+    "### 1. Intent\n- demo triage stub\n"
+    "</markdown>\n"
+)
+
+
 class RecordingRunner:
     def __init__(self) -> None:
         self.requests: list[AgentRunRequest] = []
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         self.requests.append(request)
+        input_payload = request.task_context.current_task.input_payload
+        if input_payload is not None and input_payload.action == "triage":
+            return AgentRunResult(
+                payload=TaskResultPayload(summary="demo triage envelope"),
+                raw_stdout=_DEMO_TRIAGE_STDOUT,
+                raw_stderr="",
+            )
         return AgentRunResult(payload=TaskResultPayload(summary="demo runner finished"))
 
 
@@ -87,15 +108,26 @@ def test_demo_components_run_shared_http_intake_flow(session_factory, tmp_path) 
     assert response.status_code == 201
 
     intake_report = demo.intake_worker.poll_once()
-    execute_report = demo.execute_worker.poll_once()
-    deliver_report = demo.deliver_worker.poll_once()
+    triage_execute_report = demo.execute_worker.poll_once()
+    impl_execute_report = demo.execute_worker.poll_once()
+    deliver_triage_report = demo.deliver_worker.poll_once()
+    deliver_impl_report = demo.deliver_worker.poll_once()
 
     assert intake_report.created_fetch_tasks == 1
     assert intake_report.created_execute_tasks == 1
-    assert execute_report.processed_execute_tasks == 1
-    assert deliver_report.processed_deliver_tasks == 1
-    assert len(runner.requests) == 1
-    assert runner.requests[0].workspace_path == str(repo_dir.resolve())
+    assert triage_execute_report.processed_execute_tasks == 1
+    assert impl_execute_report.processed_execute_tasks == 1
+    assert deliver_triage_report.processed_deliver_tasks == 1
+    assert deliver_impl_report.processed_deliver_tasks == 1
+    # Two runner invocations: triage + impl.
+    assert len(runner.requests) == 2
+    # Both runs target the workspace_key 'demo-repo'. On platforms where the
+    # MockScm can resolve the local repo path it surfaces ``repo_dir.resolve()``;
+    # otherwise it falls back to ``/tmp/mock-scm/<workspace_key>``. We accept
+    # either, but they must be the same for both runs.
+    expected_paths = {str(repo_dir.resolve()), "/tmp/mock-scm/demo-repo"}
+    assert runner.requests[0].workspace_path in expected_paths
+    assert runner.requests[1].workspace_path == runner.requests[0].workspace_path
 
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)
@@ -105,10 +137,12 @@ def test_demo_components_run_shared_http_intake_flow(session_factory, tmp_path) 
         )
 
         assert fetch_task is not None
-        execute_task = repository.find_child_task(
+        triage_task = repository.find_child_task(
             parent_id=fetch_task.id,
             task_type=TaskType.EXECUTE,
         )
+        assert triage_task is not None
+        execute_task = repository.find_implementation_execute_for_root(fetch_task.id)
         assert execute_task is not None
         deliver_task = repository.find_child_task(
             parent_id=execute_task.id,
@@ -116,6 +150,7 @@ def test_demo_components_run_shared_http_intake_flow(session_factory, tmp_path) 
         )
 
         assert deliver_task is not None
+        assert triage_task.status == TaskStatus.DONE
         assert execute_task.status == TaskStatus.DONE
         assert deliver_task.status == TaskStatus.DONE
 
