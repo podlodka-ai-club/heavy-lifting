@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -34,6 +35,12 @@ from backend.schemas import (
 )
 from backend.services.context_builder import ContextBuilder, parse_task_result_payload
 from backend.services.retro_service import RetroService
+from backend.services.triage_step import (
+    TriageStep,
+    TriageStepError,
+    TriageStepResult,
+    load_triage_prompt,
+)
 from backend.settings import Settings, get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
@@ -89,6 +96,12 @@ class ExecuteWorker:
     poll_interval: int = 30
     context_builder: ContextBuilder = field(default_factory=ContextBuilder)
     settings: Settings = field(default_factory=get_settings)
+    _triage_prompt_text: str | None = field(default=None, init=False, repr=False)
+
+    def _get_triage_prompt_text(self) -> str:
+        if self._triage_prompt_text is None:
+            self._triage_prompt_text = load_triage_prompt(Path(self.settings.prompts_dir))
+        return self._triage_prompt_text
 
     def poll_once(self) -> ExecuteWorkerReport:
         batch_size = self._read_execute_batch_size()
@@ -141,6 +154,19 @@ class ExecuteWorker:
 
             try:
                 task_chain = repository.load_task_chain(task.root_id or task.id)
+
+                if task_type == TaskType.EXECUTE:
+                    action = self._resolve_execute_action(task=task)
+                else:
+                    action = "implementation"  # PR_FEEDBACK всегда impl-flow
+
+                if action == "triage":
+                    return self._process_triage_execute(
+                        repository=repository,
+                        task=task,
+                        task_chain=task_chain,
+                    )
+
                 prepared_execution = self._prepare_execution(
                     repository=repository, task=task, task_chain=task_chain
                 )
@@ -236,6 +262,132 @@ class ExecuteWorker:
                 if task_type == TaskType.EXECUTE:
                     return ExecuteWorkerReport(failed_execute_tasks=1)
                 return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+
+    def _resolve_execute_action(self, *, task: Task) -> str:
+        """Determine which agent flow handles this execute-task.
+
+        Resolution order:
+
+        1. **Explicit** — ``task.input_payload["action"]`` if it is a non-empty
+           string. ``tracker_intake`` (task08) проставляет ``action="triage"``
+           новой execute явно, а ``TriageStep`` через task07 будет создавать
+           sibling-impl-execute с ``action="implementation"``.
+        2. **Default** — ``"implementation"``. Это сохраняет старое
+           impl-flow поведение для legacy execute-задач без action: до
+           миграции worker всегда шёл по impl-пути, и любая уже
+           существующая в БД single-execute-задача должна остаться там же.
+           Триаж назначается **только** через явный ``action="triage"``,
+           который сегодня выставляет лишь ``tracker_intake`` для новых
+           кластеров.
+
+        Возвращает строку (``"triage"``, ``"implementation"``, ...) — caller
+        проверяет конкретное значение.
+        """
+
+        raw_input = task.input_payload if isinstance(task.input_payload, dict) else None
+        explicit_action = raw_input.get("action") if raw_input else None
+        if isinstance(explicit_action, str) and explicit_action:
+            return explicit_action
+        return "implementation"
+
+    def _process_triage_execute(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_chain: list[Task],
+    ) -> ExecuteWorkerReport:
+        logger = _task_logger(task, attempt=task.attempt, action="triage")
+
+        prepared = self._prepare_triage_execution(
+            repository=repository,
+            task=task,
+            task_chain=task_chain,
+        )
+
+        triage_step = TriageStep(
+            agent_runner=self.agent_runner,
+            triage_prompt_text=self._get_triage_prompt_text(),
+        )
+
+        try:
+            try:
+                triage_result = triage_step.run(
+                    task_context=prepared.task_context,
+                    workspace_path=prepared.workspace_path,
+                    runtime_metadata=prepared.runtime_metadata,
+                )
+            except TriageStepError as exc:
+                self._handle_triage_step_error(task=task, exc=exc)
+                logger.warning("triage_output_malformed", error=str(exc))
+                return ExecuteWorkerReport(failed_execute_tasks=1)
+
+            self._complete_triage_execute_task(
+                repository=repository,
+                task=task,
+                task_context=prepared.task_context,
+                triage_result=triage_result,
+            )
+            logger.info(
+                "triage_execute_task_completed",
+                triage_outcome=triage_result.result_payload.outcome,
+                triage_sp=triage_result.decision.story_points,
+            )
+            return ExecuteWorkerReport(processed_execute_tasks=1)
+        finally:
+            self._cleanup_triage_workspace(prepared.cleanup_paths)
+
+    def _handle_triage_step_error(self, *, task: Task, exc: TriageStepError) -> None:
+        raw_stdout = exc.raw_stdout if isinstance(exc.raw_stdout, str) else ""
+        truncated = raw_stdout[:2000]
+        failure_payload = TaskResultPayload(
+            summary="Triage agent output malformed.",
+            metadata={"raw_stdout_preview": truncated},
+        )
+        self._mark_task_failed(
+            task=task,
+            error="triage_output_malformed",
+            result_payload=failure_payload,
+            branch_name=None,
+        )
+
+    def _complete_triage_execute_task(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_context: EffectiveTaskContext,
+        triage_result: TriageStepResult,
+    ) -> None:
+        result_payload = triage_result.result_payload
+        self._mark_task_done(
+            task=task,
+            result_payload=result_payload,
+            branch_name=None,
+            pr_external_id=None,
+            pr_url=None,
+        )
+        self._record_token_usage(
+            repository=repository,
+            task_id=task.id,
+            usage=result_payload.token_usage,
+        )
+        self._record_agent_retro_feedback(
+            repository=repository,
+            task=task,
+            result_payload=result_payload,
+        )
+        self._ensure_deliver_task(
+            repository=repository,
+            execute_task=task,
+            task_context=task_context,
+        )
+
+    def _cleanup_triage_workspace(self, paths: tuple[Path, ...]) -> None:
+        if not paths:
+            return
+        for path in paths:
+            shutil.rmtree(path, ignore_errors=True)
 
     def _prepare_execution(
         self,

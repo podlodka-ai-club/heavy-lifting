@@ -111,7 +111,16 @@ class TriageStepResult:
 
 
 class TriageStepError(RuntimeError):
-    """Raised when the triage agent output cannot be turned into a decision."""
+    """Raised when the triage agent output cannot be turned into a decision.
+
+    Carries ``raw_stdout`` so the caller
+    (``ExecuteWorker._handle_triage_step_error``) can persist a truncated
+    preview into ``task.result_payload.metadata`` for downstream debugging.
+    """
+
+    def __init__(self, message: str, *, raw_stdout: str = "") -> None:
+        super().__init__(message)
+        self.raw_stdout = raw_stdout
 
 
 @dataclass(slots=True)
@@ -155,7 +164,10 @@ class TriageStep:
         try:
             decision = parse_triage_output(agent_result.raw_stdout)
         except TriageOutputError as exc:
-            raise TriageStepError(f"triage_output_malformed: {exc}") from exc
+            raise TriageStepError(
+                f"triage_output_malformed: {exc}",
+                raw_stdout=agent_result.raw_stdout,
+            ) from exc
 
         result_payload = self._build_result_payload(
             decision=decision,

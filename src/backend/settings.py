@@ -2,6 +2,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -120,6 +121,7 @@ class Settings:
     github_default_repo_url: str | None
     scm_default_base_branch: str | None
     scm_branch_prefix: str
+    prompts_dir: str
 
 
 @lru_cache(maxsize=1)
@@ -200,6 +202,10 @@ def get_settings() -> Settings:
         github_default_repo_url=os.getenv("GITHUB_DEFAULT_REPO_URL") or None,
         scm_default_base_branch=os.getenv("SCM_DEFAULT_BASE_BRANCH") or None,
         scm_branch_prefix=os.getenv("SCM_BRANCH_PREFIX", "execute/"),
+        prompts_dir=os.getenv(
+            "PROMPTS_DIR",
+            str(Path(__file__).resolve().parents[2] / "prompts"),
+        ),
     )
 
     return _apply_database_overrides(env_settings)
