@@ -246,6 +246,14 @@ class TrackerIntakeWorker:
         created_execute_task = False
 
         if execute_task is None:
+            # The first execute-task created from a tracker task must default
+            # `action="triage"` so the execute worker routes through the triage
+            # flow. We dump the (possibly None) tracker payload, then merge the
+            # default action without overwriting an explicit override.
+            existing_payload = tracker_task.input_payload or TaskInputPayload()
+            execute_input_payload = existing_payload.model_dump(mode="python")
+            if execute_input_payload.get("action") is None:
+                execute_input_payload["action"] = "triage"
             execute_task = repository.create_task(
                 TaskCreateParams(
                     task_type=TaskType.EXECUTE,
@@ -257,7 +265,7 @@ class TrackerIntakeWorker:
                     repo_ref=tracker_task.repo_ref,
                     workspace_key=tracker_task.workspace_key,
                     context=tracker_task.context.model_dump(mode="python"),
-                    input_payload=_dump_model_or_none(tracker_task.input_payload),
+                    input_payload=execute_input_payload,
                 )
             )
             created_execute_task = True

@@ -129,7 +129,7 @@ def test_tracker_intake_creates_fetch_and_execute_tasks(session_factory) -> None
         assert execute_task.context == fetch_task.context
         assert execute_task.input_payload == {
             "schema_version": 1,
-            "action": None,
+            "action": "triage",
             "role": None,
             "handoff": None,
             "expected_output": None,
@@ -226,7 +226,7 @@ def test_tracker_intake_restores_missing_execute_child(session_factory) -> None:
         assert execute_task.external_parent_id == created_task.external_id
         assert execute_task.input_payload == {
             "schema_version": 1,
-            "action": None,
+            "action": "triage",
             "role": None,
             "handoff": None,
             "expected_output": None,
@@ -238,6 +238,118 @@ def test_tracker_intake_restores_missing_execute_child(session_factory) -> None:
             "pr_feedback": None,
             "metadata": {},
         }
+
+
+def test_ingest_tracker_task_creates_first_execute_with_action_triage(session_factory) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    created_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Triage default"),
+            input_payload=TaskInputPayload(),
+        )
+    )
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+    )
+
+    worker.poll_tracker_once()
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=created_task.external_id,
+        )
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        assert execute_task.input_payload is not None
+        assert execute_task.input_payload["action"] == "triage"
+        assert execute_task.input_payload["schema_version"] == 1
+
+
+def test_ingest_tracker_task_preserves_existing_input_payload_fields(session_factory) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    created_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Preserve fields"),
+            input_payload=TaskInputPayload(
+                instructions="x",
+                branch_name="task08/triage-default",
+                base_branch="main",
+            ),
+        )
+    )
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+    )
+
+    worker.poll_tracker_once()
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=created_task.external_id,
+        )
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        assert execute_task.input_payload is not None
+        assert execute_task.input_payload["action"] == "triage"
+        assert execute_task.input_payload["instructions"] == "x"
+        assert execute_task.input_payload["branch_name"] == "task08/triage-default"
+        assert execute_task.input_payload["base_branch"] == "main"
+        assert execute_task.input_payload["schema_version"] == 1
+
+
+def test_ingest_tracker_task_does_not_overwrite_action_when_already_set(session_factory) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    created_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Explicit action override"),
+            input_payload=TaskInputPayload(action="research", instructions="dig deeper"),
+        )
+    )
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+    )
+
+    worker.poll_tracker_once()
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=created_task.external_id,
+        )
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        assert execute_task.input_payload is not None
+        assert execute_task.input_payload["action"] == "research"
+        assert execute_task.input_payload["instructions"] == "dig deeper"
 
 
 def test_tracker_intake_creates_pr_feedback_children_for_scm_comments(session_factory) -> None:
