@@ -137,11 +137,52 @@ Special workflow states such as "Needs Decomposition" or "Needs System Design" a
 
 ## Re-Triage Protocol
 
-After an SP `5/8/13` escalation, the implementation flow does not continue automatically. The tracker user must edit the issue (title, description, acceptance criteria, or attached references) for a new triage cycle to start. The orchestrator detects user edits with a SHA-256 content hash over the user-controlled fields of `TrackerTask.context`, excluding any reference whose `TaskLink.origin == "own_write"` (so the orchestrator's own attachments and comments cannot trigger a self-loop).
+The orchestrator does not continue automatically after an SP `5/8/13` escalation: the tracker user must either edit the issue or reopen it for a fresh triage cycle to start. The protocol below is materialized in `tracker_intake._ingest_tracker_task` and is regression-tested end to end in `tests/test_retriage_pipeline_smoke.py` plus the unit suites `tests/test_tracker_intake_retriage.py` (user-edit detection) and `tests/test_tracker_intake_retriage_impl.py` (impl-state handling and reopen scenarios).
 
-The hash is stored in `fetch.context.metadata.last_triage_user_content_hash`. When `tracker_intake` ingests an existing fetch task and the incoming hash differs from the stored value, the orchestrator refreshes `fetch.context` to the latest snapshot and either updates a pending `NEW` triage execute in place or creates a new one, depending on impl-execute state. Reopen of the tracker issue (status returning to `NEW` after a previous `DONE` implementation) is treated as an independent trigger that can also start a new triage cycle, gated to fire only once per closed pipeline.
+### User-edit detection
 
-The full re-triage decision tree (pending vs processing vs done implementation, reopen detection, deliver-window race protection) is materialized in `tracker_intake._ingest_tracker_task` and exercised by the integration tests under `tests/workers/test_tracker_intake_retriage.py`.
+`compute_user_content_hash` (in `backend.services.user_content_hash`) builds a SHA-256 over `TrackerTask.context.title`, `description`, `acceptance_criteria`, and the subset of `references` whose `TaskLink.origin != "own_write"`. The hash deliberately excludes `TrackerTask.metadata` and own-write references, so our own `add_comment`, `update_estimate`, and `attach_links` operations can never invalidate the hash.
+
+The first intake stores the initial hash in `fetch.context.metadata.last_triage_user_content_hash`. Subsequent intakes recompute the hash and compare with the stored value:
+
+- equal hash → `content_changed = false`;
+- different hash → `content_changed = true`. The orchestrator refreshes `fetch.context` (including references) wholesale to the latest tracker snapshot. The stored hash is bumped to the new value **only** when no triage execute is currently `PROCESSING`; otherwise the hash is left untouched so the user edit is not lost when the in-flight triage finishes.
+
+### Reopen detection
+
+A reopen is treated as an independent trigger that can fire even when the content hash has not changed:
+
+- `tracker_task.status == NEW`;
+- a DONE implementation execute exists (`done_impl`);
+- the deliver task that owns the closing `update_status(DONE)` for that impl has itself reached `DONE` (`done_impl_delivered`);
+- there is no other in-flight triage or impl;
+- the reopen has not already been consumed for this specific `done_impl` (see consumed-marker below).
+
+Without `done_impl_delivered`, the orchestrator would interpret the brief race window between `impl execute → DONE` and `deliver_impl → DONE` (during which Linear status is still in its initial `NEW`) as a reopen and create a phantom triage on every poll.
+
+### Reopen-consumed marker
+
+The first time a reopen creates a new triage, the orchestrator records `fetch.context.metadata.last_reopen_consumed_done_impl_id = done_impl.id` **before** creating that triage. On any subsequent poll where the reopen conditions still hold for the same `done_impl.id`, `is_reopen` evaluates to `false` and the intake is a no-op. A future, completed pipeline produces a different `done_impl.id`, which automatically reopens the gate for the next cycle.
+
+This marker prevents a self-loop in the case of `reopen → triage SP=5 → no impl created → next poll → reopen still apparent → another triage → ...`.
+
+### State matrix
+
+When `content_changed` or `is_reopen` is true, the dispatch order inside `_handle_existing_fetch` is:
+
+1. `processing_triage` exists → no-op (the in-flight triage will pick up the refreshed pending context on its next read; user edits during this window are not lost because the hash is left unchanged).
+2. `pending_triage` exists → update the triage's `context` with the fresh snapshot; do not create a new execute.
+3. `processing_impl` exists → no-op (in-flight; user edits go through PR feedback rather than re-triage).
+4. `pending_impl` exists → mark the impl `FAILED` with `error = "superseded_by_user_edit_after_triage_<id>"` and `result_payload.metadata.superseded_reason = "user_edit"`, then create a new triage with the fresh snapshot. The user-edit takes priority over a still-untouched impl so the impl never starts on a stale Handover Brief.
+5. `done_impl` exists and `is_reopen` is true → set the reopen-consumed marker, then create a new triage. Otherwise (edit-during-deliver-window or post-pipeline edit without reopen) → no triage is created; the snapshot/hash update alone is enough to capture the edit for the next reopen.
+6. The last completed triage was an escalation (`escalation_kind in {rfi, decomposition, system_design}`) and no impl exists → create a new triage.
+7. Otherwise (last triage was SP `1/2/3` but no impl exists; legitimately strange state) → no-op; the cluster is investigated through retro-feedback.
+
+`pending_impl` is intentionally checked **before** `done_impl`: under reopen plus repeated edits a fresh `pending_impl` may coexist with an older `done_impl`, and the pending one must always supersede.
+
+### Worker contract for adapters
+
+Tracker adapters must mark every link they attach with `TaskLink.origin = "own_write"` (`MockTracker` sets it directly; `LinearTracker` round-trips it via the attachment `subtitle = "heavy-lifting:own-write"`). Failing to set `origin` correctly causes own-writes to be hashed as user content, which manifests as a re-triage loop on the next poll.
 
 ## Result Payload Expectations
 
