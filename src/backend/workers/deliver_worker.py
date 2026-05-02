@@ -14,9 +14,11 @@ from backend.models import Task
 from backend.protocols.tracker import TrackerProtocol
 from backend.repositories.task_repository import TaskRepository
 from backend.schemas import (
+    TaskDeliveryPayload,
     TaskLink,
     TaskResultPayload,
     TrackerCommentCreatePayload,
+    TrackerEstimateUpdatePayload,
     TrackerLinksAttachPayload,
     TrackerStatusUpdatePayload,
 )
@@ -57,8 +59,18 @@ class DeliverWorker:
                     raise ValueError("deliver task requires a completed execute result")
 
                 tracker_task_id = self._resolve_tracker_task_id(task_context=task_context)
-                comment_body = self._build_comment_body(execute_result=execute_result)
-                links = self._build_links(execute_result=execute_result)
+                delivery = execute_result.delivery
+                if delivery is None:
+                    comment_body = self._build_comment_body(execute_result=execute_result)
+                    links = self._build_links(execute_result=execute_result)
+                else:
+                    comment_body = (
+                        delivery.comment_body
+                        or self._build_comment_body(execute_result=execute_result)
+                    )
+                    links = self._build_links(
+                        execute_result=execute_result, extra_links=delivery.links
+                    )
                 logger.info(
                     "delivery_started",
                     tracker_external_id=tracker_task_id,
@@ -66,6 +78,7 @@ class DeliverWorker:
                     if task_context.execute_task is not None
                     else None,
                     link_count=len(links),
+                    delivery_present=delivery is not None,
                 )
 
                 self.tracker.add_comment(
@@ -88,12 +101,39 @@ class DeliverWorker:
                             links=links,
                         )
                     )
-                self.tracker.update_status(
-                    TrackerStatusUpdatePayload(
-                        external_task_id=tracker_task_id,
-                        status=TaskStatus.DONE,
+
+                applied_status: TaskStatus | None
+                if delivery is None:
+                    self.tracker.update_status(
+                        TrackerStatusUpdatePayload(
+                            external_task_id=tracker_task_id,
+                            status=TaskStatus.DONE,
+                        )
                     )
-                )
+                    applied_status = TaskStatus.DONE
+                else:
+                    if (
+                        delivery.tracker_estimate is not None
+                        or delivery.tracker_labels
+                    ):
+                        self.tracker.update_estimate(
+                            TrackerEstimateUpdatePayload(
+                                external_task_id=tracker_task_id,
+                                story_points=delivery.tracker_estimate,
+                                labels_to_add=list(delivery.tracker_labels),
+                                labels_to_remove=[],
+                            )
+                        )
+                    if delivery.tracker_status is not None:
+                        self.tracker.update_status(
+                            TrackerStatusUpdatePayload(
+                                external_task_id=tracker_task_id,
+                                status=delivery.tracker_status,
+                            )
+                        )
+                        applied_status = delivery.tracker_status
+                    else:
+                        applied_status = None
 
                 task.status = TaskStatus.DONE
                 task.error = None
@@ -101,18 +141,21 @@ class DeliverWorker:
                 task.pr_url = execute_result.pr_url or task_context.pr_url
                 task.result_payload = _dump_result_payload(
                     TaskResultPayload(
-                        summary=f"Delivered result to tracker task {tracker_task_id}.",
+                        summary=self._build_result_summary(
+                            tracker_task_id=tracker_task_id,
+                            delivery=delivery,
+                        ),
                         details=comment_body,
                         branch_name=task.branch_name,
                         commit_sha=execute_result.commit_sha,
                         pr_url=task.pr_url,
                         links=links,
-                        metadata={
-                            "tracker_external_id": tracker_task_id,
-                            "tracker_status": TaskStatus.DONE.value,
-                            "comment_posted": True,
-                            "links_attached": len(links),
-                        },
+                        metadata=self._build_result_metadata(
+                            tracker_task_id=tracker_task_id,
+                            delivery=delivery,
+                            applied_status=applied_status,
+                            link_count=len(links),
+                        ),
                     )
                 )
                 logger.info(
@@ -120,6 +163,7 @@ class DeliverWorker:
                     tracker_external_id=tracker_task_id,
                     comment_posted=True,
                     link_count=len(links),
+                    tracker_status=applied_status.value if applied_status is not None else None,
                 )
                 return DeliverWorkerReport(processed_deliver_tasks=1)
             except Exception as exc:
@@ -167,11 +211,58 @@ class DeliverWorker:
             parts.append(execute_result.details)
         return "\n\n".join(parts)
 
-    def _build_links(self, *, execute_result: TaskResultPayload) -> list[TaskLink]:
+    def _build_links(
+        self,
+        *,
+        execute_result: TaskResultPayload,
+        extra_links: list[TaskLink] | None = None,
+    ) -> list[TaskLink]:
         links = [link.model_copy(deep=True) for link in execute_result.links]
         if execute_result.pr_url and not any(link.url == execute_result.pr_url for link in links):
             links.append(TaskLink(label="pull_request", url=execute_result.pr_url))
+        if extra_links:
+            for link in extra_links:
+                if not any(existing.url == link.url for existing in links):
+                    links.append(link.model_copy(deep=True))
         return links
+
+    def _build_result_summary(
+        self,
+        *,
+        tracker_task_id: str,
+        delivery: TaskDeliveryPayload | None,
+    ) -> str:
+        if delivery is None:
+            return f"Delivered result to tracker task {tracker_task_id}."
+        if delivery.escalation_kind:
+            return (
+                f"Delivered triage escalation ({delivery.escalation_kind}) "
+                f"to tracker task {tracker_task_id}."
+            )
+        return (
+            f"Delivered triage estimate (SP={delivery.tracker_estimate}) "
+            f"to tracker task {tracker_task_id}."
+        )
+
+    def _build_result_metadata(
+        self,
+        *,
+        tracker_task_id: str,
+        delivery: TaskDeliveryPayload | None,
+        applied_status: TaskStatus | None,
+        link_count: int,
+    ) -> dict[str, object]:
+        metadata: dict[str, object] = {
+            "tracker_external_id": tracker_task_id,
+            "tracker_status": applied_status.value if applied_status is not None else None,
+            "comment_posted": True,
+            "links_attached": link_count,
+        }
+        if delivery is not None:
+            metadata["tracker_estimate"] = delivery.tracker_estimate
+            metadata["tracker_labels"] = list(delivery.tracker_labels)
+            metadata["escalation_kind"] = delivery.escalation_kind
+        return metadata
 
 
 def build_deliver_worker(
