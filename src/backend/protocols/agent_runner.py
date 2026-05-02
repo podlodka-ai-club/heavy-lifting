@@ -15,6 +15,8 @@ class AgentRunRequest:
 @dataclass(frozen=True, slots=True)
 class AgentRunResult:
     payload: TaskResultPayload
+    raw_stdout: str = ""
+    raw_stderr: str = ""
 
     @property
     def token_usage(self) -> tuple[TokenUsagePayload, ...]:

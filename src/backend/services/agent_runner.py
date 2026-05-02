@@ -58,7 +58,7 @@ class LocalAgentRunner:
             token_usage_entries=1,
             estimated_cost_usd=str(usage.cost_usd),
         )
-        return AgentRunResult(payload=payload)
+        return AgentRunResult(payload=payload, raw_stdout="", raw_stderr="")
 
     def _build_token_usage(self, request: AgentRunRequest) -> TokenUsagePayload:
         instruction_text = request.task_context.instructions or ""
@@ -171,7 +171,11 @@ class CliAgentRunner:
             token_usage_entries=len(payload.token_usage),
             usage_status=usage_status,
         )
-        return AgentRunResult(payload=payload)
+        return AgentRunResult(
+            payload=payload,
+            raw_stdout=completed_process.stdout,
+            raw_stderr=completed_process.stderr,
+        )
 
     def _build_command(self, *, request: AgentRunRequest, prompt: str) -> list[str]:
         command = [
