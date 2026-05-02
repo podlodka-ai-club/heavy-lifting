@@ -29,6 +29,8 @@ from backend.schemas import (
     ScmPushBranchPayload,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
+    TaskHandoffPayload,
+    TaskInputPayload,
     TaskLink,
     TaskResultPayload,
     TokenUsagePayload,
@@ -377,11 +379,112 @@ class ExecuteWorker:
             task=task,
             result_payload=result_payload,
         )
+        self._ensure_followup_implementation_execute(
+            repository=repository,
+            triage_task=task,
+            result_payload=result_payload,
+        )
         self._ensure_deliver_task(
             repository=repository,
             execute_task=task,
             task_context=task_context,
         )
+
+    def _ensure_followup_implementation_execute(
+        self,
+        *,
+        repository: TaskRepository,
+        triage_task: Task,
+        result_payload: TaskResultPayload,
+    ) -> Task | None:
+        """Materialise sibling implementation-execute after a successful triage.
+
+        Sibling-модель: создаваемая задача — **не** дочка триажа, а **сиблинг**
+        под тем же fetch-родителем (``parent_id=triage_task.parent_id``).
+        Это требование плана §5.4 + §6.4 п.2 и поддерживается
+        ``ContextBuilder._find_relevant_execute_for_current`` (task16),
+        которая в lineage deliver/PR_FEEDBACK выбирает «последний execute»
+        в parent-chain — что для sibling-impl как раз impl, а не triage.
+
+        Создание выполняется только когда:
+
+        - ``result_payload.routing`` существует и
+          ``create_followup_task is True`` и ``next_task_type == "execute"``
+          (это SP 1/2/3 — план §5.2);
+        - в кластере root_id ещё нет execute-задачи с ``input_payload.action
+          == "implementation"`` (idempotency через
+          ``repository.find_implementation_execute_for_root``).
+
+        Возвращает созданную задачу, либо ``None`` — если sibling не
+        создавался (эскалация SP 5/8/13 или idempotency-skip).
+        """
+
+        routing = result_payload.routing
+        if (
+            routing is None
+            or not routing.create_followup_task
+            or routing.next_task_type != "execute"
+        ):
+            return None
+
+        # Fail-loud BEFORE idempotency lookup: orphan-triage (parent_id is None)
+        # нарушает инвариант tracker_intake и не должен тихо проскакивать через
+        # idempotency-skip, даже если под тем же root_id уже есть impl-execute
+        # (см. AC10 task07.md + Codex review round1 P1).
+        if triage_task.parent_id is None:
+            raise RuntimeError(
+                "triage execute-task must have a fetch parent before sibling "
+                "impl-execute can be created"
+            )
+
+        root_id = triage_task.root_id or triage_task.id
+        existing = repository.find_implementation_execute_for_root(root_id)
+        if existing is not None:
+            _task_logger(
+                triage_task,
+                sibling_execute_task_id=existing.id,
+            ).info("sibling_implementation_execute_skipped_idempotent")
+            return None
+
+        brief_markdown = self._extract_handover_brief(result_payload=result_payload)
+
+        input_payload_model = TaskInputPayload(
+            schema_version=1,
+            action="implementation",
+            handoff=TaskHandoffPayload(
+                from_task_id=triage_task.id,
+                from_role="triage",
+                brief_markdown=brief_markdown,
+            ),
+        )
+
+        sibling = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=triage_task.parent_id,  # fetch-задача
+                status=TaskStatus.NEW,
+                tracker_name=triage_task.tracker_name,
+                external_parent_id=triage_task.external_parent_id,
+                repo_url=triage_task.repo_url,
+                repo_ref=triage_task.repo_ref,
+                workspace_key=triage_task.workspace_key,
+                context=triage_task.context,
+                input_payload=input_payload_model.model_dump(mode="python"),
+            )
+        )
+        _task_logger(
+            triage_task,
+            sibling_execute_task_id=sibling.id,
+            handover_brief_present=brief_markdown is not None,
+        ).info("sibling_implementation_execute_created")
+        return sibling
+
+    @staticmethod
+    def _extract_handover_brief(*, result_payload: TaskResultPayload) -> str | None:
+        raw = result_payload.metadata.get("handover_brief")
+        if isinstance(raw, str) and raw.strip():
+            return raw
+        return None
 
     def _cleanup_triage_workspace(self, paths: tuple[Path, ...]) -> None:
         if not paths:
