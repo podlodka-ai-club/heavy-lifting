@@ -12,7 +12,12 @@ from backend.db import create_session, get_session_factory
 from backend.logging_setup import get_logger
 from backend.models import Task
 from backend.repositories.task_repository import TaskRepository
-from backend.schemas import TrackerTaskCreatePayload
+from backend.schemas import (
+    ManualTrackerCommentPayload,
+    TrackerCommentCreatePayload,
+    TrackerTaskCreatePayload,
+)
+from backend.services.tracker_task_resolution import resolve_tracker_external_task_id
 
 tasks_blueprint = Blueprint("tasks", __name__)
 
@@ -128,6 +133,76 @@ def intake_task():
         has_input_payload=payload.input_payload is not None,
     )
     return jsonify({"external_id": created_task.external_id}), 201
+
+
+@tasks_blueprint.post("/tasks/<int:task_id>/tracker-comments")
+def add_manual_tracker_comment(task_id: int):
+    logger = get_logger(__name__, component="api")
+    payload_data = request.get_json(silent=True)
+    if payload_data is None:
+        logger.warning("manual_tracker_comment_invalid", task_id=task_id, reason="invalid_json")
+        return jsonify({"error": "Invalid manual tracker comment payload", "details": []}), 400
+
+    try:
+        payload = ManualTrackerCommentPayload.model_validate(payload_data)
+    except ValidationError as exc:
+        logger.warning(
+            "manual_tracker_comment_invalid",
+            task_id=task_id,
+            reason="validation_error",
+            validation_error_count=len(exc.errors()),
+        )
+        return (
+            jsonify(
+                {
+                    "error": "Invalid manual tracker comment payload",
+                    "details": exc.errors(include_url=False),
+                }
+            ),
+            400,
+        )
+
+    session, repository = _build_repository()
+    try:
+        task = repository.get_task(task_id)
+        if task is None:
+            return jsonify({"error": f"Task {task_id} not found"}), 404
+        task_chain = repository.load_task_chain(task.root_id or task.id)
+    finally:
+        session.close()
+
+    tracker_task_id = resolve_tracker_external_task_id(task=task, task_chain=task_chain)
+    if tracker_task_id is None:
+        return jsonify({"error": f"Task {task_id} has no resolvable tracker external task id"}), 404
+
+    comment = _get_runtime().tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task_id,
+            body=payload.body,
+            metadata={
+                "task_id": task.id,
+                "root_task_id": task.root_id or task.id,
+                "source": "api_manual_comment",
+            },
+        )
+    )
+    logger.info(
+        "manual_tracker_comment_posted",
+        task_id=task.id,
+        root_task_id=task.root_id or task.id,
+        tracker_external_id=tracker_task_id,
+        tracker_comment_id=comment.comment_id,
+    )
+    return (
+        jsonify(
+            {
+                "task_id": task.id,
+                "tracker_task_id": tracker_task_id,
+                "tracker_comment_id": comment.comment_id,
+            }
+        ),
+        201,
+    )
 
 
 __all__ = ["tasks_blueprint"]

@@ -244,3 +244,12 @@ For the current estimate-only MVP branch, `worker2` may also complete an `execut
 - Research and implementation both return machine-readable `routing` and `delivery` sections.
 - PR feedback follows the same contract with a different `action` and feedback-specific input.
 - Delivery is always driven by structured `delivery` data.
+
+## Manual Operator Comment API
+
+The authenticated operator API also allows a direct manual tracker comment without creating a new orchestration task.
+
+- `POST /tasks/{task_id}/tracker-comments` accepts a minimal JSON body with `body` text.
+- The path `task_id` is always a local orchestration task id, not a tracker id.
+- The API resolves the tracker destination from the existing task thread using the same tracker-id precedence as delivery flows: current execute/deliver tracker parent, then execute ancestor tracker parent, then fetch/root tracker external id.
+- The API calls `TrackerProtocol.add_comment` directly and stores only minimal provenance metadata such as the local task id, root task id, and `source = api_manual_comment`.

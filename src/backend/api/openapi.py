@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.schemas import TrackerTaskCreatePayload
+from backend.schemas import ManualTrackerCommentPayload, TrackerTaskCreatePayload
 from backend.task_constants import TaskStatus, TaskType
 
 
@@ -16,7 +16,7 @@ def build_openapi_schema() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def _cached_openapi_schema() -> dict[str, Any]:
-    components = _build_components(TrackerTaskCreatePayload)
+    components = _build_components(TrackerTaskCreatePayload, ManualTrackerCommentPayload)
     components["schemas"].update(
         {
             "ErrorResponse": _object_schema(
@@ -36,6 +36,14 @@ def _cached_openapi_schema() -> dict[str, Any]:
             "IntakeTaskCreatedResponse": _object_schema(
                 required=["external_id"],
                 properties={"external_id": {"type": "string"}},
+            ),
+            "ManualTrackerCommentResponse": _object_schema(
+                required=["task_id", "tracker_task_id", "tracker_comment_id"],
+                properties={
+                    "task_id": {"type": "integer", "minimum": 1},
+                    "tracker_task_id": {"type": "string"},
+                    "tracker_comment_id": {"type": "string"},
+                },
             ),
             "AgentPrompt": _agent_prompt_schema(),
             "AgentPromptResponse": _object_schema(
@@ -247,9 +255,7 @@ def _cached_openapi_schema() -> dict[str, Any]:
                         "required": True,
                         "content": {
                             "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/RevenueUpsertPayload"
-                                }
+                                "schema": {"$ref": "#/components/schemas/RevenueUpsertPayload"}
                             }
                         },
                     },
@@ -419,9 +425,7 @@ def _cached_openapi_schema() -> dict[str, Any]:
                         "required": True,
                         "content": {
                             "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/TrackerTaskCreatePayload"
-                                }
+                                "schema": {"$ref": "#/components/schemas/TrackerTaskCreatePayload"}
                             }
                         },
                     },
@@ -431,6 +435,42 @@ def _cached_openapi_schema() -> dict[str, Any]:
                             "IntakeTaskCreatedResponse",
                         ),
                         "400": _json_response("Payload validation failed", "ErrorResponse"),
+                    },
+                }
+            },
+            "/tasks/{task_id}/tracker-comments": {
+                "post": {
+                    "summary": "Post a manual tracker comment for a task thread",
+                    "operationId": "addManualTrackerComment",
+                    "tags": ["tasks"],
+                    "security": [_basic_auth_security_requirement()],
+                    "parameters": [
+                        {
+                            "name": "task_id",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "integer", "minimum": 1},
+                        }
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ManualTrackerCommentPayload"
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "201": _json_response(
+                            "Tracker comment was created",
+                            "ManualTrackerCommentResponse",
+                        ),
+                        "400": _json_response("Payload validation failed", "ErrorResponse"),
+                        "404": _json_response(
+                            "Task or tracker thread was not found", "ErrorResponse"
+                        ),
                     },
                 }
             },
@@ -460,7 +500,16 @@ def _build_components(*models: type[BaseModel]) -> dict[str, Any]:
         schemas.update(definitions)
         schemas[model.__name__] = schema
 
-    return {"schemas": schemas}
+    return {
+        "schemas": schemas,
+        "securitySchemes": {
+            "BasicAuth": {
+                "type": "http",
+                "scheme": "basic",
+                "description": "HTTP Basic authentication for operator endpoints.",
+            }
+        },
+    }
 
 
 def _rewrite_pydantic_refs(value: Any) -> Any:
@@ -488,6 +537,10 @@ def _json_response(description: str, schema_name: str) -> dict[str, Any]:
             }
         },
     }
+
+
+def _basic_auth_security_requirement() -> dict[str, list[str]]:
+    return {"BasicAuth": []}
 
 
 def _object_schema(
@@ -823,8 +876,7 @@ def _factory_schema() -> dict[str, Any]:
                 "type": "object",
                 "required": _enum_values(TaskStatus),
                 "properties": {
-                    status: {"type": "integer", "minimum": 0}
-                    for status in _enum_values(TaskStatus)
+                    status: {"type": "integer", "minimum": 0} for status in _enum_values(TaskStatus)
                 },
                 "additionalProperties": False,
             },

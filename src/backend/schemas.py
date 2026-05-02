@@ -172,6 +172,10 @@ class TrackerCommentCreatePayload(SchemaModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+class ManualTrackerCommentPayload(SchemaModel):
+    body: str = Field(min_length=1)
+
+
 class TrackerStatusUpdatePayload(SchemaModel):
     external_task_id: str
     status: TaskStatus
@@ -300,6 +304,7 @@ class ScmReadPrFeedbackQuery(SchemaModel):
 __all__ = [
     "JsonObject",
     "JsonValue",
+    "ManualTrackerCommentPayload",
     "AgentRetroFeedbackItem",
     "PrFeedbackPayload",
     "ScmBranchCreatePayload",

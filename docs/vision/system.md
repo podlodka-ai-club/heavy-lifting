@@ -123,6 +123,7 @@ The MVP intentionally stays narrow:
 - append-only agent retro feedback persistence plus read-only `/retro/entries` and `/retro/tags`;
 - prompt-management API for listing stored agent prompts, reading one prompt, and updating prompt content;
 - runtime-settings API for listing and updating persisted non-secret operational settings;
+- authenticated operator API support for posting a manual tracker comment to an existing task thread by local task id;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
 - selection of previously estimated small tracker tasks into one executable subtask through the tracker boundary contract, with duplicate parent selection blocked through tracker metadata.

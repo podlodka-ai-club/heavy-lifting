@@ -37,6 +37,7 @@ def test_get_openapi_json_describes_public_api() -> None:
         "/stats",
         "/tasks",
         "/tasks/{task_id}",
+        "/tasks/{task_id}/tracker-comments",
         "/tasks/intake",
     }
 
@@ -84,15 +85,46 @@ def test_openapi_json_describes_task_and_stats_responses() -> None:
     ] == {"$ref": "#/components/schemas/StatsResponse"}
 
 
+def test_openapi_json_describes_manual_tracker_comment_endpoint() -> None:
+    app = create_app(runtime=_runtime())
+
+    schema = app.test_client().get("/openapi.json").get_json()
+
+    assert schema is not None
+    operation = schema["paths"]["/tasks/{task_id}/tracker-comments"]["post"]
+    assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ManualTrackerCommentPayload"
+    }
+    assert operation["responses"]["201"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ManualTrackerCommentResponse"
+    }
+    assert operation["security"] == [{"BasicAuth": []}]
+    payload_schema = schema["components"]["schemas"]["ManualTrackerCommentPayload"]
+    assert payload_schema["required"] == ["body"]
+    response_schema = schema["components"]["schemas"]["ManualTrackerCommentResponse"]
+    assert response_schema["required"] == [
+        "task_id",
+        "tracker_task_id",
+        "tracker_comment_id",
+    ]
+    assert schema["components"]["securitySchemes"] == {
+        "BasicAuth": {
+            "type": "http",
+            "scheme": "basic",
+            "description": "HTTP Basic authentication for operator endpoints.",
+        }
+    }
+
+
 def test_openapi_json_describes_factory_response() -> None:
     app = create_app(runtime=_runtime())
 
     schema = app.test_client().get("/openapi.json").get_json()
 
     assert schema is not None
-    assert schema["paths"]["/factory"]["get"]["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"] == {"$ref": "#/components/schemas/FactoryResponse"}
+    assert schema["paths"]["/factory"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/FactoryResponse"}
     factory_schema = schema["components"]["schemas"]["FactoryResponse"]
     assert factory_schema["required"] == [
         "generated_at",
@@ -129,15 +161,15 @@ def test_openapi_json_describes_economics_paths_without_api_prefix() -> None:
 
     assert schema is not None
     assert "/api/economics" not in schema["paths"]
-    assert schema["paths"]["/economics"]["get"]["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"] == {"$ref": "#/components/schemas/EconomicsSnapshotResponse"}
+    assert schema["paths"]["/economics"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/EconomicsSnapshotResponse"}
     assert schema["paths"]["/economics/mock-revenue"]["post"]["requestBody"]["content"][
         "application/json"
     ]["schema"] == {"$ref": "#/components/schemas/MockRevenuePayload"}
-    assert schema["paths"]["/economics/revenue/{root_task_id}"]["put"]["requestBody"][
-        "content"
-    ]["application/json"]["schema"] == {"$ref": "#/components/schemas/RevenueUpsertPayload"}
+    assert schema["paths"]["/economics/revenue/{root_task_id}"]["put"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/RevenueUpsertPayload"}
     economics_parameters = {
         parameter["name"]: parameter
         for parameter in schema["paths"]["/economics"]["get"]["parameters"]
@@ -180,9 +212,9 @@ def test_openapi_json_describes_prompt_endpoints() -> None:
         "created_at",
         "updated_at",
     ]
-    assert schema["paths"]["/prompts"]["get"]["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"] == {"$ref": "#/components/schemas/AgentPromptsListResponse"}
+    assert schema["paths"]["/prompts"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/AgentPromptsListResponse"}
     prompt_path = schema["paths"]["/prompts/{prompt_key}"]
     assert set(prompt_path) == {"get", "patch"}
     assert prompt_path["patch"]["requestBody"]["content"]["application/json"]["schema"] == {
@@ -214,9 +246,9 @@ def test_openapi_json_describes_setting_endpoints() -> None:
         "int",
         "string",
     ]
-    assert schema["paths"]["/settings"]["get"]["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"] == {"$ref": "#/components/schemas/ApplicationSettingsListResponse"}
+    assert schema["paths"]["/settings"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/ApplicationSettingsListResponse"}
     setting_path = schema["paths"]["/settings/{setting_key}"]
     assert set(setting_path) == {"patch"}
     assert setting_path["patch"]["requestBody"]["content"]["application/json"]["schema"] == {
@@ -233,9 +265,9 @@ def test_openapi_json_describes_retro_endpoints() -> None:
     assert schema["paths"]["/retro/entries"]["get"]["responses"]["200"]["content"][
         "application/json"
     ]["schema"] == {"$ref": "#/components/schemas/RetroEntriesResponse"}
-    assert schema["paths"]["/retro/tags"]["get"]["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"] == {"$ref": "#/components/schemas/RetroTagsResponse"}
+    assert schema["paths"]["/retro/tags"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/RetroTagsResponse"}
     components = schema["components"]["schemas"]
     assert components["RetroEntry"]["required"] == [
         "id",

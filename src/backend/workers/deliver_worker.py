@@ -21,6 +21,7 @@ from backend.schemas import (
     TrackerStatusUpdatePayload,
 )
 from backend.services.context_builder import ContextBuilder
+from backend.services.tracker_task_resolution import resolve_tracker_external_task_id
 from backend.settings import get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
@@ -143,20 +144,13 @@ class DeliverWorker:
             sleep_fn(self.poll_interval)
 
     def _resolve_tracker_task_id(self, *, task_context: EffectiveTaskContext) -> str:
-        candidates = (
-            task_context.current_task.task.external_parent_id,
-            task_context.execute_task.task.external_parent_id
-            if task_context.execute_task is not None
-            else None,
-            task_context.fetch_task.task.external_task_id
-            if task_context.fetch_task is not None
-            else None,
-            task_context.root_task.task.external_task_id,
+        tracker_task_id = resolve_tracker_external_task_id(
+            task=task_context.current_task.task,
+            task_chain=[entry.task for entry in task_context.lineage],
         )
-        for candidate in candidates:
-            if candidate:
-                return candidate
-        raise ValueError("deliver task requires a tracker external task id")
+        if tracker_task_id is None:
+            raise ValueError("deliver task requires a tracker external task id")
+        return tracker_task_id
 
     def _build_comment_body(self, *, execute_result: TaskResultPayload) -> str:
         if execute_result.tracker_comment:
