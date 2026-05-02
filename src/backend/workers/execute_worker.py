@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -53,6 +54,31 @@ class PreparedExecution:
     branch_name: str | None
     runtime_metadata: dict[str, object]
     skip_scm_artifacts: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedTriageExecution:
+    """Prepared input для TriageStep.run (см. task05).
+
+    Отличия от PreparedExecution:
+
+    - ``workspace_path`` всегда строка (либо клон репо, либо пустой
+      tmp-каталог) — соответствует обязательному
+      :attr:`AgentRunRequest.workspace_path`;
+    - ``workspace`` может быть ``None``, если ``task_context.workspace_key``
+      пуст (без workspace_key SCM не сможет подготовить чекаут — даже если
+      ``repo_url`` известен);
+    - ``cleanup_paths`` — каталоги, которые caller (task06) обязан удалить
+      после ``agent_runner.run`` (актуально только для tmp-fallback).
+      ``_prepare_triage_execution`` сам ``shutil.rmtree`` **не** вызывает,
+      потому что lifecycle привязан к моменту завершения agent run.
+    """
+
+    task_context: EffectiveTaskContext
+    workspace_path: str
+    runtime_metadata: dict[str, object]
+    workspace: ScmWorkspace | None = None
+    cleanup_paths: tuple[Path, ...] = ()
 
 
 @dataclass(slots=True)
@@ -218,22 +244,11 @@ class ExecuteWorker:
         task: Task,
         task_chain: list[Task],
     ) -> PreparedExecution:
-        def _resolve_handover_brief(from_task_id: int) -> str | None:
-            triage_task = repository.get_task(from_task_id)
-            if triage_task is None:
-                return None
-            payload = parse_task_result_payload(triage_task)
-            if payload is None:
-                return None
-            raw = payload.metadata.get("handover_brief")
-            if isinstance(raw, str) and raw.strip():
-                return raw
-            return None
-
+        brief_resolver = self._build_brief_resolver(repository=repository)
         task_context = self.context_builder.build_for_task(
             task=task,
             task_chain=task_chain,
-            brief_resolver=_resolve_handover_brief,
+            brief_resolver=brief_resolver,
         )
         skip_scm_artifacts = self._should_skip_scm_artifacts(task_context=task_context)
         workspace = self._ensure_workspace(task_context=task_context)
@@ -272,6 +287,116 @@ class ExecuteWorker:
             runtime_metadata=runtime_metadata,
             skip_scm_artifacts=skip_scm_artifacts,
         )
+
+    def _prepare_triage_execution(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_chain: list[Task],
+    ) -> PreparedTriageExecution:
+        """Lightweight prepare for the triage agent (no ``_ensure_workspace``).
+
+        Triage by contract is allowed to run without a backing repo: when
+        ``workspace_key`` is missing in the lineage, we materialise an empty tmp
+        directory under
+        ``settings.workspace_root / "__triage__" / f"task-{task.id}"`` so that
+        :attr:`AgentRunRequest.workspace_path` is always satisfied. The directory
+        is created idempotently (``mkdir(parents=True, exist_ok=True)``) and
+        returned via ``cleanup_paths`` so the caller can ``rmtree`` it after the
+        agent run.
+
+        When ``workspace_key`` is present but ``repo_url`` / ``repo_ref`` are
+        empty (e.g. installations where ``GitHubScm.ensure_workspace`` resolves
+        the URL via ``default_repo_url``), we still go through the SCM path —
+        the resolved fields are written back both to the DB row and to the
+        returned ``task_context``, so ``TriageStep.build_prompt`` sees the
+        canonical repo signals.
+        """
+
+        brief_resolver = self._build_brief_resolver(repository=repository)
+        task_context = self.context_builder.build_for_task(
+            task=task,
+            task_chain=task_chain,
+            brief_resolver=brief_resolver,
+        )
+
+        # Наличие ``workspace_key`` — единственный устойчивый сигнал «backend
+        # готов выдать workspace»: ``_ensure_workspace`` raise'ит только если
+        # ``workspace_key`` пуст, тогда как ``repo_url`` SCM-адаптер волен
+        # дорезолвить через ``default_repo_url`` (см. GitHubScm). Поэтому не
+        # уводим триаж в tmp-каталог только из-за пустого ``repo_url``.
+        has_repo = bool(task_context.workspace_key)
+
+        workspace: ScmWorkspace | None
+        cleanup_paths: tuple[Path, ...]
+        if has_repo:
+            workspace = self._ensure_workspace(task_context=task_context)
+            repository.update_task_workspace_context(
+                task.id,
+                repo_url=workspace.repo_url,
+                repo_ref=workspace.repo_ref,
+                workspace_key=workspace.workspace_key,
+            )
+            # SCM мог дорезолвить repo_url / repo_ref (default_repo_url /
+            # default_repo_ref) — пробрасываем канонные значения в task_context,
+            # чтобы TriageStep.build_prompt видел свежие repo signals.
+            task_context = replace(
+                task_context,
+                repo_url=workspace.repo_url,
+                repo_ref=workspace.repo_ref,
+                workspace_key=workspace.workspace_key,
+            )
+            workspace_path = workspace.local_path
+            cleanup_paths = ()
+        else:
+            tmp_dir = Path(self.settings.workspace_root) / "__triage__" / f"task-{task.id}"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            workspace = None
+            workspace_path = str(tmp_dir)
+            cleanup_paths = (tmp_dir,)
+
+        runtime_metadata: dict[str, object] = {
+            "task_id": task.id,
+            "task_type": task.task_type.value,
+            "action": "triage",
+            "workspace_path": workspace_path,
+            "workspace_key": workspace.workspace_key if workspace is not None else None,
+            "repo_url": workspace.repo_url if workspace is not None else None,
+            "repo_ref": workspace.repo_ref if workspace is not None else None,
+            "branch_name": None,
+            "repo_available": has_repo,
+        }
+        _task_logger(
+            task,
+            workspace_path=workspace_path,
+            repo_available=has_repo,
+            action="triage",
+        ).info("triage_workspace_prepared")
+        return PreparedTriageExecution(
+            task_context=task_context,
+            workspace_path=workspace_path,
+            runtime_metadata=runtime_metadata,
+            workspace=workspace,
+            cleanup_paths=cleanup_paths,
+        )
+
+    def _build_brief_resolver(
+        self, *, repository: TaskRepository
+    ) -> Callable[[int], str | None]:
+        def _resolve_handover_brief(from_task_id: int) -> str | None:
+            triage_task = repository.get_task(from_task_id)
+            if triage_task is None:
+                return None
+            payload = parse_task_result_payload(triage_task)
+            if payload is None:
+                return None
+            raw = payload.metadata.get("handover_brief")
+            if isinstance(raw, str) and raw.strip():
+                return raw
+            return None
+
+        return _resolve_handover_brief
 
     def _execute_prepared_execution(
         self,
