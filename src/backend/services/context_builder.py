@@ -50,7 +50,9 @@ class ContextBuilder:
         current_entry = lineage[-1]
 
         fetch_entry = _find_first_task(lineage, TaskType.FETCH)
-        execute_entry = _find_first_task(lineage, TaskType.EXECUTE)
+        execute_entry = self._find_relevant_execute_for_current(
+            current_entry=current_entry, lineage=lineage
+        )
         deliver_entry = current_entry if current_entry.task.task_type == TaskType.DELIVER else None
         feedback_entry = (
             current_entry if current_entry.task.task_type == TaskType.PR_FEEDBACK else None
@@ -113,6 +115,36 @@ class ContextBuilder:
             instructions=_resolve_input_attr(lineage, "instructions"),
             commit_message_hint=_resolve_input_attr(lineage, "commit_message_hint"),
         )
+
+    def _find_relevant_execute_for_current(
+        self,
+        *,
+        current_entry: TaskChainEntry,
+        lineage: Sequence[TaskChainEntry],
+    ) -> TaskChainEntry | None:
+        """Return the execute-task that is the contextual ancestor for the current task.
+
+        Rules:
+        - If ``current_entry`` itself is an EXECUTE task → return ``current_entry``.
+        - Otherwise (deliver / pr_feedback) → return the **last** EXECUTE-ancestor in
+          ``lineage`` (i.e. the one closest to the current task in root→leaf order).
+        - If no EXECUTE-task is present in ``lineage`` → ``None``.
+
+        The "last in lineage" strategy intentionally protects gap #10: when the
+        sibling-impl-execute model lands (task07), ``lineage`` for a deliver-task under
+        the implementation-execute will never contain the triage-execute (because
+        triage is a sibling, not an ancestor). However, if for any reason a degenerate
+        chain like ``[fetch, triage_execute, impl_execute, deliver]`` appears, picking
+        the **last** execute selects the implementation, which is the contextually
+        correct one for deliver/pr_feedback.
+        """
+        if current_entry.task.task_type == TaskType.EXECUTE:
+            return current_entry
+
+        for entry in reversed(lineage):
+            if entry.task.task_type == TaskType.EXECUTE:
+                return entry
+        return None
 
     def _resolve_root_entry(
         self,

@@ -208,6 +208,33 @@ class TaskRepository:
         )
         return self._session.execute(statement).scalars().first()
 
+    def find_implementation_execute_for_root(self, root_id: int) -> Task | None:
+        """Return the implementation-execute task in the cluster rooted at ``root_id``.
+
+        Used by ``TriageStep`` (task07) to ensure idempotency: don't create a second
+        sibling-impl-execute if one already exists.
+
+        Filtering on ``input_payload['action'] == 'implementation'`` is done in Python
+        rather than via JSON-path SQL so the implementation works uniformly across
+        SQLite (tests) and Postgres (production) backends — ``Task.input_payload`` is
+        declared as a generic SQLAlchemy ``JSON`` column.
+
+        Returns the earliest such task by (created_at, id). ``None`` if no match.
+        """
+        statement = (
+            select(Task)
+            .where(
+                Task.root_id == root_id,
+                Task.task_type == TaskType.EXECUTE,
+            )
+            .order_by(Task.created_at.asc(), Task.id.asc())
+        )
+        for task in self._session.execute(statement).scalars():
+            payload = task.input_payload
+            if isinstance(payload, dict) and payload.get("action") == "implementation":
+                return task
+        return None
+
     def find_latest_child_task(self, *, parent_id: int, task_type: TaskType) -> Task | None:
         statement = (
             select(Task)
