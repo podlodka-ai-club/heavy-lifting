@@ -117,7 +117,11 @@ class MockTracker:
 
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference:
         task = self._tasks[payload.external_task_id]
-        task.context.references.extend(link.model_copy(deep=True) for link in payload.links)
+        own_write_links = [
+            link.model_copy(deep=True, update={"origin": "own_write"})
+            for link in payload.links
+        ]
+        task.context.references.extend(own_write_links)
         return TrackerTaskReference(external_id=task.external_id)
 
     def _next_task_id(self) -> str:

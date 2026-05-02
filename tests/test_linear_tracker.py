@@ -1736,6 +1736,7 @@ def test_attach_links_sends_one_mutation_per_link_in_order(
             "issueId": "ISS-5",
             "url": f"https://example.test/pr/{index}",
             "title": f"PR #{index}",
+            "subtitle": "heavy-lifting:own-write",
         }
 
 
@@ -1760,6 +1761,7 @@ def test_attach_links_with_single_link_sends_one_mutation(
         "issueId": "ISS-1",
         "url": "https://example.test/x",
         "title": "X",
+        "subtitle": "heavy-lifting:own-write",
     }
 
 

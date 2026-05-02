@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -35,6 +35,7 @@ HttpRequester = Callable[[urllib.request.Request, float], Any]
 INPUT_BLOCK_OPEN = "<!-- heavy-lifting:input -->"
 INPUT_BLOCK_CLOSE = "<!-- /heavy-lifting:input -->"
 _HIDDEN_METADATA_KEYS = frozenset({"estimate", "selection"})
+_OWN_WRITE_SUBTITLE_MARKER = "heavy-lifting:own-write"
 
 _logger = get_logger(component="linear_tracker")
 
@@ -93,7 +94,7 @@ query LinearFetchIssues(
       description
       state { id type name }
       labels { nodes { id name } }
-      attachments { nodes { url title } }
+      attachments { nodes { url title subtitle } }
       url
     }
     pageInfo { hasNextPage endCursor }
@@ -658,7 +659,13 @@ class LinearTracker:
                 continue
             title = raw.get("title")
             label = title if isinstance(title, str) and title else url
-            result.append(TaskLink(label=label, url=url))
+            subtitle = raw.get("subtitle")
+            origin: Literal["user", "own_write"]
+            if isinstance(subtitle, str) and subtitle == _OWN_WRITE_SUBTITLE_MARKER:
+                origin = "own_write"
+            else:
+                origin = "user"
+            result.append(TaskLink(label=label, url=url, origin=origin))
         return result
 
     def _extract_task_type(self, labels: Any) -> TaskType | None:
@@ -944,6 +951,7 @@ class LinearTracker:
                     "issueId": payload.external_task_id,
                     "url": link.url,
                     "title": link.label,
+                    "subtitle": _OWN_WRITE_SUBTITLE_MARKER,
                 }
             }
             data = self._client.execute(_ATTACHMENT_CREATE_MUTATION, variables)

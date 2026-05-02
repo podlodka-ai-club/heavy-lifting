@@ -235,6 +235,68 @@ class TaskRepository:
                 return task
         return None
 
+    def find_pending_triage_execute(self, *, parent_id: int) -> Task | None:
+        """Return earliest NEW execute under fetch with ``action='triage'``.
+
+        Used by ``tracker_intake`` re-triage flow (task18a §6.7a). Filtering on
+        ``input_payload['action']`` is performed in Python so the implementation
+        works uniformly across SQLite (tests) and Postgres (production) — the
+        ``input_payload`` column is a generic SQLAlchemy ``JSON``.
+        """
+        statement = (
+            select(Task)
+            .where(
+                Task.parent_id == parent_id,
+                Task.task_type == TaskType.EXECUTE,
+                Task.status == TaskStatus.NEW,
+            )
+            .order_by(Task.created_at.asc(), Task.id.asc())
+        )
+        for task in self._session.execute(statement).scalars():
+            payload = task.input_payload
+            if isinstance(payload, dict) and payload.get("action") == "triage":
+                return task
+        return None
+
+    def find_processing_triage_execute(self, *, parent_id: int) -> Task | None:
+        """Return PROCESSING execute under fetch with ``action='triage'``."""
+        statement = (
+            select(Task)
+            .where(
+                Task.parent_id == parent_id,
+                Task.task_type == TaskType.EXECUTE,
+                Task.status == TaskStatus.PROCESSING,
+            )
+            .order_by(Task.id.asc())
+        )
+        for task in self._session.execute(statement).scalars():
+            payload = task.input_payload
+            if isinstance(payload, dict) and payload.get("action") == "triage":
+                return task
+        return None
+
+    def find_last_completed_triage_execute(self, *, parent_id: int) -> Task | None:
+        """Return latest DONE execute under fetch with ``action='triage'``.
+
+        Ordered by ``created_at DESC`` to fetch the most recent successful triage.
+        Used by re-triage logic to discover whether the last triage was an
+        escalation; ``None`` if no DONE triage exists.
+        """
+        statement = (
+            select(Task)
+            .where(
+                Task.parent_id == parent_id,
+                Task.task_type == TaskType.EXECUTE,
+                Task.status == TaskStatus.DONE,
+            )
+            .order_by(Task.created_at.desc(), Task.id.desc())
+        )
+        for task in self._session.execute(statement).scalars():
+            payload = task.input_payload
+            if isinstance(payload, dict) and payload.get("action") == "triage":
+                return task
+        return None
+
     def find_latest_child_task(self, *, parent_id: int, task_type: TaskType) -> Task | None:
         statement = (
             select(Task)

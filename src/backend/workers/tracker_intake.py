@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
@@ -21,7 +22,10 @@ from backend.schemas import (
     TrackerFetchTasksQuery,
     TrackerTask,
 )
+from backend.services.user_content_hash import compute_user_content_hash
 from backend.task_constants import TaskStatus, TaskType
+
+_LAST_TRIAGE_USER_CONTENT_HASH_KEY = "last_triage_user_content_hash"
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,7 +219,13 @@ class TrackerIntakeWorker:
         )
         created_fetch_task = False
 
+        incoming_hash = compute_user_content_hash(tracker_task)
+
         if fetch_task is None:
+            initial_context = tracker_task.context.model_dump(mode="python")
+            initial_metadata = dict(initial_context.get("metadata") or {})
+            initial_metadata[_LAST_TRIAGE_USER_CONTENT_HASH_KEY] = incoming_hash
+            initial_context["metadata"] = initial_metadata
             fetch_task = repository.create_task(
                 TaskCreateParams(
                     task_type=TaskType.FETCH,
@@ -226,7 +236,7 @@ class TrackerIntakeWorker:
                     repo_url=tracker_task.repo_url,
                     repo_ref=tracker_task.repo_ref,
                     workspace_key=tracker_task.workspace_key,
-                    context=tracker_task.context.model_dump(mode="python"),
+                    context=initial_context,
                     input_payload=_dump_model_or_none(tracker_task.input_payload),
                 )
             )
@@ -238,6 +248,14 @@ class TrackerIntakeWorker:
                 repo_url=fetch_task.repo_url,
                 repo_ref=fetch_task.repo_ref,
                 workspace_key=fetch_task.workspace_key,
+            )
+        else:
+            self._refresh_fetch_on_user_edit(
+                repository=repository,
+                fetch_task=fetch_task,
+                tracker_task=tracker_task,
+                incoming_hash=incoming_hash,
+                logger=logger,
             )
 
         execute_task = repository.find_child_task(
@@ -287,6 +305,74 @@ class TrackerIntakeWorker:
         return IntakeOutcome(
             created_fetch_task=created_fetch_task,
             created_execute_task=created_execute_task,
+        )
+
+    def _refresh_fetch_on_user_edit(
+        self,
+        *,
+        repository: TaskRepository,
+        fetch_task,  # backend.models.Task
+        tracker_task: TrackerTask,
+        incoming_hash: str,
+        logger,
+    ) -> None:
+        """Refresh ``fetch_task.context`` when the user has edited the tracker issue.
+
+        See plan §6.7a: own-writes (our ``add_comment``/``update_estimate``/
+        ``attach_links`` operations) must not trigger this path. Provenance is
+        carried by ``TaskLink.origin == 'own_write'`` (excluded by
+        ``compute_user_content_hash``); ``metadata`` is also excluded from the
+        hash because it is our own bookkeeping channel.
+
+        Behaviour:
+
+        * If ``incoming_hash == stored_hash`` → no-op.
+        * Otherwise → re-assign ``fetch_task.context`` with the latest tracker
+          snapshot (incl. references), preserving existing ``metadata`` keys
+          and updating ``last_triage_user_content_hash`` ONLY when no triage
+          execute is currently ``PROCESSING`` (so a user edit during an
+          in-flight triage is not silently dropped after that triage finishes).
+        * If a pending ``NEW`` triage execute exists, also refresh its
+          ``context`` with the same fresh snapshot so the worker picks up the
+          latest user-authored fields when it eventually runs.
+
+        This method is the task18a slice of the re-triage protocol — creating a
+        new triage execute or superseding pending impl belongs to task18b and
+        is intentionally NOT performed here.
+        """
+
+        existing_context = fetch_task.context or {}
+        existing_metadata = dict(existing_context.get("metadata") or {})
+        stored_hash = existing_metadata.get(_LAST_TRIAGE_USER_CONTENT_HASH_KEY)
+
+        if incoming_hash == stored_hash:
+            return
+
+        processing_triage = repository.find_processing_triage_execute(
+            parent_id=fetch_task.id
+        )
+        pending_triage = repository.find_pending_triage_execute(parent_id=fetch_task.id)
+
+        new_context = tracker_task.context.model_dump(mode="python")
+        merged_metadata = dict(existing_metadata)
+        merged_metadata.update(new_context.get("metadata") or {})
+        if processing_triage is None:
+            merged_metadata[_LAST_TRIAGE_USER_CONTENT_HASH_KEY] = incoming_hash
+        new_context["metadata"] = merged_metadata
+        fetch_task.context = new_context
+        flag_modified(fetch_task, "context")
+
+        if pending_triage is not None:
+            pending_triage.context = tracker_task.context.model_dump(mode="python")
+            flag_modified(pending_triage, "context")
+
+        logger.info(
+            "fetch_context_refreshed_on_user_edit",
+            task_id=fetch_task.id,
+            root_task_id=fetch_task.root_id or fetch_task.id,
+            processing_triage_present=processing_triage is not None,
+            pending_triage_updated=pending_triage is not None,
+            hash_updated=processing_triage is None,
         )
 
     def _ingest_pr_feedback(

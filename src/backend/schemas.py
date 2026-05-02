@@ -38,6 +38,7 @@ class SchemaModel(BaseModel):
 class TaskLink(SchemaModel):
     label: str
     url: str
+    origin: Literal["user", "own_write"] | None = None
 
 
 class PrFeedbackPayload(SchemaModel):
