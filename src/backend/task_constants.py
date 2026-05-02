@@ -6,6 +6,7 @@ class TaskType(StrEnum):
     EXECUTE = "execute"
     DELIVER = "deliver"
     PR_FEEDBACK = "pr_feedback"
+    TRACKER_FEEDBACK = "tracker_feedback"
 
 
 class TaskStatus(StrEnum):

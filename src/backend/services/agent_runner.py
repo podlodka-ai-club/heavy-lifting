@@ -97,9 +97,15 @@ class LocalAgentRunner:
 
     def _build_summary(self, context: EffectiveTaskContext) -> str:
         execution_title = context.execution_context.title if context.execution_context else "task"
-        if context.flow_type == TaskType.PR_FEEDBACK and context.current_feedback is not None:
+        if (
+            context.flow_type in {TaskType.PR_FEEDBACK, TaskType.TRACKER_FEEDBACK}
+            and context.current_feedback is not None
+        ):
             comment_id = context.current_feedback.comment_id
-            return f"Prepared follow-up response for review comment {comment_id}."
+            feedback_label = "review comment"
+            if context.flow_type == TaskType.TRACKER_FEEDBACK:
+                feedback_label = "tracker comment"
+            return f"Prepared follow-up response for {feedback_label} {comment_id}."
         if context.flow_type == TaskType.EXECUTE:
             return f"Prepared local agent execution for {execution_title}."
         return f"Prepared local agent result for {execution_title}."

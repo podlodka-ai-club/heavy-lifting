@@ -18,6 +18,7 @@ The target system is a reliable orchestration backend that:
 - prepares a reproducible workspace and runs an external coding agent or local runner;
 - creates or updates pull requests through an SCM boundary;
 - processes follow-up review feedback as first-class work;
+- processes estimate-only tracker-thread follow-up comments as first-class work;
 - delivers status, artifacts, and outcome summaries back to the tracker;
 - tracks token usage, root-task revenue, and other execution metadata needed for operational and MVP economics visibility.
 
@@ -56,6 +57,8 @@ For CLI-backed execution, the orchestrator runs `opencode run --format json` and
 
 Estimate-only intake is the current exception: `worker2` still runs the agent to obtain the estimate text, but it skips branch, commit, push, and PR side effects and hands the result straight to `worker3` for tracker delivery. Before handoff it normalizes the tracker comment so the final delivery keeps both the estimate and its rationale when the runner splits them across `stdout_preview`, `tracker_comment`, or `details`, without repeating the same text twice.
 
+The same estimate-only branch now supports the first tracker-thread conversation loop. `worker1` polls new tracker comments on eligible estimate-only execute threads, ignores orchestrator-authored comments, stores a per-thread cursor, and creates one `tracker_feedback` child task per new actionable comment. `worker2` answers that child without SCM side effects, and `worker3` posts the reply back into the same tracker thread.
+
 ### PR Feedback
 
 If a pull request receives review comments or requested changes, the orchestrator creates a follow-up task linked to the original implementation thread. The same branch and PR remain the center of the iteration so the history stays continuous.
@@ -89,7 +92,7 @@ The orchestration pipeline relies on a stable handoff contract documented in `do
 - `input_payload` carries the current-step command.
 - `result_payload` carries machine-readable outcome, routing, delivery instructions, and generated artifacts.
 
-This separation keeps worker boundaries explicit and allows triage, implementation, PR feedback, and delivery to reuse one contract model.
+This separation keeps worker boundaries explicit and allows triage, implementation, PR feedback, tracker feedback, and delivery to reuse one contract model.
 
 The triage-specific signal set and routing matrix are documented in `docs/contracts/triage-routing.md`.
 
@@ -103,7 +106,7 @@ Runtime logs are emitted as structured JSON events from the API, workers, and ag
 - Correlation fields such as `task_id`, `root_task_id`, `workspace_key`, `branch_name`, and `pr_external_id` make it possible to follow one execution thread across workers.
 - Logs are intended for operational tracing only; durable task routing and delivery decisions still flow through `context`, `input_payload`, and `result_payload`.
 
-The read-only factory API exposes the current pipeline view through `GET /factory`. It aggregates existing `tasks` rows into the ordered stations `fetch`, `execute`, `pr_feedback`, and `deliver`, reports WIP and queue/active/failed counts, and names the current bottleneck by largest WIP. It does not fabricate throughput, transition history, worker capacity, rework-loop, or business-kind analytics that are not present in the MVP data model.
+The read-only factory API exposes the current pipeline view through `GET /factory`. It aggregates existing `tasks` rows into the ordered stations `fetch`, `execute`, `pr_feedback`, `tracker_feedback`, and `deliver`, reports WIP and queue/active/failed counts, and names the current bottleneck by largest WIP. It does not fabricate throughput, transition history, worker capacity, rework-loop, or business-kind analytics that are not present in the MVP data model.
 
 The economics API exposes the current money view through `GET /economics`, `POST /economics/mock-revenue`, and `PUT /economics/revenue/{root_task_id}`. It treats a root chain as closed when the chain has a successful `deliver` task and uses the first such `deliver.updated_at` as `closed_at`. Revenue is stored once per root in `task_revenue`, token cost is summed from `token_usage` across all tasks in the closed root chain, and aggregate profit is reported as displayed revenue minus displayed token cost. `GET /economics` defaults to the last 30 days when no period is supplied. Known gaps such as infra cost, runner hours, external accounting import, and retry waste remain explicit rather than being estimated silently.
 
@@ -126,6 +129,7 @@ The MVP intentionally stays narrow:
 - authenticated operator API support for posting a manual tracker comment to an existing task thread by local task id;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.
+- support for estimate-only tracker-comment follow-up loops that stay inside the original tracker thread and avoid SCM artifacts.
 - selection of previously estimated small tracker tasks into one executable subtask through the tracker boundary contract, with duplicate parent selection blocked through tracker metadata.
 
 ## Non-Goals

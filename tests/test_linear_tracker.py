@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 
 from backend.adapters.linear_tracker import (
+    COMMENT_METADATA_CLOSE,
+    COMMENT_METADATA_OPEN,
     INPUT_BLOCK_CLOSE,
     INPUT_BLOCK_OPEN,
     LinearRateLimitError,
@@ -27,6 +29,7 @@ from backend.schemas import (
     TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
+    TrackerReadCommentsQuery,
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
@@ -1479,6 +1482,51 @@ def test_add_comment_sends_issue_id_and_body_and_returns_comment_reference(
     assert len(calls) == 1
     input_vars = calls[0]["variables"]["input"]
     assert input_vars == {"issueId": "ISS-7", "body": "Hello from worker"}
+
+
+def test_read_comments_reads_issue_comments_only_and_strips_hidden_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {
+            "data": {
+                "issue": {
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "comment-1",
+                                "body": "Need more rationale\n\n"
+                                + COMMENT_METADATA_OPEN
+                                + '\n{"source": "heavy_lifting"}\n'
+                                + COMMENT_METADATA_CLOSE,
+                                "url": "https://linear.app/comment/1",
+                                "user": {
+                                    "id": "user-1",
+                                    "name": "hl-bot",
+                                    "displayName": "Heavy Lifting",
+                                },
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
+        }
+    ).encode("utf-8")
+    fake, calls = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.read_comments(TrackerReadCommentsQuery(external_task_id="ISS-7", limit=10))
+
+    assert len(result.items) == 1
+    assert result.items[0].external_task_id == "ISS-7"
+    assert result.items[0].comment_id == "comment-1"
+    assert result.items[0].body == "Need more rationale"
+    assert result.items[0].author == "Heavy Lifting"
+    assert result.items[0].metadata == {"source": "heavy_lifting"}
+    assert result.latest_cursor == "comment-1"
+    assert calls[0]["variables"] == {"id": "ISS-7", "first": 10, "after": None}
 
 
 def test_add_comment_raises_when_response_success_is_false(

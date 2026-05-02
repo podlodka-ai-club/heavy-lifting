@@ -23,7 +23,7 @@ def resolve_tracker_external_task_id(*, task: Task, task_chain: Sequence[Task]) 
     execute_task = _find_first_task(lineage=lineage, task_type=TaskType.EXECUTE)
 
     current_tracker_id = None
-    if current_task.task_type in {TaskType.EXECUTE, TaskType.DELIVER}:
+    if current_task.task_type in {TaskType.EXECUTE, TaskType.DELIVER, TaskType.TRACKER_FEEDBACK}:
         current_tracker_id = current_task.external_parent_id
     elif current_task.task_type == TaskType.FETCH:
         current_tracker_id = current_task.external_task_id

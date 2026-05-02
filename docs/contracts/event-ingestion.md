@@ -49,7 +49,7 @@ If an event does not create a child task and does not change orchestration state
 This means the MVP contract supports two observable outcomes for a follow-up event:
 
 - `metadata_only` - update task-thread metadata and create no child task;
-- `create_child_task` - create a new `execute` or `pr_feedback` child task.
+- `create_child_task` - create a new `execute`, `pr_feedback`, or `tracker_feedback` child task.
 
 ## Normalized Event Envelope
 
@@ -74,6 +74,10 @@ Normalization removes source-specific naming differences before deduplication an
 
 - A new tracker task remains `new_task_intake`, not `tracker_comment`.
 - A tracker comment on an existing task becomes `tracker_comment`.
+- For the current MVP slice, `worker1` polls tracker comments only for estimate-only `execute` threads that already resolved without SCM artifacts.
+- The tracker read contract is `TrackerReadCommentsQuery(external_task_id, since_cursor, page_cursor, limit) -> TrackerReadCommentsResult(items, next_page_cursor, latest_cursor)`.
+- `latest_cursor` is persisted on the owning execute task as `context.metadata.tracker_comment_cursor` so repeated polls stay idempotent.
+- System-authored tracker comments created by the orchestrator carry `metadata.source = heavy_lifting` and must be ignored during polling.
 - A tracker status update becomes `tracker_status_change` only if the change matters to orchestration decisions.
 - Tracker attachments or formatting-only edits may be stored as metadata and ignored for routing in the MVP.
 
@@ -90,13 +94,13 @@ If an SCM platform emits several representations of the same review action, the 
 
 The `SCM_ADAPTER=github` adapter merges three GitHub endpoints when answering `read_pr_feedback`:
 
-| Source | Endpoint | `comment_id` | `metadata.event_kind` |
-| --- | --- | --- | --- |
-| issue | `GET /repos/{o}/{r}/issues/{n}/comments` | `issue-<id>` | `pr_comment` |
-| review_comment | `GET /repos/{o}/{r}/pulls/{n}/comments` | `review_comment-<id>` | `pr_comment` |
-| review (`APPROVED`) | `GET /repos/{o}/{r}/pulls/{n}/reviews` | `review-<id>` | `pr_review_approved` |
-| review (`CHANGES_REQUESTED`) | same | `review-<id>` | `pr_review_requested_changes` |
-| review (`COMMENTED`) | same | `review-<id>` | `pr_comment` |
+| Source                       | Endpoint                                 | `comment_id`          | `metadata.event_kind`         |
+| ---------------------------- | ---------------------------------------- | --------------------- | ----------------------------- |
+| issue                        | `GET /repos/{o}/{r}/issues/{n}/comments` | `issue-<id>`          | `pr_comment`                  |
+| review_comment               | `GET /repos/{o}/{r}/pulls/{n}/comments`  | `review_comment-<id>` | `pr_comment`                  |
+| review (`APPROVED`)          | `GET /repos/{o}/{r}/pulls/{n}/reviews`   | `review-<id>`         | `pr_review_approved`          |
+| review (`CHANGES_REQUESTED`) | same                                     | `review-<id>`         | `pr_review_requested_changes` |
+| review (`COMMENTED`)         | same                                     | `review-<id>`         | `pr_comment`                  |
 
 Empty review bodies are normalized to `(approved without comment)` or `(changes requested without comment)` so `PrFeedbackPayload.body` stays non-empty. The original GitHub `state` is preserved in `metadata.review_state`.
 
@@ -147,6 +151,7 @@ After normalization and deduplication, the event router decides whether to recor
 ### Tracker Comment
 
 - If the comment adds clarification to a task that is waiting on missing information, record it and create a follow-up `execute` task with `input_payload.action = triage` so the task can be re-assessed.
+- If the comment arrives on an estimate-only execute thread, record it and create exactly one `tracker_feedback` child task per new actionable comment id. The child input payload carries the explicit tracker comment payload (`external_task_id`, `comment_id`, `author`, `body`, `url`, `metadata`) so the follow-up reply can stay in the same tracker thread.
 - If the comment arrives on an active research or implementation thread and requests additional work that should change execution behavior, record it and create a follow-up `execute` task only when the current thread is explicitly designed to accept that tracker-driven follow-up in the MVP. Otherwise, treat it as `metadata_only` and leave it for human handling.
 - If the comment arrives after a rejection or after terminal delivery, treat it as a new human signal on the existing external task and do not reopen the thread automatically in the MVP.
 - If the comment is informational and does not change routing, treat it as `metadata_only`.
@@ -174,6 +179,7 @@ The MVP follow-up task creation rules are:
 
 - brand-new tracker tasks create a new thread that starts at triage;
 - clarification-bearing tracker comments may create a new `execute` task for re-triage;
+- estimate-only tracker follow-up comments may create a `tracker_feedback` child task that replies back into the same tracker thread without SCM side effects;
 - other tracker comments are `metadata_only` unless a later MVP rule explicitly promotes them into actionable follow-up work;
 - tracker status changes are `metadata_only` in the MVP;
 - actionable PR feedback may create a new `pr_feedback` child task;
@@ -204,6 +210,7 @@ The monitor path should guarantee:
 - repeated polls are safe because deduplication is idempotent;
 - follow-up events are linked to the correct task thread or PR thread;
 - actionable PR feedback becomes `pr_feedback` work rather than a new top-level intake task;
+- actionable estimate-only tracker comments become `tracker_feedback` work rather than a new top-level intake task;
 - tracker comments that unblock clarification return to triage instead of bypassing the routing model.
 
 ## MVP Limits

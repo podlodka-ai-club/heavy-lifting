@@ -53,7 +53,9 @@ class ContextBuilder:
         execute_entry = _find_first_task(lineage, TaskType.EXECUTE)
         deliver_entry = current_entry if current_entry.task.task_type == TaskType.DELIVER else None
         feedback_entry = (
-            current_entry if current_entry.task.task_type == TaskType.PR_FEEDBACK else None
+            current_entry
+            if current_entry.task.task_type in {TaskType.PR_FEEDBACK, TaskType.TRACKER_FEEDBACK}
+            else _find_latest_feedback_task(lineage)
         )
 
         self._validate_flow(
@@ -164,20 +166,25 @@ class ContextBuilder:
         for index, task in enumerate(ordered_tasks):
             if index >= current_index:
                 break
-            if task.task_type != TaskType.PR_FEEDBACK:
+            if task.task_type not in {TaskType.PR_FEEDBACK, TaskType.TRACKER_FEEDBACK}:
                 continue
             if task.parent_id != execute_entry.task.id:
                 continue
             if task.id == current_task.id:
                 continue
             entry = _task_chain_entry(task)
-            if entry.input_payload is None or entry.input_payload.pr_feedback is None:
+            if entry.input_payload is None:
+                continue
+            feedback_payload = (
+                entry.input_payload.pr_feedback or entry.input_payload.tracker_feedback
+            )
+            if feedback_payload is None:
                 continue
             history.append(
                 FeedbackHistoryEntry(
                     task_id=task.id,
                     external_task_id=task.external_task_id,
-                    feedback=entry.input_payload.pr_feedback,
+                    feedback=feedback_payload,
                     result_payload=entry.result_payload,
                 )
             )
@@ -193,7 +200,12 @@ class ContextBuilder:
     ) -> None:
         task_type = current_entry.task.task_type
 
-        if task_type not in {TaskType.EXECUTE, TaskType.DELIVER, TaskType.PR_FEEDBACK}:
+        if task_type not in {
+            TaskType.EXECUTE,
+            TaskType.DELIVER,
+            TaskType.PR_FEEDBACK,
+            TaskType.TRACKER_FEEDBACK,
+        }:
             raise ValueError(f"Unsupported flow for task type {task_type.value}")
 
         if fetch_entry is None:
@@ -205,10 +217,14 @@ class ContextBuilder:
         if execute_entry is None:
             raise ValueError(f"Task type {task_type.value} requires an execute ancestor")
 
-        if task_type == TaskType.PR_FEEDBACK:
+        if task_type in {TaskType.PR_FEEDBACK, TaskType.TRACKER_FEEDBACK}:
             input_payload = current_entry.input_payload
-            if input_payload is None or input_payload.pr_feedback is None:
+            if input_payload is None:
+                raise ValueError(f"{task_type.value} task requires feedback payload")
+            if task_type == TaskType.PR_FEEDBACK and input_payload.pr_feedback is None:
                 raise ValueError("pr_feedback task requires input_payload.pr_feedback")
+            if task_type == TaskType.TRACKER_FEEDBACK and input_payload.tracker_feedback is None:
+                raise ValueError("tracker_feedback task requires input_payload.tracker_feedback")
 
 
 def _normalize_tasks(tasks: Iterable[Task]) -> list[Task]:
@@ -246,6 +262,13 @@ def _find_first_task(
 ) -> TaskChainEntry | None:
     for entry in lineage:
         if entry.task.task_type == task_type:
+            return entry
+    return None
+
+
+def _find_latest_feedback_task(lineage: Sequence[TaskChainEntry]) -> TaskChainEntry | None:
+    for entry in reversed(lineage):
+        if entry.task.task_type in {TaskType.PR_FEEDBACK, TaskType.TRACKER_FEEDBACK}:
             return entry
     return None
 

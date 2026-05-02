@@ -338,3 +338,49 @@ def test_context_builder_falls_back_to_execute_result_branch_and_feedback_pr_url
         assert context.branch_name == "task32/result-branch"
         assert context.pr_external_id == "pr-32"
         assert context.pr_url == "https://example.test/pr/32"
+
+
+def test_context_builder_reconstructs_tracker_feedback_flow(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(task_type=TaskType.FETCH, context={"title": "Tracker task"})
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                context={
+                    "title": "Estimate task",
+                    "description": "Estimate only. Do not modify code.",
+                },
+                input_payload={"instructions": "Estimate only. Do not modify code."},
+                result_payload={"summary": "Initial estimate delivered"},
+            )
+        )
+        feedback_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.TRACKER_FEEDBACK,
+                parent_id=execute_task.id,
+                external_task_id="comment-1",
+                external_parent_id="TASK-55",
+                input_payload={
+                    "tracker_feedback": {
+                        "external_task_id": "TASK-55",
+                        "comment_id": "comment-1",
+                        "body": "Please explain the estimate.",
+                        "author": "pm",
+                    }
+                },
+            )
+        )
+
+        context = ContextBuilder().build_for_task(
+            task=feedback_task,
+            task_chain=repository.load_task_chain(fetch_task.root_id),
+        )
+
+    assert context.flow_type == TaskType.TRACKER_FEEDBACK
+    assert context.current_feedback is not None
+    assert context.current_feedback.comment_id == "comment-1"
+    assert context.current_feedback.body == "Please explain the estimate."

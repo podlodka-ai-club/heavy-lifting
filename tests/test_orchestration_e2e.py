@@ -20,6 +20,7 @@ from backend.schemas import (
     TaskLink,
     TaskResultPayload,
     TokenUsagePayload,
+    TrackerCommentCreatePayload,
     TrackerTaskCreatePayload,
 )
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
@@ -1083,3 +1084,106 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
         "Flow: execute\n"
         "Instructions: Implement the initial PR version."
     )
+
+
+def test_orchestration_flow_replies_to_estimate_only_tracker_comment_without_scm_side_effects(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    runner = EstimateOnlyRecordingRunner()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Estimate CLI logging task",
+                description="Estimate only. Do not modify code.",
+            ),
+            input_payload=TaskInputPayload(
+                instructions="Give only a story point estimate and do not modify code.",
+            ),
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-63",
+        )
+    )
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    intake_worker.poll_once()
+    execute_worker.poll_once()
+    deliver_worker.poll_once()
+    runner.tracker_comment = (
+        "2 story points\nReason: the extra explanation still does not require code changes."
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="Can you justify this estimate in more detail?",
+            metadata={"source": "operator"},
+        )
+    )
+
+    feedback_report = intake_worker.poll_tracker_feedback_once()
+    feedback_execute_report = execute_worker.poll_once()
+    feedback_deliver_report = deliver_worker.poll_once()
+
+    assert feedback_report.created_tracker_feedback_tasks == 1
+    assert feedback_report.skipped_feedback_items == 1
+    assert feedback_execute_report.processed_tracker_feedback_tasks == 1
+    assert feedback_execute_report.failed_tracker_feedback_tasks == 0
+    assert feedback_deliver_report.processed_deliver_tasks == 1
+    assert scm._branches == {}
+    assert scm._pull_requests == {}
+    assert scm._commit_sequence == 0
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        execute_task = repository.find_child_task(
+            parent_id=fetch_task.id, task_type=TaskType.EXECUTE
+        )
+        assert execute_task is not None
+        feedback_task = repository.find_child_task_by_external_id(
+            parent_id=execute_task.id,
+            task_type=TaskType.TRACKER_FEEDBACK,
+            external_task_id="comment-2",
+        )
+        assert feedback_task is not None
+        deliver_task = repository.find_child_task(
+            parent_id=feedback_task.id,
+            task_type=TaskType.DELIVER,
+        )
+        assert deliver_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert deliver_task.status == TaskStatus.DONE
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["metadata"]["flow_type"] == "tracker_feedback"
+        assert feedback_task.result_payload["metadata"]["pr_action"] == "skipped"
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["metadata"]["last_updated_flow"] == "tracker_feedback"
+        assert execute_task.result_payload["metadata"]["last_feedback_comment_id"] == "comment-2"
+
+    assert [comment.body for comment in tracker._comments[tracker_task.external_id]] == [
+        "2 story points\nReason: adding CLI command logging is a small isolated change.",
+        "Can you justify this estimate in more detail?",
+        (
+            "2 story points\nReason: adding CLI command logging is a small isolated change."
+            "\nReason: the extra explanation still does not require code changes."
+        ),
+    ]

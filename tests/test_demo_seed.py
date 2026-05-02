@@ -72,9 +72,7 @@ def test_seed_frontend_demo_is_idempotent_and_preserves_non_demo_rows(session_fa
         assert non_demo_task is not None
         assert non_demo_task.external_task_id == "USER-TASK-1"
         non_demo_feedback_count = (
-            session.query(AgentFeedbackEntry)
-            .filter(AgentFeedbackEntry.tag == "user-owned")
-            .count()
+            session.query(AgentFeedbackEntry).filter(AgentFeedbackEntry.tag == "user-owned").count()
         )
         assert non_demo_feedback_count == 1
 
@@ -90,11 +88,18 @@ def test_seed_frontend_demo_makes_factory_snapshot_non_empty(session_factory) ->
     assert payload is not None
     assert payload["bottleneck"] == {"station": "execute", "wip_count": 6}
     stations = {station["name"]: station for station in payload["stations"]}
-    assert set(stations) == {"fetch", "execute", "pr_feedback", "deliver"}
-    assert all(station["total_count"] > 0 for station in stations.values())
-    assert all(station["wip_count"] > 0 for station in stations.values())
+    assert set(stations) == {"fetch", "execute", "pr_feedback", "tracker_feedback", "deliver"}
+    assert all(
+        station["total_count"] > 0
+        for name, station in stations.items()
+        if name != "tracker_feedback"
+    )
+    assert all(
+        station["wip_count"] > 0 for name, station in stations.items() if name != "tracker_feedback"
+    )
     assert stations["execute"]["failed_count"] == 2
     assert stations["pr_feedback"]["failed_count"] == 1
+    assert stations["tracker_feedback"]["total_count"] == 0
 
 
 def test_seed_frontend_demo_makes_economics_snapshot_monetized(session_factory) -> None:
@@ -155,9 +160,7 @@ def test_seed_frontend_demo_makes_retro_tags_and_entries_available(session_facto
     entries = entries_payload["entries"]
     assert len(entries) == 3
     assert {entry["severity"] for entry in entries} == {"error", "warning", "info"}
-    assert {
-        entry["message"] for entry in entries
-    } == {
+    assert {entry["message"] for entry in entries} == {
         "Implementation started before the acceptance criteria named the observable UI states.",
         "The task needed a tighter definition of done for API response behavior.",
         "Review feedback found assumptions that were not written in the task.",
@@ -177,8 +180,7 @@ def test_main_accepts_database_url_override_and_seeds_demo_data(tmp_path, capsys
 
     assert exit_code == 0
     assert (
-        "Frontend demo data is ready; tasks=27, token_usage=8, revenues=3, "
-        "retro_entries=11"
+        "Frontend demo data is ready; tasks=27, token_usage=8, revenues=3, retro_entries=11"
     ) in stdout
 
     engine = build_engine(database_url)

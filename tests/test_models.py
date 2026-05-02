@@ -26,7 +26,13 @@ def test_models_reuse_shared_task_constants() -> None:
 
 
 def test_task_enum_values_match_mvp_spec() -> None:
-    assert TASK_TYPE_VALUES == ("fetch", "execute", "deliver", "pr_feedback")
+    assert TASK_TYPE_VALUES == (
+        "fetch",
+        "execute",
+        "deliver",
+        "pr_feedback",
+        "tracker_feedback",
+    )
     assert TASK_STATUS_VALUES == ("new", "processing", "done", "failed")
     assert [task_type.value for task_type in TaskType] == list(TASK_TYPE_VALUES)
     assert [status.value for status in TaskStatus] == list(TASK_STATUS_VALUES)
@@ -398,7 +404,7 @@ def test_task_table_has_enum_check_constraints(tmp_path) -> None:
     }
 
     assert constraints["task_type_enum"] == (
-        "task_type IN ('fetch', 'execute', 'deliver', 'pr_feedback')"
+        "task_type IN ('fetch', 'execute', 'deliver', 'pr_feedback', 'tracker_feedback')"
     )
     assert constraints["task_status_enum"] == ("status IN ('new', 'processing', 'done', 'failed')")
 

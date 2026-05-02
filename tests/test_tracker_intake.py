@@ -20,6 +20,7 @@ from backend.schemas import (
     ScmWorkspaceEnsurePayload,
     TaskContext,
     TaskInputPayload,
+    TrackerCommentCreatePayload,
     TrackerTaskCreatePayload,
 )
 from backend.settings import get_settings
@@ -133,6 +134,7 @@ def test_tracker_intake_creates_fetch_and_execute_tasks(session_factory) -> None
             "branch_name": "task25/tracker-intake",
             "commit_message_hint": None,
             "pr_feedback": None,
+            "tracker_feedback": None,
             "metadata": {},
         }
 
@@ -224,6 +226,7 @@ def test_tracker_intake_restores_missing_execute_child(session_factory) -> None:
             "branch_name": None,
             "commit_message_hint": None,
             "pr_feedback": None,
+            "tracker_feedback": None,
             "metadata": {},
         }
 
@@ -343,6 +346,7 @@ def test_tracker_intake_creates_pr_feedback_children_for_scm_comments(session_fa
             "comment_id": first_feedback.comment_id,
             "body": "Please add a dedupe regression test.",
             "author": "reviewer-1",
+            "url": None,
             "path": "tests/test_tracker_intake.py",
             "line": 1,
             "side": None,
@@ -739,6 +743,190 @@ def test_maybe_enrich_pr_metadata_passes_through_resolved_metadata(
     assert result is feedback_item
     assert result.pr_metadata.execute_task_external_id == "EXTERNAL-ABC"
     assert result.pr_metadata.tracker_name == "github"
+
+
+def test_tracker_intake_creates_tracker_feedback_child_for_estimate_only_comments(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Estimate task",
+                description="Estimate only. Do not modify code.",
+            )
+        )
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="Please explain why this is 2 points.",
+            metadata={"source": "operator"},
+        )
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+                context={"title": "Estimate task"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={
+                    "title": "Estimate task",
+                    "description": "Need only an estimate without code changes.",
+                },
+                input_payload={
+                    "instructions": "Estimate only. Do not modify code.",
+                    "branch_name": "task62/estimate-only",
+                },
+            )
+        )
+
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        feedback_limit=10,
+    )
+    first_report = worker.poll_tracker_feedback_once()
+    second_report = worker.poll_tracker_feedback_once()
+
+    assert first_report.fetched_feedback_items == 1
+    assert first_report.created_tracker_feedback_tasks == 1
+    assert second_report.fetched_feedback_items == 0
+    assert second_report.created_tracker_feedback_tasks == 0
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        feedback_task = repository.find_child_task_by_external_id(
+            parent_id=execute_task.id,
+            task_type=TaskType.TRACKER_FEEDBACK,
+            external_task_id="comment-1",
+        )
+        assert feedback_task is not None
+        assert feedback_task.external_parent_id == tracker_task.external_id
+        assert feedback_task.input_payload["tracker_feedback"] == {
+            "external_task_id": tracker_task.external_id,
+            "comment_id": "comment-1",
+            "body": "Please explain why this is 2 points.",
+            "author": "heavy-lifting",
+            "url": f"mock://tracker/{tracker_task.external_id}/comments/comment-1",
+            "metadata": {"source": "operator"},
+        }
+        execute_task = session.get(Task, execute_task.id)
+        assert execute_task is not None
+        assert execute_task.context == {
+            "title": "Estimate task",
+            "description": "Need only an estimate without code changes.",
+            "metadata": {"tracker_comment_cursor": "comment-1"},
+        }
+
+
+def test_tracker_intake_skips_system_authored_tracker_comments(session_factory) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Estimate task", description="Estimate only. Do not modify code."
+            )
+        )
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="Automated reply",
+            metadata={"source": "heavy_lifting"},
+        )
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={
+                    "title": "Estimate task",
+                    "description": "Estimate only. Do not modify code.",
+                },
+                input_payload={"instructions": "Estimate only. Do not modify code."},
+            )
+        )
+
+    report = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    ).poll_tracker_feedback_once()
+
+    assert report.fetched_feedback_items == 1
+    assert report.created_tracker_feedback_tasks == 0
+    assert report.skipped_feedback_items == 1
+
+
+def test_tracker_intake_skips_non_estimate_only_execute_threads(session_factory) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="Implementation task"))
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="Please add more details.",
+        )
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={"title": "Implementation task"},
+                input_payload={"instructions": "Implement the task and open a PR."},
+            )
+        )
+
+    report = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    ).poll_tracker_feedback_once()
+
+    assert report.fetched_feedback_items == 0
+    assert report.created_tracker_feedback_tasks == 0
 
 
 def test_build_tracker_intake_worker_uses_runtime_settings(session_factory) -> None:

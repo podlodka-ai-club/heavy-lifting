@@ -162,6 +162,10 @@ class TaskRepository:
         )
         return list(self._session.execute(statement).scalars())
 
+    def list_execute_tasks(self) -> list[Task]:
+        statement = select(Task).where(Task.task_type == TaskType.EXECUTE).order_by(Task.id.asc())
+        return list(self._session.execute(statement).scalars())
+
     def find_fetch_task_by_tracker_task(
         self,
         *,

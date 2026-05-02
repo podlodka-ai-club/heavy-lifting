@@ -140,6 +140,54 @@ def test_local_agent_runner_includes_feedback_metadata_for_pr_feedback(tmp_path)
     assert result.token_usage[0].cached_tokens > 0
 
 
+def test_local_agent_runner_describes_tracker_feedback_follow_up(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = build_session_factory(engine)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(task_type=TaskType.FETCH, context={"title": "Tracker task"})
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                context={
+                    "title": "Estimate task",
+                    "description": "Estimate only. Do not modify code.",
+                },
+                input_payload={"instructions": "Estimate only. Do not modify code."},
+            )
+        )
+        feedback_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.TRACKER_FEEDBACK,
+                parent_id=execute_task.id,
+                input_payload={
+                    "tracker_feedback": {
+                        "external_task_id": "TASK-24",
+                        "comment_id": "comment-2",
+                        "body": "Please explain the estimate.",
+                    }
+                },
+            )
+        )
+
+        task_context = ContextBuilder().build_for_task(
+            task=feedback_task,
+            task_chain=repository.load_task_chain(fetch_task.root_id),
+        )
+
+    result = LocalAgentRunner().run(
+        AgentRunRequest(task_context=task_context, workspace_path="/workspace/repos/repo-24")
+    )
+
+    assert result.payload.summary == "Prepared follow-up response for tracker comment comment-2."
+    assert result.summary_metadata["has_feedback"] is True
+
+
 def test_cli_agent_runner_exposes_stable_config_contract() -> None:
     runner = CliAgentRunner(
         config=CliAgentRunnerConfig(

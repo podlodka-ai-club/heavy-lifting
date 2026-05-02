@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from backend.models import Task
-from backend.schemas import PrFeedbackPayload, TaskContext, TaskInputPayload, TaskResultPayload
+from backend.schemas import (
+    PrFeedbackPayload,
+    TaskContext,
+    TaskInputPayload,
+    TaskResultPayload,
+    TrackerCommentPayload,
+)
 from backend.task_constants import TaskType
 
 
@@ -19,7 +25,7 @@ class TaskChainEntry:
 class FeedbackHistoryEntry:
     task_id: int
     external_task_id: str | None
-    feedback: PrFeedbackPayload
+    feedback: PrFeedbackPayload | TrackerCommentPayload
     result_payload: TaskResultPayload | None
 
 
@@ -55,10 +61,13 @@ class EffectiveTaskContext:
         return self.current_task.context
 
     @property
-    def current_feedback(self) -> PrFeedbackPayload | None:
+    def current_feedback(self) -> PrFeedbackPayload | TrackerCommentPayload | None:
         if self.feedback_task is None or self.feedback_task.input_payload is None:
             return None
-        return self.feedback_task.input_payload.pr_feedback
+        return (
+            self.feedback_task.input_payload.pr_feedback
+            or self.feedback_task.input_payload.tracker_feedback
+        )
 
     @property
     def execute_result(self) -> TaskResultPayload | None:

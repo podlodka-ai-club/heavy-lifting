@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from backend.schemas import (
     TrackerCommentCreatePayload,
+    TrackerCommentPayload,
     TrackerCommentReference,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
+    TrackerReadCommentsQuery,
+    TrackerReadCommentsResult,
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTask,
@@ -18,7 +21,7 @@ from backend.tracker_metadata import get_nested_mapping, matches_estimated_selec
 class MockTracker:
     def __init__(self) -> None:
         self._tasks: dict[str, TrackerTask] = {}
-        self._comments: dict[str, list[TrackerCommentCreatePayload]] = {}
+        self._comments: dict[str, list[TrackerCommentPayload]] = {}
         self._task_sequence = 0
         self._comment_sequence = 0
 
@@ -66,10 +69,39 @@ class MockTracker:
         return TrackerTaskReference(external_id=external_id)
 
     def add_comment(self, payload: TrackerCommentCreatePayload) -> TrackerCommentReference:
-        self._comment_sequence += 1
+        comment_id = self._next_comment_id()
         stored_payload = payload.model_copy(deep=True)
-        self._comments.setdefault(stored_payload.external_task_id, []).append(stored_payload)
-        return TrackerCommentReference(comment_id=f"comment-{self._comment_sequence}")
+        self._comments.setdefault(stored_payload.external_task_id, []).append(
+            TrackerCommentPayload(
+                external_task_id=stored_payload.external_task_id,
+                comment_id=comment_id,
+                body=stored_payload.body,
+                author="heavy-lifting",
+                url=f"mock://tracker/{stored_payload.external_task_id}/comments/{comment_id}",
+                metadata=stored_payload.metadata,
+            )
+        )
+        return TrackerCommentReference(comment_id=comment_id)
+
+    def read_comments(self, query: TrackerReadCommentsQuery) -> TrackerReadCommentsResult:
+        comments = self._comments.get(query.external_task_id, [])
+        start_index = 0
+        if query.since_cursor is not None:
+            for index, comment in enumerate(comments):
+                if comment.comment_id == query.since_cursor:
+                    start_index = index + 1
+                    break
+        if query.page_cursor is not None:
+            start_index = max(start_index, int(query.page_cursor))
+        page_items = comments[start_index : start_index + query.limit]
+        next_index = start_index + len(page_items)
+        next_page_cursor = str(next_index) if next_index < len(comments) else None
+        latest_cursor = comments[-1].comment_id if comments else query.since_cursor
+        return TrackerReadCommentsResult(
+            items=[comment.model_copy(deep=True) for comment in page_items],
+            next_page_cursor=next_page_cursor,
+            latest_cursor=latest_cursor,
+        )
 
     def update_status(self, payload: TrackerStatusUpdatePayload) -> TrackerTaskReference:
         task = self._tasks[payload.external_task_id]
@@ -95,3 +127,7 @@ class MockTracker:
     def _next_task_id(self) -> str:
         self._task_sequence += 1
         return f"task-{self._task_sequence}"
+
+    def _next_comment_id(self) -> str:
+        self._comment_sequence += 1
+        return f"comment-{self._comment_sequence}"

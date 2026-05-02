@@ -6,6 +6,7 @@ from backend.schemas import (
     TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
+    TrackerReadCommentsQuery,
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
@@ -61,6 +62,9 @@ def test_mock_tracker_supports_mvp_tracker_operations() -> None:
     tasks = tracker.fetch_tasks(
         TrackerFetchTasksQuery(statuses=[TaskStatus.NEW, TaskStatus.DONE], limit=10)
     )
+    comments = tracker.read_comments(
+        TrackerReadCommentsQuery(external_task_id=created_subtask.external_id)
+    )
 
     assert created_task.external_id == "task-1"
     assert created_subtask.external_id == "task-2"
@@ -69,6 +73,8 @@ def test_mock_tracker_supports_mvp_tracker_operations() -> None:
     assert claimed.external_id == created_task.external_id
     assert linked.external_id == created_subtask.external_id
     assert [task.external_id for task in tasks] == ["task-1", "task-2"]
+    assert comments.items[0].comment_id == "comment-1"
+    assert comments.items[0].author == "heavy-lifting"
     assert tasks[1].parent_external_id == created_task.external_id
     assert tasks[1].status is TaskStatus.DONE
     assert tasks[1].context.references[0].label == "PR"
@@ -281,3 +287,27 @@ def test_mock_tracker_claim_selection_preserves_existing_selection_metadata() ->
         "taken_in_work": True,
         "selected_from_parent_external_id": "legacy-parent",
     }
+
+
+def test_mock_tracker_read_comments_supports_since_cursor_and_latest_cursor() -> None:
+    tracker = MockTracker()
+    created = tracker.create_task(TrackerTaskCreatePayload(context=TaskContext(title="Root task")))
+    first = tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=created.external_id,
+            body="First reply",
+            metadata={"source": "heavy_lifting"},
+        )
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(external_task_id=created.external_id, body="Second reply")
+    )
+
+    result = tracker.read_comments(
+        TrackerReadCommentsQuery(
+            external_task_id=created.external_id, since_cursor=first.comment_id
+        )
+    )
+
+    assert [item.body for item in result.items] == ["Second reply"]
+    assert result.latest_cursor == "comment-2"

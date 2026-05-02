@@ -60,6 +60,7 @@ It should contain:
 - `fetch.context` stores the normalized tracker task context.
 - `execute.context` reuses the stable context prepared earlier for coding work.
 - `pr_feedback` tasks inherit the main thread context and add feedback-specific command data through `input_payload`.
+- `tracker_feedback` tasks inherit the estimate-only execute context and add tracker-comment-specific command data through `input_payload`.
 - Follow-up iteration history lives in child tasks, not as an ever-growing transcript inside `context`.
 
 ## Input Payload V1
@@ -79,6 +80,7 @@ It should contain:
 - `branch_name` - optional branch name for implementation or PR response flows
 - `commit_message_hint` - optional commit message hint for code flows
 - `pr_feedback` - structured PR feedback input for review-response steps
+- `tracker_feedback` - structured tracker comment input for tracker-thread follow-up steps
 - `metadata` - non-critical extensions that do not change routing semantics
 
 `input_payload` must not duplicate the original problem statement when it already exists in `context`.
@@ -184,6 +186,7 @@ The MVP mapping is:
 - `research` runs inside an `execute` task owned by `worker2`
 - `implementation` runs inside an `execute` task owned by `worker2`
 - `respond_pr` runs inside a `pr_feedback` task owned by `worker2`
+- `reply_tracker` runs inside a `tracker_feedback` task owned by `worker2`
 - `deliver` runs inside a `deliver` task owned by `worker3`
 
 `fetch` remains an ingestion stage owned by `worker1`. It prepares normalized task records and creates the next executable task, but it does not replace the business-step `action` contract.
@@ -224,12 +227,21 @@ For the current estimate-only MVP branch, `worker2` may also complete an `execut
 
 When estimate-only agent output is split across multiple text fields, `worker2` normalizes the final `tracker_comment` by merging `metadata.stdout_preview`, `tracker_comment`, and `details` in that order. The merged comment must preserve an already complete message, append missing rationale when only the estimate is present in the first field, and avoid duplicating the same estimate or reason twice.
 
+Tracker-thread follow-up for estimate-only work uses the same delivery-only pattern. `worker1` creates a `tracker_feedback` child with `input_payload.tracker_feedback`, `worker2` replies without branch/commit/push/PR side effects, and `worker3` posts the follow-up comment back into the same tracker thread. The reply result keeps `metadata.flow_type = tracker_feedback`, `metadata.pr_action = skipped`, and updates the owning execute result metadata with the last tracker feedback id.
+
 ### PR Feedback
 
 - A PR feedback step uses `input_payload.action = respond_pr`.
 - It runs as a `pr_feedback` task.
 - Feedback-specific data belongs in `input_payload.pr_feedback`.
 - The task reuses the same branch and PR thread while preserving follow-up history through child tasks.
+
+### Tracker Feedback
+
+- A tracker follow-up step uses `input_payload.action = reply_tracker` when an explicit business action is modeled.
+- It runs as a `tracker_feedback` task.
+- Feedback-specific data belongs in `input_payload.tracker_feedback`.
+- The task reuses the same tracker thread, skips SCM side effects, and creates a downstream `deliver` task under the feedback child so the reply is posted back to the same external task.
 
 ### Delivery
 
@@ -245,6 +257,7 @@ When estimate-only agent output is split across multiple text fields, `worker2` 
 - Triage decides whether the next step is delivery-only, research, implementation, or rejection.
 - Research and implementation both return machine-readable `routing` and `delivery` sections.
 - PR feedback follows the same contract with a different `action` and feedback-specific input.
+- Estimate-only tracker follow-up uses the same contract with `tracker_feedback` input and tracker-thread-only delivery.
 - Delivery is always driven by structured `delivery` data.
 
 ## Manual Operator Comment API

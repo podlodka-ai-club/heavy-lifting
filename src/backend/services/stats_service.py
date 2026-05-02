@@ -14,6 +14,7 @@ _FACTORY_STATIONS = (
     TaskType.FETCH,
     TaskType.EXECUTE,
     TaskType.PR_FEEDBACK,
+    TaskType.TRACKER_FEEDBACK,
     TaskType.DELIVER,
 )
 
@@ -40,8 +41,7 @@ class StatsService:
     def build_factory(self) -> dict[str, Any]:
         generated_at = datetime.now(UTC)
         stations = [
-            self._build_factory_station(task_type, generated_at)
-            for task_type in _FACTORY_STATIONS
+            self._build_factory_station(task_type, generated_at) for task_type in _FACTORY_STATIONS
         ]
         bottleneck = _find_bottleneck(stations)
 

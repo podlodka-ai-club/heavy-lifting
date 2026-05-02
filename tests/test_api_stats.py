@@ -107,12 +107,14 @@ def test_get_stats_returns_task_and_token_usage_aggregates(session_factory) -> N
             "execute": 1,
             "deliver": 1,
             "pr_feedback": 1,
+            "tracker_feedback": 0,
         },
         "by_type_and_status": {
             "fetch": {"new": 0, "processing": 0, "done": 1, "failed": 0},
             "execute": {"new": 0, "processing": 0, "done": 1, "failed": 0},
             "deliver": {"new": 1, "processing": 0, "done": 0, "failed": 0},
             "pr_feedback": {"new": 0, "processing": 0, "done": 0, "failed": 1},
+            "tracker_feedback": {"new": 0, "processing": 0, "done": 0, "failed": 0},
         },
     }
     assert payload["token_usage"] == {
@@ -193,6 +195,11 @@ def test_get_stats_returns_task_and_token_usage_aggregates(session_factory) -> N
                 },
                 "cost_usd": "0.050000",
             },
+            "tracker_feedback": {
+                "entries_count": 0,
+                "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                "cost_usd": "0.000000",
+            },
         },
     }
 
@@ -249,6 +256,11 @@ def test_get_stats_returns_zeroed_breakdowns_for_empty_database(session_factory)
                 "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
                 "cost_usd": "0.000000",
             },
+            "tracker_feedback": {
+                "entries_count": 0,
+                "tokens": {"input": 0, "output": 0, "cached": 0, "total": 0},
+                "cost_usd": "0.000000",
+            },
         },
     }
 
@@ -290,6 +302,7 @@ def test_get_factory_returns_station_aggregates_and_bottleneck(session_factory) 
         "fetch",
         "execute",
         "pr_feedback",
+        "tracker_feedback",
         "deliver",
     ]
     assert payload["bottleneck"] == {"station": "execute", "wip_count": 2}
@@ -339,6 +352,14 @@ def test_get_factory_returns_station_aggregates_and_bottleneck(session_factory) 
     assert stations["pr_feedback"]["failed_count"] == 1
     assert stations["pr_feedback"]["wip_count"] == 0
 
+    assert stations["tracker_feedback"]["counts_by_status"] == {
+        "new": 0,
+        "processing": 0,
+        "done": 0,
+        "failed": 0,
+    }
+    assert stations["tracker_feedback"]["wip_count"] == 0
+
     assert stations["deliver"]["counts_by_status"] == {
         "new": 0,
         "processing": 0,
@@ -361,6 +382,7 @@ def test_get_factory_returns_empty_state_without_bottleneck(session_factory) -> 
         "fetch",
         "execute",
         "pr_feedback",
+        "tracker_feedback",
         "deliver",
     ]
     for station in payload["stations"]:

@@ -16,9 +16,12 @@ from backend.schemas import (
     TaskInputPayload,
     TaskLink,
     TrackerCommentCreatePayload,
+    TrackerCommentPayload,
     TrackerCommentReference,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
+    TrackerReadCommentsQuery,
+    TrackerReadCommentsResult,
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTask,
@@ -33,6 +36,8 @@ HttpRequester = Callable[[urllib.request.Request, float], Any]
 
 INPUT_BLOCK_OPEN = "<!-- heavy-lifting:input -->"
 INPUT_BLOCK_CLOSE = "<!-- /heavy-lifting:input -->"
+COMMENT_METADATA_OPEN = "<!-- heavy-lifting:comment-meta -->"
+COMMENT_METADATA_CLOSE = "<!-- /heavy-lifting:comment-meta -->"
 _HIDDEN_METADATA_KEYS = frozenset({"estimate", "selection"})
 
 _logger = get_logger(component="linear_tracker")
@@ -127,6 +132,29 @@ mutation LinearCommentCreate($input: CommentCreateInput!) {
     success
     comment {
       id
+    }
+  }
+}
+""".strip()
+
+_READ_ISSUE_COMMENTS_QUERY = """
+query LinearReadIssueComments($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    comments(first: $first, after: $after) {
+      nodes {
+        id
+        body
+        url
+        user {
+          id
+          name
+          displayName
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
     }
   }
 }
@@ -228,6 +256,47 @@ def _inject_input_block(description: str | None, payload_dict: Mapping[str, Any]
     if not description:
         return block
     return description.rstrip() + "\n\n" + block
+
+
+def _extract_comment_metadata(body: str | None) -> tuple[str, dict[str, Any] | None]:
+    if not body:
+        return body or "", None
+
+    open_idx = body.find(COMMENT_METADATA_OPEN)
+    if open_idx == -1:
+        return body, None
+
+    close_search_from = open_idx + len(COMMENT_METADATA_OPEN)
+    close_idx = body.find(COMMENT_METADATA_CLOSE, close_search_from)
+    if close_idx == -1:
+        return body, None
+
+    metadata_text = body[close_search_from:close_idx].strip()
+    before = body[:open_idx].rstrip()
+    after = body[close_idx + len(COMMENT_METADATA_CLOSE) :].lstrip()
+    cleaned = (before + ("\n" if before and after else "") + after).strip()
+    if not metadata_text:
+        return cleaned, None
+    try:
+        parsed = json.loads(metadata_text)
+    except json.JSONDecodeError:
+        return cleaned, None
+    return cleaned, dict(parsed) if isinstance(parsed, dict) else None
+
+
+def _inject_comment_metadata(body: str, metadata: Mapping[str, Any]) -> str:
+    if not metadata:
+        return body
+    metadata_block = (
+        COMMENT_METADATA_OPEN
+        + "\n"
+        + json.dumps(dict(metadata), ensure_ascii=False, indent=2)
+        + "\n"
+        + COMMENT_METADATA_CLOSE
+    )
+    if not body:
+        return metadata_block
+    return body.rstrip() + "\n\n" + metadata_block
 
 
 def _copy_json_mapping(value: Any) -> dict[str, Any] | None:
@@ -810,7 +879,7 @@ class LinearTracker:
         variables = {
             "input": {
                 "issueId": payload.external_task_id,
-                "body": payload.body,
+                "body": _inject_comment_metadata(payload.body, payload.metadata),
             }
         }
         data = self._client.execute(_COMMENT_CREATE_MUTATION, variables)
@@ -821,6 +890,51 @@ class LinearTracker:
         if not isinstance(comment_id, str) or not comment_id:
             raise RuntimeError("Linear commentCreate response missing comment id")
         return TrackerCommentReference(comment_id=comment_id)
+
+    def read_comments(self, query: TrackerReadCommentsQuery) -> TrackerReadCommentsResult:
+        variables = {
+            "id": query.external_task_id,
+            "first": min(query.limit, _LINEAR_PAGE_LIMIT),
+            "after": query.page_cursor,
+        }
+        data = self._client.execute(_READ_ISSUE_COMMENTS_QUERY, variables)
+        issue = data.get("issue")
+        if not isinstance(issue, dict):
+            raise RuntimeError("Linear issue comments response missing 'issue' object")
+        comments_block = issue.get("comments")
+        if not isinstance(comments_block, dict):
+            raise RuntimeError("Linear issue comments response missing 'comments' object")
+        nodes = comments_block.get("nodes")
+        if not isinstance(nodes, list):
+            raise RuntimeError("Linear issue comments.nodes is not a list")
+
+        items: list[TrackerCommentPayload] = []
+        latest_cursor = query.since_cursor
+        skip_until_since = query.page_cursor is None and query.since_cursor is not None
+
+        for raw_comment in nodes:
+            item = self._to_tracker_comment(raw_comment, external_task_id=query.external_task_id)
+            if item is None:
+                continue
+            latest_cursor = item.comment_id
+            if skip_until_since:
+                if item.comment_id == query.since_cursor:
+                    skip_until_since = False
+                continue
+            items.append(item)
+
+        page_info = comments_block.get("pageInfo")
+        next_page_cursor = None
+        if isinstance(page_info, dict) and page_info.get("hasNextPage"):
+            end_cursor = page_info.get("endCursor")
+            if isinstance(end_cursor, str) and end_cursor:
+                next_page_cursor = end_cursor
+
+        return TrackerReadCommentsResult(
+            items=items,
+            next_page_cursor=next_page_cursor,
+            latest_cursor=latest_cursor,
+        )
 
     def update_status(self, payload: TrackerStatusUpdatePayload) -> TrackerTaskReference:
         state_id = self._status_to_state_id(payload.status)
@@ -898,6 +1012,37 @@ class LinearTracker:
             raise RuntimeError("Linear issue query response missing 'issue' object")
         description = issue.get("description")
         return description if isinstance(description, str) else None
+
+    @staticmethod
+    def _to_tracker_comment(
+        raw_comment: Any, *, external_task_id: str
+    ) -> TrackerCommentPayload | None:
+        if not isinstance(raw_comment, dict):
+            return None
+        comment_id = raw_comment.get("id")
+        if not isinstance(comment_id, str) or not comment_id:
+            return None
+        body_raw = raw_comment.get("body")
+        body, metadata = _extract_comment_metadata(body_raw if isinstance(body_raw, str) else None)
+        url_raw = raw_comment.get("url")
+        url = url_raw if isinstance(url_raw, str) and url_raw else None
+        user = raw_comment.get("user")
+        author = None
+        if isinstance(user, dict):
+            display_name = user.get("displayName")
+            name = user.get("name")
+            if isinstance(display_name, str) and display_name:
+                author = display_name
+            elif isinstance(name, str) and name:
+                author = name
+        return TrackerCommentPayload(
+            external_task_id=external_task_id,
+            comment_id=comment_id,
+            body=body,
+            author=author,
+            url=url,
+            metadata=metadata or {},
+        )
 
 
 __all__ = [

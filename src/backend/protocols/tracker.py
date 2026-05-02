@@ -5,6 +5,8 @@ from backend.schemas import (
     TrackerCommentReference,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
+    TrackerReadCommentsQuery,
+    TrackerReadCommentsResult,
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTask,
@@ -23,6 +25,8 @@ class TrackerProtocol(Protocol):
     def create_subtask(self, payload: TrackerSubtaskCreatePayload) -> TrackerTaskReference: ...
 
     def add_comment(self, payload: TrackerCommentCreatePayload) -> TrackerCommentReference: ...
+
+    def read_comments(self, query: TrackerReadCommentsQuery) -> TrackerReadCommentsResult: ...
 
     def update_status(self, payload: TrackerStatusUpdatePayload) -> TrackerTaskReference: ...
 

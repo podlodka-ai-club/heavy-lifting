@@ -42,8 +42,10 @@ from backend.task_context import EffectiveTaskContext
 class ExecuteWorkerReport:
     processed_execute_tasks: int = 0
     processed_pr_feedback_tasks: int = 0
+    processed_tracker_feedback_tasks: int = 0
     failed_execute_tasks: int = 0
     failed_pr_feedback_tasks: int = 0
+    failed_tracker_feedback_tasks: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,7 @@ class ExecuteWorker:
         for _ in range(batch_size):
             report = _merge_reports(report, self._process_next_task(TaskType.EXECUTE))
         report = _merge_reports(report, self._process_next_task(TaskType.PR_FEEDBACK))
+        report = _merge_reports(report, self._process_next_task(TaskType.TRACKER_FEEDBACK))
         return report
 
     def _read_execute_batch_size(self) -> int:
@@ -136,15 +139,25 @@ class ExecuteWorker:
                     )
                     if task_type == TaskType.EXECUTE:
                         return ExecuteWorkerReport(failed_execute_tasks=1)
-                    return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+                    if task_type == TaskType.PR_FEEDBACK:
+                        return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+                    return ExecuteWorkerReport(failed_tracker_feedback_tasks=1)
                 if prepared_execution.skip_scm_artifacts:
-                    self._complete_execute_task_without_scm(
+                    if task_type == TaskType.EXECUTE:
+                        self._complete_execute_task_without_scm(
+                            repository=repository,
+                            task=task,
+                            task_context=prepared_execution.task_context,
+                            agent_payload=run_result.payload,
+                        )
+                        return ExecuteWorkerReport(processed_execute_tasks=1)
+                    self._complete_tracker_feedback_task_without_scm(
                         repository=repository,
                         task=task,
                         task_context=prepared_execution.task_context,
                         agent_payload=run_result.payload,
                     )
-                    return ExecuteWorkerReport(processed_execute_tasks=1)
+                    return ExecuteWorkerReport(processed_tracker_feedback_tasks=1)
 
                 branch_name = prepared_execution.branch_name
                 if branch_name is None:
@@ -209,7 +222,9 @@ class ExecuteWorker:
                 task.error = str(exc)
                 if task_type == TaskType.EXECUTE:
                     return ExecuteWorkerReport(failed_execute_tasks=1)
-                return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+                if task_type == TaskType.PR_FEEDBACK:
+                    return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
+                return ExecuteWorkerReport(failed_tracker_feedback_tasks=1)
 
     def _prepare_execution(
         self,
@@ -219,7 +234,7 @@ class ExecuteWorker:
         task_chain: list[Task],
     ) -> PreparedExecution:
         task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
-        skip_scm_artifacts = self._should_skip_scm_artifacts(task_context=task_context)
+        skip_scm_artifacts = should_skip_scm_artifacts(task_context=task_context)
         workspace = self._ensure_workspace(task_context=task_context)
         repository.update_task_workspace_context(
             task.id,
@@ -532,6 +547,71 @@ class ExecuteWorker:
             repository=repository, task=task, result_payload=result_payload
         )
 
+    def _complete_tracker_feedback_task_without_scm(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_context: EffectiveTaskContext,
+        agent_payload: TaskResultPayload,
+    ) -> None:
+        current_feedback = task_context.current_feedback
+        if current_feedback is None:
+            raise ValueError("tracker_feedback task requires current feedback")
+
+        result_payload = self._build_result_payload(
+            agent_payload=self._build_delivery_only_payload(agent_payload=agent_payload),
+            flow_type=TaskType.TRACKER_FEEDBACK,
+            branch_name=None,
+            commit_sha=None,
+            pr_url=None,
+            branch_url=None,
+            workspace=None,
+            pr_action="skipped",
+        )
+        self._mark_task_done(
+            task=task,
+            result_payload=result_payload,
+            branch_name=None,
+            pr_external_id=None,
+            pr_url=None,
+        )
+
+        execute_task_entry = task_context.execute_task
+        if execute_task_entry is None:
+            raise ValueError("tracker_feedback task requires an execute ancestor")
+        execute_task = execute_task_entry.task
+        execute_result = parse_task_result_payload(execute_task) or TaskResultPayload(
+            summary="Tracker thread updated after follow-up comment."
+        )
+        execute_metadata = dict(execute_result.metadata)
+        execute_metadata.update(
+            {
+                "last_updated_flow": TaskType.TRACKER_FEEDBACK.value,
+                "last_feedback_task_id": task.id,
+                "last_feedback_comment_id": current_feedback.comment_id,
+            }
+        )
+        execute_task.result_payload = _dump_result_payload(
+            execute_result.model_copy(update={"metadata": execute_metadata})
+        )
+        _task_logger(
+            task,
+            scm_artifacts_skipped=True,
+            tracker_comment_id=current_feedback.comment_id,
+        ).info("tracker_feedback_result_applied")
+        self._record_token_usage(
+            repository=repository, task_id=task.id, usage=result_payload.token_usage
+        )
+        self._record_agent_retro_feedback(
+            repository=repository, task=task, result_payload=result_payload
+        )
+        self._ensure_deliver_task(
+            repository=repository,
+            execute_task=task,
+            task_context=task_context,
+        )
+
     def _mark_task_done(
         self,
         *,
@@ -578,6 +658,12 @@ class ExecuteWorker:
         ):
             return
 
+        delivery_parent = (
+            task_context.feedback_task.task
+            if task_context.current_task.task.task_type == TaskType.TRACKER_FEEDBACK
+            and task_context.feedback_task is not None
+            else execute_task
+        )
         execution_title = (
             task_context.execution_context.title
             if task_context.execution_context is not None
@@ -586,7 +672,7 @@ class ExecuteWorker:
         deliver_task = repository.create_task(
             TaskCreateParams(
                 task_type=TaskType.DELIVER,
-                parent_id=execute_task.id,
+                parent_id=delivery_parent.id,
                 status=TaskStatus.NEW,
                 tracker_name=execute_task.tracker_name,
                 external_parent_id=execute_task.external_parent_id,
@@ -727,39 +813,7 @@ class ExecuteWorker:
         return unique_sources
 
     def _should_skip_scm_artifacts(self, *, task_context: EffectiveTaskContext) -> bool:
-        if task_context.flow_type != TaskType.EXECUTE:
-            return False
-
-        text_parts = [
-            task_context.instructions,
-            task_context.tracker_context.title if task_context.tracker_context else None,
-            task_context.tracker_context.description if task_context.tracker_context else None,
-            task_context.execution_context.title if task_context.execution_context else None,
-            task_context.execution_context.description if task_context.execution_context else None,
-        ]
-        normalized_text = "\n".join(part.lower() for part in text_parts if part)
-        estimate_markers = (
-            "estimate only",
-            "only estimate",
-            "story point",
-            "story-point",
-            "оцен",
-            "только оцен",
-        )
-        no_code_markers = (
-            "do not modify code",
-            "don't modify code",
-            "do not change code",
-            "without code changes",
-            "no code changes",
-            "не изменяй код",
-            "не изменять код",
-            "не менять код",
-            "без изменений кода",
-        )
-        return any(marker in normalized_text for marker in estimate_markers) and any(
-            marker in normalized_text for marker in no_code_markers
-        )
+        return should_skip_scm_artifacts(task_context=task_context)
 
     def _resolve_branch_name(self, *, task: Task, task_context: EffectiveTaskContext) -> str:
         if task_context.branch_name:
@@ -847,6 +901,43 @@ class ExecuteWorker:
         )
 
 
+def should_skip_scm_artifacts(*, task_context: EffectiveTaskContext) -> bool:
+    if task_context.flow_type == TaskType.TRACKER_FEEDBACK:
+        return True
+    if task_context.flow_type != TaskType.EXECUTE:
+        return False
+    text_parts = [
+        task_context.instructions,
+        task_context.tracker_context.title if task_context.tracker_context else None,
+        task_context.tracker_context.description if task_context.tracker_context else None,
+        task_context.execution_context.title if task_context.execution_context else None,
+        task_context.execution_context.description if task_context.execution_context else None,
+    ]
+    normalized_text = "\n".join(part.lower() for part in text_parts if part)
+    estimate_markers = (
+        "estimate only",
+        "only estimate",
+        "story point",
+        "story-point",
+        "оцен",
+        "только оцен",
+    )
+    no_code_markers = (
+        "do not modify code",
+        "don't modify code",
+        "do not change code",
+        "without code changes",
+        "no code changes",
+        "не изменяй код",
+        "не изменять код",
+        "не менять код",
+        "без изменений кода",
+    )
+    return any(marker in normalized_text for marker in estimate_markers) and any(
+        marker in normalized_text for marker in no_code_markers
+    )
+
+
 def build_execute_worker(
     *,
     runtime: RuntimeContainer | None = None,
@@ -886,8 +977,14 @@ def _merge_reports(left: ExecuteWorkerReport, right: ExecuteWorkerReport) -> Exe
         processed_pr_feedback_tasks=(
             left.processed_pr_feedback_tasks + right.processed_pr_feedback_tasks
         ),
+        processed_tracker_feedback_tasks=(
+            left.processed_tracker_feedback_tasks + right.processed_tracker_feedback_tasks
+        ),
         failed_execute_tasks=left.failed_execute_tasks + right.failed_execute_tasks,
         failed_pr_feedback_tasks=left.failed_pr_feedback_tasks + right.failed_pr_feedback_tasks,
+        failed_tracker_feedback_tasks=(
+            left.failed_tracker_feedback_tasks + right.failed_tracker_feedback_tasks
+        ),
     )
 
 

@@ -40,17 +40,25 @@ class TaskLink(SchemaModel):
     url: str
 
 
-class PrFeedbackPayload(SchemaModel):
-    pr_external_id: str
+class FeedbackCommentPayload(SchemaModel):
     comment_id: str
     body: str
     author: str | None = None
+    url: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class PrFeedbackPayload(FeedbackCommentPayload):
+    pr_external_id: str
     path: str | None = None
     line: int | None = Field(default=None, ge=1)
     side: str | None = None
     commit_sha: str | None = None
     pr_url: str | None = None
-    metadata: JsonObject = Field(default_factory=dict)
+
+
+class TrackerCommentPayload(FeedbackCommentPayload):
+    external_task_id: str
 
 
 class TaskContext(SchemaModel):
@@ -67,6 +75,7 @@ class TaskInputPayload(SchemaModel):
     branch_name: str | None = None
     commit_message_hint: str | None = None
     pr_feedback: PrFeedbackPayload | None = None
+    tracker_feedback: TrackerCommentPayload | None = None
     metadata: JsonObject = Field(default_factory=dict)
 
 
@@ -119,6 +128,19 @@ class TrackerTaskReference(SchemaModel):
 
 class TrackerCommentReference(SchemaModel):
     comment_id: str
+
+
+class TrackerReadCommentsQuery(SchemaModel):
+    external_task_id: str
+    since_cursor: str | None = None
+    page_cursor: str | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
+class TrackerReadCommentsResult(SchemaModel):
+    items: list[TrackerCommentPayload] = Field(default_factory=list)
+    next_page_cursor: str | None = None
+    latest_cursor: str | None = None
 
 
 class TrackerTask(SchemaModel):
@@ -306,6 +328,7 @@ __all__ = [
     "JsonValue",
     "ManualTrackerCommentPayload",
     "AgentRetroFeedbackItem",
+    "FeedbackCommentPayload",
     "PrFeedbackPayload",
     "ScmBranchCreatePayload",
     "ScmBranchReference",
@@ -323,7 +346,10 @@ __all__ = [
     "ScmWorkspace",
     "ScmWorkspaceEnsurePayload",
     "TrackerCommentCreatePayload",
+    "TrackerCommentPayload",
     "TrackerCommentReference",
+    "TrackerReadCommentsQuery",
+    "TrackerReadCommentsResult",
     "TrackerEstimatedSelectionQuery",
     "TrackerFetchTasksQuery",
     "TrackerLinksAttachPayload",

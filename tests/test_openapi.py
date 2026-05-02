@@ -79,6 +79,7 @@ def test_openapi_json_describes_task_and_stats_responses() -> None:
         "execute",
         "deliver",
         "pr_feedback",
+        "tracker_feedback",
     ]
     assert schema["paths"]["/stats"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
@@ -137,6 +138,7 @@ def test_openapi_json_describes_factory_response() -> None:
         "fetch",
         "execute",
         "pr_feedback",
+        "tracker_feedback",
         "deliver",
     ]
     assert station_schema["properties"]["counts_by_status"]["required"] == [
@@ -292,6 +294,7 @@ def test_openapi_json_describes_retro_endpoints() -> None:
         "execute",
         "deliver",
         "pr_feedback",
+        "tracker_feedback",
     ]
     assert components["RetroTagAggregate"]["required"] == [
         "tag",

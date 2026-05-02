@@ -53,13 +53,13 @@ class DeliverWorker:
             try:
                 task_chain = repository.load_task_chain(task.root_id or task.id)
                 task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
-                execute_result = task_context.execute_result
-                if execute_result is None:
+                delivery_result = self._resolve_delivery_result(task_context=task_context)
+                if delivery_result is None:
                     raise ValueError("deliver task requires a completed execute result")
 
                 tracker_task_id = self._resolve_tracker_task_id(task_context=task_context)
-                comment_body = self._build_comment_body(execute_result=execute_result)
-                links = self._build_links(execute_result=execute_result)
+                comment_body = self._build_comment_body(execute_result=delivery_result)
+                links = self._build_links(execute_result=delivery_result)
                 logger.info(
                     "delivery_started",
                     tracker_external_id=tracker_task_id,
@@ -74,6 +74,7 @@ class DeliverWorker:
                         external_task_id=tracker_task_id,
                         body=comment_body,
                         metadata={
+                            "source": "heavy_lifting",
                             "task_id": task.id,
                             "flow_type": task.task_type.value,
                             "execute_task_id": task_context.execute_task.task.id
@@ -98,14 +99,14 @@ class DeliverWorker:
 
                 task.status = TaskStatus.DONE
                 task.error = None
-                task.branch_name = execute_result.branch_name or task_context.branch_name
-                task.pr_url = execute_result.pr_url or task_context.pr_url
+                task.branch_name = delivery_result.branch_name or task_context.branch_name
+                task.pr_url = delivery_result.pr_url or task_context.pr_url
                 task.result_payload = _dump_result_payload(
                     TaskResultPayload(
                         summary=f"Delivered result to tracker task {tracker_task_id}.",
                         details=comment_body,
                         branch_name=task.branch_name,
-                        commit_sha=execute_result.commit_sha,
+                        commit_sha=delivery_result.commit_sha,
                         pr_url=task.pr_url,
                         links=links,
                         metadata={
@@ -166,6 +167,17 @@ class DeliverWorker:
         if execute_result.pr_url and not any(link.url == execute_result.pr_url for link in links):
             links.append(TaskLink(label="pull_request", url=execute_result.pr_url))
         return links
+
+    def _resolve_delivery_result(
+        self, *, task_context: EffectiveTaskContext
+    ) -> TaskResultPayload | None:
+        if (
+            task_context.feedback_task is not None
+            and task_context.feedback_task.task.task_type == TaskType.TRACKER_FEEDBACK
+            and task_context.feedback_task.result_payload is not None
+        ):
+            return task_context.feedback_task.result_payload
+        return task_context.execute_result
 
 
 def build_deliver_worker(

@@ -14,9 +14,11 @@ from backend.schemas import (
     TaskContext,
     TaskInputPayload,
     TaskResultPayload,
+    TrackerCommentPayload,
     TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
+    TrackerReadCommentsQuery,
     TrackerTask,
     TrackerTaskCreatePayload,
 )
@@ -65,11 +67,43 @@ def test_task_input_payload_supports_pr_feedback() -> None:
             "comment_id": "c-7",
             "body": "Please rename this field.",
             "author": "reviewer",
+            "url": None,
             "path": "src/backend/schemas.py",
             "line": 12,
             "side": None,
             "commit_sha": None,
             "pr_url": None,
+            "metadata": {},
+        },
+        "tracker_feedback": None,
+        "metadata": {},
+    }
+
+
+def test_task_input_payload_supports_tracker_feedback() -> None:
+    payload = TaskInputPayload(
+        instructions="Reply in the same tracker thread.",
+        tracker_feedback=TrackerCommentPayload(
+            external_task_id="LIN-42",
+            comment_id="comment-9",
+            body="Can you justify the estimate?",
+            author="pm",
+            url="https://linear.app/comment/9",
+        ),
+    )
+
+    assert payload.model_dump(mode="json") == {
+        "instructions": "Reply in the same tracker thread.",
+        "base_branch": None,
+        "branch_name": None,
+        "commit_message_hint": None,
+        "pr_feedback": None,
+        "tracker_feedback": {
+            "external_task_id": "LIN-42",
+            "comment_id": "comment-9",
+            "body": "Can you justify the estimate?",
+            "author": "pm",
+            "url": "https://linear.app/comment/9",
             "metadata": {},
         },
         "metadata": {},
@@ -246,6 +280,7 @@ def test_scm_pull_request_feedback_reuses_shared_feedback_fields() -> None:
         "comment_id": "comment-7",
         "body": "Please cover this path with tests.",
         "author": "reviewer",
+        "url": None,
         "path": "src/backend/protocols/scm.py",
         "line": 18,
         "side": None,
@@ -280,6 +315,7 @@ def test_scm_payloads_apply_mvp_defaults() -> None:
         pr_metadata=ScmPullRequestMetadata(execute_task_external_id="TASK-18"),
     )
     feedback_query = ScmReadPrFeedbackQuery()
+    tracker_comments_query = TrackerReadCommentsQuery(external_task_id="LIN-42")
 
     assert ensure_workspace.model_dump(mode="json") == {
         "repo_url": "https://example.test/repo.git",
@@ -315,6 +351,12 @@ def test_scm_payloads_apply_mvp_defaults() -> None:
         "repo_url": None,
         "pr_external_id": None,
         "branch_name": None,
+        "since_cursor": None,
+        "page_cursor": None,
+        "limit": 100,
+    }
+    assert tracker_comments_query.model_dump(mode="json") == {
+        "external_task_id": "LIN-42",
         "since_cursor": None,
         "page_cursor": None,
         "limit": 100,

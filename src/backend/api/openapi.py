@@ -846,7 +846,13 @@ def _factory_schema() -> dict[str, Any]:
                 properties={
                     "station": {
                         "type": "string",
-                        "enum": ["fetch", "execute", "pr_feedback", "deliver"],
+                        "enum": [
+                            "fetch",
+                            "execute",
+                            "pr_feedback",
+                            "tracker_feedback",
+                            "deliver",
+                        ],
                     },
                     "wip_count": {"type": "integer", "minimum": 1},
                 },
@@ -870,7 +876,13 @@ def _factory_schema() -> dict[str, Any]:
         properties={
             "name": {
                 "type": "string",
-                "enum": ["fetch", "execute", "pr_feedback", "deliver"],
+                "enum": [
+                    "fetch",
+                    "execute",
+                    "pr_feedback",
+                    "tracker_feedback",
+                    "deliver",
+                ],
             },
             "counts_by_status": {
                 "type": "object",
@@ -897,8 +909,8 @@ def _factory_schema() -> dict[str, Any]:
             "stations": {
                 "type": "array",
                 "items": station_schema,
-                "minItems": 4,
-                "maxItems": 4,
+                "minItems": 5,
+                "maxItems": 5,
             },
             "bottleneck": nullable_bottleneck,
             "data_gaps": {
