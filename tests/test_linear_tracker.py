@@ -1154,6 +1154,7 @@ def test_create_task_injects_input_block_with_repo_and_payload(
         "repo_ref": "main",
         "workspace_key": "ws-1",
         "input": {
+            "schema_version": 1,
             "instructions": "run",
             "base_branch": "main",
             "branch_name": "feat/x",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
@@ -61,7 +61,74 @@ class TaskContext(SchemaModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+class TaskHandoffPayload(SchemaModel):
+    from_task_id: int
+    from_role: str
+    reason: str | None = None
+    decision_ref: str | None = None
+    brief_markdown: str | None = None
+
+
+class TaskClassificationPayload(SchemaModel):
+    task_kind: Literal[
+        "research",
+        "implementation",
+        "clarification",
+        "review_response",
+        "rejected",
+    ]
+    confidence: float | None = None
+    signals: list[str] = Field(default_factory=list)
+
+
+class TaskEstimatePayload(SchemaModel):
+    story_points: Literal[1, 2, 3, 5, 8, 13]
+    complexity: Literal["trivial", "low", "medium", "high", "epic", "architectural"]
+    can_take_in_work: bool
+    blocking_reasons: list[str] = Field(default_factory=list)
+
+
+class TaskRoutingPayload(SchemaModel):
+    next_task_type: Literal["execute", "deliver", "pr_feedback"] | None = None
+    next_role: Literal[
+        "triage",
+        "research",
+        "implementation",
+        "deliver",
+        "respond_pr",
+    ] | None = None
+    create_followup_task: bool = False
+    requires_human_approval: bool = False
+
+
+class TaskDeliveryPayload(SchemaModel):
+    tracker_status: TaskStatus | None = None
+    tracker_estimate: int | None = None
+    tracker_labels: list[str] = Field(default_factory=list)
+    escalation_kind: Literal["rfi", "decomposition", "system_design"] | None = None
+    comment_body: str | None = None
+    links: list[TaskLink] = Field(default_factory=list)
+
+
+class TaskArtifactsPayload(SchemaModel):
+    branch_name: str | None = None
+    commit_sha: str | None = None
+    pr_url: str | None = None
+
+
 class TaskInputPayload(SchemaModel):
+    schema_version: int = 1
+    action: Literal[
+        "triage",
+        "research",
+        "implementation",
+        "respond_pr",
+        "deliver",
+    ] | None = None
+    role: str | None = None
+    handoff: TaskHandoffPayload | None = None
+    expected_output: list[str] | None = None
+    constraints: JsonObject = Field(default_factory=dict)
     instructions: str | None = None
     base_branch: str | None = None
     branch_name: str | None = None
@@ -100,6 +167,19 @@ class AgentRetroFeedbackItem(SchemaModel):
 
 
 class TaskResultPayload(SchemaModel):
+    schema_version: int = 1
+    outcome: Literal[
+        "completed",
+        "routed",
+        "needs_clarification",
+        "blocked",
+        "failed",
+    ] | None = None
+    classification: TaskClassificationPayload | None = None
+    estimate: TaskEstimatePayload | None = None
+    routing: TaskRoutingPayload | None = None
+    delivery: TaskDeliveryPayload | None = None
+    artifacts: TaskArtifactsPayload | None = None
     summary: str
     details: str | None = None
     branch_name: str | None = None
@@ -328,9 +408,15 @@ __all__ = [
     "TrackerTask",
     "TrackerTaskCreatePayload",
     "TrackerTaskReference",
+    "TaskArtifactsPayload",
+    "TaskClassificationPayload",
     "TaskContext",
+    "TaskDeliveryPayload",
+    "TaskEstimatePayload",
+    "TaskHandoffPayload",
     "TaskInputPayload",
     "TaskLink",
     "TaskResultPayload",
+    "TaskRoutingPayload",
     "TokenUsagePayload",
 ]

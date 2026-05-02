@@ -128,6 +128,12 @@ def test_tracker_intake_creates_fetch_and_execute_tasks(session_factory) -> None
         assert execute_task.workspace_key == "repo-25"
         assert execute_task.context == fetch_task.context
         assert execute_task.input_payload == {
+            "schema_version": 1,
+            "action": None,
+            "role": None,
+            "handoff": None,
+            "expected_output": None,
+            "constraints": {},
             "instructions": "Implement Worker 1 flow.",
             "base_branch": "main",
             "branch_name": "task25/tracker-intake",
@@ -219,6 +225,12 @@ def test_tracker_intake_restores_missing_execute_child(session_factory) -> None:
         assert execute_task is not None
         assert execute_task.external_parent_id == created_task.external_id
         assert execute_task.input_payload == {
+            "schema_version": 1,
+            "action": None,
+            "role": None,
+            "handoff": None,
+            "expected_output": None,
+            "constraints": {},
             "instructions": "Restore child",
             "base_branch": None,
             "branch_name": None,

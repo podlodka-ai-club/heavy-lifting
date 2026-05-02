@@ -11,9 +11,15 @@ from backend.schemas import (
     ScmPullRequestMetadata,
     ScmReadPrFeedbackQuery,
     ScmWorkspaceEnsurePayload,
+    TaskArtifactsPayload,
+    TaskClassificationPayload,
     TaskContext,
+    TaskDeliveryPayload,
+    TaskEstimatePayload,
+    TaskHandoffPayload,
     TaskInputPayload,
     TaskResultPayload,
+    TaskRoutingPayload,
     TrackerEstimatedSelectionQuery,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
@@ -56,6 +62,12 @@ def test_task_input_payload_supports_pr_feedback() -> None:
     )
 
     assert payload.model_dump(mode="json") == {
+        "schema_version": 1,
+        "action": None,
+        "role": None,
+        "handoff": None,
+        "expected_output": None,
+        "constraints": {},
         "instructions": "Address PR review comments.",
         "base_branch": None,
         "branch_name": "feature/task-16",
@@ -95,6 +107,13 @@ def test_task_result_payload_serializes_token_usage_for_json_storage() -> None:
     )
 
     assert payload.model_dump(mode="json") == {
+        "schema_version": 1,
+        "outcome": None,
+        "classification": None,
+        "estimate": None,
+        "routing": None,
+        "delivery": None,
+        "artifacts": None,
         "summary": "Execution completed",
         "details": None,
         "branch_name": None,
@@ -388,3 +407,241 @@ def test_scm_workspace_ensure_payload_serializes_branch_name_when_provided() -> 
 def test_schemas_validate_mvp_constraints(schema: object, payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         schema.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["triage", "research", "implementation", "respond_pr", "deliver"],
+)
+def test_task_input_payload_action_field_accepts_all_values(action: str) -> None:
+    payload = TaskInputPayload(action=action)  # type: ignore[arg-type]
+    assert payload.action == action
+
+
+def test_task_input_payload_handoff_field_optional() -> None:
+    payload_none = TaskInputPayload()
+    assert payload_none.handoff is None
+
+    payload_with_handoff = TaskInputPayload(
+        handoff=TaskHandoffPayload(
+            from_task_id=42,
+            from_role="triage",
+            reason="route to research",
+            decision_ref="docs/decisions/triage.md",
+            brief_markdown="## brief",
+        )
+    )
+    assert payload_with_handoff.handoff is not None
+    assert payload_with_handoff.handoff.from_task_id == 42
+    assert payload_with_handoff.handoff.from_role == "triage"
+
+
+def test_task_input_payload_constraints_default_empty_dict() -> None:
+    payload = TaskInputPayload()
+    assert payload.constraints == {}
+
+
+def test_task_input_payload_schema_version_default_1() -> None:
+    payload = TaskInputPayload()
+    assert payload.schema_version == 1
+
+
+def test_task_input_payload_backwards_compat_without_new_fields() -> None:
+    payload = TaskInputPayload(
+        instructions="Run update",
+        base_branch="main",
+        branch_name="feature/x",
+        commit_message_hint="task01 ok",
+        metadata={"k": "v"},
+    )
+    assert payload.instructions == "Run update"
+    assert payload.base_branch == "main"
+    assert payload.branch_name == "feature/x"
+    assert payload.commit_message_hint == "task01 ok"
+    assert payload.metadata == {"k": "v"}
+    assert payload.schema_version == 1
+    assert payload.action is None
+    assert payload.role is None
+    assert payload.handoff is None
+    assert payload.expected_output is None
+    assert payload.constraints == {}
+
+
+@pytest.mark.parametrize("story_points", [1, 2, 3, 5, 8, 13])
+def test_task_result_payload_estimate_story_points_literal_validates_set(
+    story_points: int,
+) -> None:
+    estimate = TaskEstimatePayload(
+        story_points=story_points,  # type: ignore[arg-type]
+        complexity="low",
+        can_take_in_work=True,
+    )
+    assert estimate.story_points == story_points
+
+
+@pytest.mark.parametrize("invalid_points", [4, 6, 10])
+def test_task_result_payload_estimate_story_points_rejects_4_6_10(
+    invalid_points: int,
+) -> None:
+    with pytest.raises(ValidationError):
+        TaskEstimatePayload.model_validate(
+            {
+                "story_points": invalid_points,
+                "complexity": "low",
+                "can_take_in_work": True,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "task_kind",
+    ["research", "implementation", "clarification", "review_response", "rejected"],
+)
+def test_task_result_payload_classification_task_kind_literal(task_kind: str) -> None:
+    classification = TaskClassificationPayload(task_kind=task_kind)  # type: ignore[arg-type]
+    assert classification.task_kind == task_kind
+
+    with pytest.raises(ValidationError):
+        TaskClassificationPayload.model_validate({"task_kind": "unknown"})
+
+
+@pytest.mark.parametrize(
+    "next_task_type",
+    ["execute", "deliver", "pr_feedback"],
+)
+def test_task_result_payload_routing_next_task_type_literal(next_task_type: str) -> None:
+    routing = TaskRoutingPayload(next_task_type=next_task_type)  # type: ignore[arg-type]
+    assert routing.next_task_type == next_task_type
+
+    with pytest.raises(ValidationError):
+        TaskRoutingPayload.model_validate({"next_task_type": "fetch"})
+
+
+def test_task_result_payload_delivery_tracker_status_uses_task_status_enum() -> None:
+    delivery = TaskDeliveryPayload(tracker_status=TaskStatus.DONE)
+    assert delivery.tracker_status is TaskStatus.DONE
+
+    delivery_from_value = TaskDeliveryPayload.model_validate({"tracker_status": "processing"})
+    assert delivery_from_value.tracker_status is TaskStatus.PROCESSING
+
+    with pytest.raises(ValidationError):
+        TaskDeliveryPayload.model_validate({"tracker_status": "not_a_status"})
+
+
+@pytest.mark.parametrize(
+    "escalation_kind",
+    ["rfi", "decomposition", "system_design"],
+)
+def test_task_result_payload_delivery_escalation_kind_literal(escalation_kind: str) -> None:
+    delivery = TaskDeliveryPayload(escalation_kind=escalation_kind)  # type: ignore[arg-type]
+    assert delivery.escalation_kind == escalation_kind
+
+    with pytest.raises(ValidationError):
+        TaskDeliveryPayload.model_validate({"escalation_kind": "other"})
+
+
+def test_task_result_payload_artifacts_optional_fields() -> None:
+    artifacts = TaskArtifactsPayload()
+    assert artifacts.branch_name is None
+    assert artifacts.commit_sha is None
+    assert artifacts.pr_url is None
+
+    populated = TaskArtifactsPayload(
+        branch_name="feature/x",
+        commit_sha="abc123",
+        pr_url="https://example.test/pr/1",
+    )
+    assert populated.branch_name == "feature/x"
+    assert populated.commit_sha == "abc123"
+    assert populated.pr_url == "https://example.test/pr/1"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["completed", "routed", "needs_clarification", "blocked", "failed"],
+)
+def test_task_result_payload_outcome_literal(outcome: str) -> None:
+    payload = TaskResultPayload(summary="ok", outcome=outcome)  # type: ignore[arg-type]
+    assert payload.outcome == outcome
+
+    with pytest.raises(ValidationError):
+        TaskResultPayload.model_validate({"summary": "ok", "outcome": "unknown"})
+
+
+def test_task_result_payload_schema_version_default_1() -> None:
+    payload = TaskResultPayload(summary="ok")
+    assert payload.schema_version == 1
+
+
+def test_task_result_payload_backwards_compat_without_new_fields() -> None:
+    payload = TaskResultPayload(summary="x")
+    assert payload.summary == "x"
+    assert payload.schema_version == 1
+    assert payload.outcome is None
+    assert payload.classification is None
+    assert payload.estimate is None
+    assert payload.routing is None
+    assert payload.delivery is None
+    assert payload.artifacts is None
+    assert payload.details is None
+    assert payload.branch_name is None
+    assert payload.commit_sha is None
+    assert payload.pr_title is None
+    assert payload.pr_url is None
+    assert payload.tracker_comment is None
+    assert payload.links == []
+    assert payload.token_usage == []
+    assert payload.metadata == {}
+
+
+def test_task_handoff_payload_required_fields() -> None:
+    handoff = TaskHandoffPayload(from_task_id=7, from_role="triage")
+    assert handoff.from_task_id == 7
+    assert handoff.from_role == "triage"
+    assert handoff.reason is None
+    assert handoff.decision_ref is None
+    assert handoff.brief_markdown is None
+
+    with pytest.raises(ValidationError):
+        TaskHandoffPayload.model_validate({"from_role": "triage"})
+
+    with pytest.raises(ValidationError):
+        TaskHandoffPayload.model_validate({"from_task_id": 7})
+
+
+@pytest.mark.parametrize(
+    ("schema", "valid_payload"),
+    [
+        (
+            TaskHandoffPayload,
+            {"from_task_id": 1, "from_role": "triage"},
+        ),
+        (
+            TaskClassificationPayload,
+            {"task_kind": "research"},
+        ),
+        (
+            TaskEstimatePayload,
+            {"story_points": 1, "complexity": "trivial", "can_take_in_work": True},
+        ),
+        (
+            TaskRoutingPayload,
+            {},
+        ),
+        (
+            TaskDeliveryPayload,
+            {},
+        ),
+        (
+            TaskArtifactsPayload,
+            {},
+        ),
+    ],
+)
+def test_extra_forbid_on_all_new_models(
+    schema: object,
+    valid_payload: dict[str, object],
+) -> None:
+    schema.model_validate(valid_payload)  # baseline succeeds
+    with pytest.raises(ValidationError):
+        schema.model_validate({**valid_payload, "unexpected_extra_field": True})
