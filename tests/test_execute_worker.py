@@ -732,7 +732,7 @@ def test_execute_worker_marks_task_failed_when_workspace_key_is_missing(tmp_path
     session_factory = _build_session_factory(tmp_path)
     agent_runner = RecordingAgentRunner()
     worker = ExecuteWorker(
-        scm=MockScm(),
+        scm=DefaultRepoUrlMockScm("https://example.test/default-repo.git"),
         agent_runner=agent_runner,
         session_factory=session_factory,
     )
@@ -753,20 +753,144 @@ def test_execute_worker_marks_task_failed_when_workspace_key_is_missing(tmp_path
                 parent_id=fetch_task.id,
                 tracker_name="mock",
                 external_parent_id="TASK-27",
-                context={"title": "Broken execute task"},
+                context={"title": "Execute task without workspace key"},
+                input_payload={"instructions": "Run with generated workspace key."},
             )
         )
 
     report = worker.poll_once()
 
-    assert report.failed_execute_tasks == 1
-    assert agent_runner.requests == []
+    assert report.processed_execute_tasks == 1
+    assert report.failed_execute_tasks == 0
+    assert len(agent_runner.requests) == 1
+    assert agent_runner.requests[0].metadata["workspace_key"] == "task-27"
 
     with session_scope(session_factory=session_factory) as session:
         execute_task = session.get(Task, 2)
         assert execute_task is not None
-        assert execute_task.status == TaskStatus.FAILED
-        assert execute_task.error == "Worker 2 requires workspace_key for SCM workspace sync"
+        assert execute_task.status == TaskStatus.DONE
+        assert execute_task.workspace_key == "task-27"
+        assert execute_task.repo_url == "https://example.test/default-repo.git"
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["metadata"]["workspace_key"] == "task-27"
+
+
+def test_execute_worker_preserves_explicit_workspace_key_exactly(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = EnsureWorkspaceRecorderMockScm()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-EXPLICIT",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="Repo-Explicit-42",
+                context={"title": "Tracker task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-EXPLICIT",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="Repo-Explicit-42",
+                context={"title": "Run"},
+                input_payload={"instructions": "Run."},
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 1
+    assert scm.ensure_workspace_payloads[0].workspace_key == "Repo-Explicit-42"
+
+    with session_scope(session_factory=session_factory) as session:
+        execute_task = session.get(Task, 2)
+        assert execute_task is not None
+        assert execute_task.workspace_key == "Repo-Explicit-42"
+
+
+def test_pr_feedback_still_requires_existing_workspace_key(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-PR-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                context={"title": "Tracker task"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_parent_id="TASK-PR-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                branch_name="task27/worker-2",
+                pr_external_id="1",
+                pr_url="https://example.test/repo/pull/1",
+                context={"title": "Execute task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.PR_FEEDBACK,
+                parent_id=execute_task.id,
+                tracker_name="mock",
+                external_task_id="comment-1",
+                external_parent_id="1",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                branch_name="task27/worker-2",
+                pr_external_id="1",
+                pr_url="https://example.test/repo/pull/1",
+                input_payload={
+                    "instructions": "Address feedback.",
+                    "pr_feedback": {
+                        "pr_external_id": "1",
+                        "comment_id": "comment-1",
+                        "body": "Please update the tests.",
+                        "pr_url": "https://example.test/repo/pull/1",
+                    },
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_pr_feedback_tasks == 0
+    assert report.failed_pr_feedback_tasks == 1
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.status == TaskStatus.FAILED
+        assert feedback_task.error == "Worker 2 requires workspace_key for SCM workspace sync"
 
 
 def test_execute_worker_propagates_repo_url_errors_from_scm_adapter(tmp_path) -> None:

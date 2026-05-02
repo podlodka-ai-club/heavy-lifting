@@ -263,9 +263,13 @@ to fill in any missing values:
   The GitHub adapter resolves `repo_url` from
   `GITHUB_DEFAULT_REPO_URL`, `base_branch` from
   `SCM_DEFAULT_BASE_BRANCH` (fallback `main`), and the auto-generated
-  branch name from `SCM_BRANCH_PREFIX` plus the tracker identifier. The
-  resolved `repo_url` is written back to the orchestrator's `tasks` row
-  after `ensure_workspace`, so it becomes durable for future polling.
+  branch name from `SCM_BRANCH_PREFIX` plus the tracker identifier.
+  Before `ensure_workspace`, Worker 2 also generates a deterministic
+  fallback `workspace_key` from the same tracker lineage when the issue
+  omitted one. Explicit tracker-provided `workspace_key` values are kept
+  unchanged. The resolved `repo_url` and final `workspace_key` are then
+  written back to the orchestrator's `tasks` row so future polling and
+  child tasks reuse the same durable workspace identity.
 - **Multi-repo** (one tracker team writes into several repos). Each
   Linear issue must carry its own `repo_url`. Per-issue values override
   any deployment defaults, so a deployment can mix both modes.

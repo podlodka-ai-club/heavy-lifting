@@ -122,9 +122,9 @@ Each feedback item carries a composite cursor `<iso_updated_at>|<source>|<numeri
 
 If the footer is missing (legacy PR, edited body, fork mismatch), each feedback item is returned with sentinel `pr_metadata.metadata = {"_hl_unresolved": true}`. `tracker_intake._ingest_pr_feedback` then rebuilds `pr_metadata` from the matching execute task before persisting the child PR_FEEDBACK task. Long-term we should persist `pr_metadata` directly on `tasks` so this fallback is unnecessary.
 
-#### Durable `repo_url` after workspace sync
+#### Durable workspace identity after workspace sync
 
-After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. Subsequent polling cycles and child tasks see the resolved URL as durable.
+After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. For normal `execute` flows that arrived without `workspace_key`, Worker 2 first generates a deterministic fallback from the tracker lineage and persists it on the execute task before workspace sync. Subsequent polling cycles and child tasks see the same durable `repo_url` and `workspace_key`.
 
 ## Deduplication Rules
 

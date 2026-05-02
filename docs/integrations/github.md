@@ -51,7 +51,7 @@ adapter for `mock` or a future GitLab/Bitbucket implementation.
 
 | Scenario                                   | `.env.local`                                                              | Tracker issue service block                                                                        |
 | ------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| **Single-repo** (1 team → 1 repo, typical) | Set `GITHUB_DEFAULT_REPO_URL`, optionally `SCM_DEFAULT_BASE_BRANCH=main`. | Only `instructions` is required. `repo_url`/`base_branch`/`branch_name` may be omitted.            |
+| **Single-repo** (1 team → 1 repo, typical) | Set `GITHUB_DEFAULT_REPO_URL`, optionally `SCM_DEFAULT_BASE_BRANCH=main`. | Only `instructions` is required. `repo_url`/`workspace_key`/`base_branch`/`branch_name` may be omitted. |
 | **Multi-repo** (1 team → many repos)       | Leave `GITHUB_DEFAULT_REPO_URL` unset.                                    | Every issue must include its own `repo_url`.                                                       |
 | **Hybrid**                                 | Set `GITHUB_DEFAULT_REPO_URL` to the primary repo.                        | Issues without `repo_url` go to the primary; issues with explicit `repo_url` go to their own repo. |
 
@@ -62,8 +62,13 @@ both fixes so the operator can choose.
 
 After `ensure_workspace` resolves the final URL, Worker 2 writes it back
 to the `tasks` row via `TaskRepository.update_task_workspace_context`.
-The next polling cycle (and any child PR_FEEDBACK tasks created from PR
-comments) sees the resolved URL as if it had been there from the start.
+If the task omitted `workspace_key`, Worker 2 first generates a
+deterministic fallback from the tracker identifier using the same slug
+style as auto-generated branch names, then persists that key on the
+execute task before workspace sync. The next polling cycle (and any
+child PR_FEEDBACK tasks created from PR comments) therefore sees the
+resolved `repo_url` and `workspace_key` as if they had been there from
+the start.
 
 ## Authentication
 

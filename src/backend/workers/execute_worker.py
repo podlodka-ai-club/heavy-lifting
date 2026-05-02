@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -235,6 +235,10 @@ class ExecuteWorker:
     ) -> PreparedExecution:
         task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
         skip_scm_artifacts = should_skip_scm_artifacts(task_context=task_context)
+        workspace_key = self._resolve_workspace_key(task=task, task_context=task_context)
+        if workspace_key != task_context.workspace_key:
+            repository.update_task_workspace_context(task.id, workspace_key=workspace_key)
+            task_context = replace(task_context, workspace_key=workspace_key)
         workspace = self._ensure_workspace(task_context=task_context)
         repository.update_task_workspace_context(
             task.id,
@@ -821,13 +825,27 @@ class ExecuteWorker:
         if task.task_type == TaskType.PR_FEEDBACK:
             raise ValueError("pr_feedback task requires an existing branch_name")
 
-        tracker_identifier = (
+        slug = _slugify(self._resolve_tracker_identifier(task=task, task_context=task_context))
+        return f"{self.settings.scm_branch_prefix}{slug}"
+
+    def _resolve_workspace_key(self, *, task: Task, task_context: EffectiveTaskContext) -> str:
+        if task_context.workspace_key:
+            return task_context.workspace_key
+        if task.task_type != TaskType.EXECUTE:
+            raise ValueError("Worker 2 requires workspace_key for SCM workspace sync")
+        return _slugify(self._resolve_tracker_identifier(task=task, task_context=task_context))
+
+    def _resolve_tracker_identifier(
+        self,
+        *,
+        task: Task,
+        task_context: EffectiveTaskContext,
+    ) -> str:
+        return (
             task.external_parent_id
             or task_context.root_task.task.external_task_id
             or f"task-{task.id}"
         )
-        slug = _slugify(tracker_identifier)
-        return f"{self.settings.scm_branch_prefix}{slug}"
 
     def _resolve_base_branch(self, task_context: EffectiveTaskContext) -> str:
         return (
