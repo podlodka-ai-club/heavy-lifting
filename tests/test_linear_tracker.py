@@ -25,6 +25,7 @@ from backend.schemas import (
     TaskLink,
     TrackerCommentCreatePayload,
     TrackerEstimatedSelectionQuery,
+    TrackerEstimateUpdatePayload,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerStatusUpdatePayload,
@@ -2023,3 +2024,181 @@ def test_update_status_propagates_linear_rate_limit_error_on_http_429(
         tracker.update_status(
             TrackerStatusUpdatePayload(external_task_id="ISS-1", status=TaskStatus.DONE)
         )
+
+
+def _issue_labels_response_body(
+    *, issue_id: str = "ISS-1", label_ids: list[str] | None = None
+) -> bytes:
+    nodes: list[dict[str, Any]] = []
+    for lid in label_ids or []:
+        nodes.append({"id": lid})
+    return json.dumps(
+        {
+            "data": {
+                "issue": {
+                    "id": issue_id,
+                    "labels": {"nodes": nodes},
+                }
+            }
+        }
+    ).encode("utf-8")
+
+
+def test_linear_tracker_update_estimate_calls_issue_update_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, calls = _scripted_http_requester(
+        [_issue_update_response_body(issue_id="ISS-9", url="https://l/i/9")]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    ref = tracker.update_estimate(
+        TrackerEstimateUpdatePayload(external_task_id="ISS-9", story_points=3)
+    )
+
+    assert ref.external_id == "ISS-9"
+    assert ref.url == "https://l/i/9"
+    assert len(calls) == 1
+    assert "issueUpdate" in calls[0]["query"]
+    variables = calls[0]["variables"]
+    assert variables["id"] == "ISS-9"
+    assert variables["input"] == {"estimate": 3}
+
+
+def test_linear_tracker_update_estimate_maps_labels_to_label_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        label_string_to_label_id={
+            "sp:3": "lbl-sp-3",
+            "triage:ready": "lbl-triage-ready",
+        }
+    )
+    fake, calls = _scripted_http_requester(
+        [
+            _issue_labels_response_body(issue_id="ISS-9", label_ids=["lbl-existing"]),
+            _issue_update_response_body(issue_id="ISS-9"),
+        ]
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id="ISS-9",
+            story_points=3,
+            labels_to_add=["sp:3", "triage:ready"],
+        )
+    )
+
+    assert len(calls) == 2
+    # Query for current labels.
+    assert "issue" in calls[0]["query"]
+    assert calls[0]["variables"] == {"id": "ISS-9"}
+    # Mutation IssueUpdate.
+    update_input = calls[1]["variables"]["input"]
+    assert update_input["estimate"] == 3
+    assert update_input["labelIds"] == ["lbl-existing", "lbl-sp-3", "lbl-triage-ready"]
+
+
+def test_linear_tracker_update_estimate_warns_on_missing_label_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        label_string_to_label_id={"sp:5": "lbl-sp-5"},
+    )
+    # Only sp:5 is configured; triage:rfi and triage:block are not.
+    fake, calls = _scripted_http_requester(
+        [
+            _issue_labels_response_body(issue_id="ISS-9", label_ids=[]),
+            _issue_update_response_body(issue_id="ISS-9"),
+        ]
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    ref = tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id="ISS-9",
+            story_points=5,
+            labels_to_add=["sp:5", "triage:rfi", "triage:block"],
+        )
+    )
+
+    # Mutation must still happen with estimate; only resolved label_id present.
+    assert ref.external_id == "ISS-9"
+    assert len(calls) == 2
+    update_input = calls[1]["variables"]["input"]
+    assert update_input["estimate"] == 5
+    assert update_input["labelIds"] == ["lbl-sp-5"]
+
+
+def test_linear_tracker_update_estimate_skips_estimate_when_story_points_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(label_string_to_label_id={"sp:1": "lbl-sp-1"})
+    fake, calls = _scripted_http_requester(
+        [
+            _issue_labels_response_body(issue_id="ISS-9", label_ids=[]),
+            _issue_update_response_body(issue_id="ISS-9"),
+        ]
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id="ISS-9",
+            story_points=None,
+            labels_to_add=["sp:1"],
+        )
+    )
+
+    update_input = calls[1]["variables"]["input"]
+    assert "estimate" not in update_input
+    assert update_input["labelIds"] == ["lbl-sp-1"]
+
+
+def test_linear_tracker_update_estimate_skips_mutation_when_no_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    tracker = LinearTracker(_make_config(), http_requester=_never_called)
+
+    ref = tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id="ISS-9",
+            story_points=None,
+        )
+    )
+
+    assert ref.external_id == "ISS-9"
+
+
+def test_linear_tracker_update_estimate_removes_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    config = _make_config(
+        label_string_to_label_id={"triage:ready": "lbl-triage-ready"},
+    )
+    fake, calls = _scripted_http_requester(
+        [
+            _issue_labels_response_body(
+                issue_id="ISS-9", label_ids=["lbl-triage-ready", "lbl-other"]
+            ),
+            _issue_update_response_body(issue_id="ISS-9"),
+        ]
+    )
+    tracker = LinearTracker(config, http_requester=fake)
+
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id="ISS-9",
+            labels_to_remove=["triage:ready"],
+        )
+    )
+
+    update_input = calls[1]["variables"]["input"]
+    assert update_input.get("labelIds") == ["lbl-other"]

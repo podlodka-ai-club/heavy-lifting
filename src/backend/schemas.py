@@ -257,6 +257,13 @@ class TrackerStatusUpdatePayload(SchemaModel):
     status: TaskStatus
 
 
+class TrackerEstimateUpdatePayload(SchemaModel):
+    external_task_id: str
+    story_points: int | None = None
+    labels_to_add: list[str] = Field(default_factory=list)
+    labels_to_remove: list[str] = Field(default_factory=list)
+
+
 class TrackerTaskSelectionClaimPayload(SchemaModel):
     external_task_id: str
 
@@ -400,6 +407,7 @@ __all__ = [
     "TrackerCommentCreatePayload",
     "TrackerCommentReference",
     "TrackerEstimatedSelectionQuery",
+    "TrackerEstimateUpdatePayload",
     "TrackerFetchTasksQuery",
     "TrackerLinksAttachPayload",
     "TrackerTaskSelectionClaimPayload",

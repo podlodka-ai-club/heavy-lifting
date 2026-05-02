@@ -4,6 +4,7 @@ from backend.schemas import (
     TaskContext,
     TrackerCommentCreatePayload,
     TrackerEstimatedSelectionQuery,
+    TrackerEstimateUpdatePayload,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerStatusUpdatePayload,
@@ -281,3 +282,102 @@ def test_mock_tracker_claim_selection_preserves_existing_selection_metadata() ->
         "taken_in_work": True,
         "selected_from_parent_external_id": "legacy-parent",
     }
+
+
+def _create_simple_task(tracker: MockTracker) -> str:
+    ref = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="Estimated task"))
+    )
+    return ref.external_id
+
+
+def test_mock_tracker_update_estimate_writes_story_points() -> None:
+    tracker = MockTracker()
+    task_id = _create_simple_task(tracker)
+
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(external_task_id=task_id, story_points=3)
+    )
+
+    stored = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
+    assert stored.metadata["estimate"]["story_points"] == 3
+
+
+def test_mock_tracker_update_estimate_adds_labels() -> None:
+    tracker = MockTracker()
+    task_id = _create_simple_task(tracker)
+
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id=task_id,
+            story_points=2,
+            labels_to_add=["sp:2", "triage:ready"],
+        )
+    )
+
+    stored = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
+    assert stored.metadata["labels"] == ["sp:2", "triage:ready"]
+    assert stored.metadata["estimate"]["story_points"] == 2
+
+
+def test_mock_tracker_update_estimate_removes_labels() -> None:
+    tracker = MockTracker()
+    task_id = _create_simple_task(tracker)
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id=task_id,
+            labels_to_add=["sp:2", "triage:ready"],
+        )
+    )
+
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(
+            external_task_id=task_id,
+            labels_to_remove=["triage:ready"],
+        )
+    )
+
+    stored = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
+    assert stored.metadata["labels"] == ["sp:2"]
+
+
+def test_mock_tracker_update_estimate_idempotent() -> None:
+    tracker = MockTracker()
+    task_id = _create_simple_task(tracker)
+    payload = TrackerEstimateUpdatePayload(
+        external_task_id=task_id,
+        story_points=5,
+        labels_to_add=["sp:5", "triage:rfi"],
+    )
+
+    tracker.update_estimate(payload)
+    tracker.update_estimate(payload)
+    tracker.update_estimate(payload)
+
+    stored = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
+    assert stored.metadata["labels"] == ["sp:5", "triage:rfi"]
+    assert stored.metadata["estimate"]["story_points"] == 5
+
+
+def test_mock_tracker_update_estimate_with_only_story_points_does_not_set_labels() -> None:
+    tracker = MockTracker()
+    task_id = _create_simple_task(tracker)
+
+    tracker.update_estimate(
+        TrackerEstimateUpdatePayload(external_task_id=task_id, story_points=8)
+    )
+
+    stored = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
+    assert stored.metadata["estimate"]["story_points"] == 8
+    assert stored.metadata.get("labels") == []
+
+
+def test_mock_tracker_update_estimate_returns_reference() -> None:
+    tracker = MockTracker()
+    task_id = _create_simple_task(tracker)
+
+    ref = tracker.update_estimate(
+        TrackerEstimateUpdatePayload(external_task_id=task_id, story_points=1)
+    )
+
+    assert ref.external_id == task_id

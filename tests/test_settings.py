@@ -51,6 +51,16 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "LINEAR_TASK_TYPE_LABEL_MAPPING",
         "LINEAR_MAX_PAGES",
         "LINEAR_DESCRIPTION_WARN_THRESHOLD",
+        "LINEAR_LABEL_ID_SP_1",
+        "LINEAR_LABEL_ID_SP_2",
+        "LINEAR_LABEL_ID_SP_3",
+        "LINEAR_LABEL_ID_SP_5",
+        "LINEAR_LABEL_ID_SP_8",
+        "LINEAR_LABEL_ID_SP_13",
+        "LINEAR_LABEL_ID_TRIAGE_READY",
+        "LINEAR_LABEL_ID_TRIAGE_RFI",
+        "LINEAR_LABEL_ID_TRIAGE_SPLIT",
+        "LINEAR_LABEL_ID_TRIAGE_BLOCK",
         "GITHUB_API_BASE_URL",
         "GITHUB_TOKEN_ENV_VAR",
         "GITHUB_USER_NAME",
@@ -111,6 +121,16 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.linear_task_type_label_mapping == {}
     assert settings.linear_max_pages == 4
     assert settings.linear_description_warn_threshold == 50000
+    assert settings.linear_label_id_sp_1 is None
+    assert settings.linear_label_id_sp_2 is None
+    assert settings.linear_label_id_sp_3 is None
+    assert settings.linear_label_id_sp_5 is None
+    assert settings.linear_label_id_sp_8 is None
+    assert settings.linear_label_id_sp_13 is None
+    assert settings.linear_label_id_triage_ready is None
+    assert settings.linear_label_id_triage_rfi is None
+    assert settings.linear_label_id_triage_split is None
+    assert settings.linear_label_id_triage_block is None
     assert settings.github_api_base_url == "https://api.github.com"
     assert settings.github_token_env_var == "GITHUB_TOKEN"
     assert settings.github_user_name is None
@@ -357,3 +377,44 @@ def test_get_settings_ignores_invalid_database_overrides(monkeypatch, tmp_path) 
 
     assert settings.tracker_fetch_limit == 25
     assert settings.local_agent_name == "env-local"
+
+
+def test_settings_linear_label_id_defaults_none(monkeypatch) -> None:
+    for name in (
+        "LINEAR_LABEL_ID_SP_1",
+        "LINEAR_LABEL_ID_SP_2",
+        "LINEAR_LABEL_ID_SP_3",
+        "LINEAR_LABEL_ID_SP_5",
+        "LINEAR_LABEL_ID_SP_8",
+        "LINEAR_LABEL_ID_SP_13",
+        "LINEAR_LABEL_ID_TRIAGE_READY",
+        "LINEAR_LABEL_ID_TRIAGE_RFI",
+        "LINEAR_LABEL_ID_TRIAGE_SPLIT",
+        "LINEAR_LABEL_ID_TRIAGE_BLOCK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert settings.linear_label_id_sp_1 is None
+    assert settings.linear_label_id_sp_2 is None
+    assert settings.linear_label_id_sp_3 is None
+    assert settings.linear_label_id_sp_5 is None
+    assert settings.linear_label_id_sp_8 is None
+    assert settings.linear_label_id_sp_13 is None
+    assert settings.linear_label_id_triage_ready is None
+    assert settings.linear_label_id_triage_rfi is None
+    assert settings.linear_label_id_triage_split is None
+    assert settings.linear_label_id_triage_block is None
+
+
+def test_settings_linear_label_id_sp_1_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("LINEAR_LABEL_ID_SP_1", "lbl-sp-1-id")
+    monkeypatch.setenv("LINEAR_LABEL_ID_TRIAGE_READY", "lbl-triage-ready-id")
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert settings.linear_label_id_sp_1 == "lbl-sp-1-id"
+    assert settings.linear_label_id_triage_ready == "lbl-triage-ready-id"
