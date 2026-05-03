@@ -269,6 +269,8 @@ def test_cli_agent_runner_prompt_requires_concrete_edits_for_normal_execute(tmp_
     assert "runtime_contract:" in prompt
     assert "- Apply concrete file changes directly in the workspace." in prompt
     assert "- Do not stop at analysis, explanation, or a plan when edits are required." in prompt
+    assert "- Do not run git commit, git push, or create pull requests." in prompt
+    assert "- Backend workers own all SCM publish actions." in prompt
     assert "- This is an estimate-only task." not in prompt
 
 

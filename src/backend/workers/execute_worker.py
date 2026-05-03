@@ -54,6 +54,7 @@ class PreparedExecution:
     task_context: EffectiveTaskContext
     workspace: ScmWorkspace
     branch_name: str | None
+    pre_run_head_sha: str | None
     runtime_metadata: dict[str, object]
     skip_scm_artifacts: bool = False
 
@@ -171,6 +172,7 @@ class ExecuteWorker:
                         message=self._resolve_commit_message(
                             task_context=prepared_execution.task_context
                         ),
+                        pre_run_head_sha=prepared_execution.pre_run_head_sha,
                         metadata={
                             "task_id": task.id,
                             "flow_type": task.task_type.value,
@@ -248,10 +250,12 @@ class ExecuteWorker:
             workspace_key=workspace.workspace_key,
         )
         branch_name = None
+        pre_run_head_sha = None
         if not skip_scm_artifacts:
             branch_name = self._sync_branch(
                 task=task, task_context=task_context, workspace=workspace
             )
+            pre_run_head_sha = self.scm.get_head_commit(workspace.workspace_key, branch_name)
         runtime_metadata: dict[str, object] = {
             "task_id": task.id,
             "task_type": task.task_type.value,
@@ -261,6 +265,8 @@ class ExecuteWorker:
             "repo_url": workspace.repo_url,
             "repo_ref": workspace.repo_ref,
         }
+        if pre_run_head_sha is not None:
+            runtime_metadata["pre_run_head_sha"] = pre_run_head_sha
         _task_logger(
             task,
             workspace_key=workspace.workspace_key,
@@ -273,6 +279,7 @@ class ExecuteWorker:
             task_context=task_context,
             workspace=workspace,
             branch_name=branch_name,
+            pre_run_head_sha=pre_run_head_sha,
             runtime_metadata=runtime_metadata,
             skip_scm_artifacts=skip_scm_artifacts,
         )

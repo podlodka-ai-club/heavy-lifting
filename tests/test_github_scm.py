@@ -370,10 +370,11 @@ def test_create_branch_uses_default_remote_from_config(tmp_path) -> None:
     assert "-B" in checkout_args
 
 
-def test_commit_changes_raises_on_empty_diff(tmp_path) -> None:
+def test_commit_changes_raises_on_empty_diff_when_head_unchanged(tmp_path) -> None:
     runner = FakeRunner()
     runner.add_response()  # clone
     runner.add_response()  # checkout
+    runner.add_response(stdout="bd6df21\n")  # rev-parse HEAD before status
     runner.add_response(stdout="")  # status --porcelain
     scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
     scm.ensure_workspace(
@@ -390,6 +391,63 @@ def test_commit_changes_raises_on_empty_diff(tmp_path) -> None:
                 workspace_key="widgets-4",
                 branch_name="feature/x",
                 message="apply",
+                pre_run_head_sha="bd6df21",
+            )
+        )
+
+
+def test_commit_changes_reuses_head_on_empty_diff_when_head_advanced(tmp_path) -> None:
+    runner = FakeRunner()
+    runner.add_response()  # clone
+    runner.add_response()  # checkout
+    runner.add_response(stdout="bd6df21\n")  # rev-parse HEAD before status
+    runner.add_response(stdout="")  # status --porcelain
+    runner.add_response()  # merge-base --is-ancestor
+    scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
+    scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://github.com/acme/widgets",
+            workspace_key="widgets-4a",
+            repo_ref="main",
+        )
+    )
+
+    commit = scm.commit_changes(
+        ScmCommitChangesPayload(
+            workspace_key="widgets-4a",
+            branch_name="feature/x",
+            message="apply",
+            pre_run_head_sha="old001",
+        )
+    )
+
+    assert commit.commit_sha == "bd6df21"
+    assert commit.metadata["reused_existing_commit"] is True
+
+
+def test_commit_changes_raises_on_empty_diff_when_head_changed_but_not_advanced(tmp_path) -> None:
+    runner = FakeRunner()
+    runner.add_response()  # clone
+    runner.add_response()  # checkout
+    runner.add_response(stdout="rewritten77\n")  # rev-parse HEAD before status
+    runner.add_response(stdout="")  # status --porcelain
+    runner.add_failure(stderr="not ancestor", returncode=1)  # merge-base --is-ancestor
+    scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
+    scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://github.com/acme/widgets",
+            workspace_key="widgets-4b",
+            repo_ref="main",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="no changes to commit"):
+        scm.commit_changes(
+            ScmCommitChangesPayload(
+                workspace_key="widgets-4b",
+                branch_name="feature/x",
+                message="apply",
+                pre_run_head_sha="old001",
             )
         )
 
@@ -398,6 +456,7 @@ def test_commit_changes_returns_rev_parse_head(tmp_path) -> None:
     runner = FakeRunner()
     runner.add_response()
     runner.add_response()
+    runner.add_response(stdout="aaa111\n")  # rev-parse HEAD before status
     runner.add_response(stdout="M  file.py\n")  # status
     runner.add_response()  # add -A
     runner.add_response()  # commit
@@ -420,7 +479,8 @@ def test_commit_changes_returns_rev_parse_head(tmp_path) -> None:
     )
 
     assert commit.commit_sha == "abc123def"
-    commit_args, _ = runner.calls[4]
+    assert commit.metadata["reused_existing_commit"] is False
+    commit_args, _ = runner.calls[5]
     assert "commit" in commit_args
     assert "user.name=hl-bot" in commit_args
     assert "user.email=hl@example.test" in commit_args

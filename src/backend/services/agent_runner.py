@@ -258,6 +258,8 @@ class CliAgentRunner:
             return [
                 "- Apply concrete file changes directly in the workspace.",
                 "- Do not stop at analysis, explanation, or a plan when edits are required.",
+                "- Do not run git commit, git push, or create pull requests.",
+                "- Backend workers own all SCM publish actions.",
                 "- Update only the files needed to complete the task.",
                 "- Return a concise implementation summary after editing the workspace.",
             ]
@@ -277,6 +279,8 @@ class CliAgentRunner:
             return [
                 "- Apply follow-up code changes on the existing branch for the PR.",
                 "- Do not replace the PR with a new branch.",
+                "- Do not run git commit, git push, or create pull requests.",
+                "- Backend workers own all SCM publish actions.",
                 "- Return a concise summary of the follow-up changes.",
             ]
         return ["- Follow the provided task instructions in the current workspace."]

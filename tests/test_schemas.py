@@ -329,6 +329,7 @@ def test_scm_payloads_apply_mvp_defaults() -> None:
         "workspace_key": "repo-1",
         "branch_name": "task18/scm-boundary",
         "message": "task18 define scm boundary",
+        "pre_run_head_sha": None,
         "metadata": {},
     }
     assert create_pr.model_dump(mode="json") == {

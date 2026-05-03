@@ -72,6 +72,12 @@ class MockScm:
         workspace.branch_name = stored_payload.branch_name
         return branch.model_copy(deep=True)
 
+    def get_head_commit(self, workspace_key: str, branch_name: str) -> str | None:
+        branch = self._branches.get((workspace_key, branch_name))
+        if branch is None:
+            return None
+        return branch.head_commit_sha
+
     def commit_changes(self, payload: ScmCommitChangesPayload) -> ScmCommitReference:
         branch = self._require_branch(payload.workspace_key, payload.branch_name)
         stored_payload = payload.model_copy(deep=True)

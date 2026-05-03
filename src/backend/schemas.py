@@ -255,6 +255,7 @@ class ScmCommitChangesPayload(SchemaModel):
     workspace_key: str
     branch_name: str
     message: str = Field(min_length=1)
+    pre_run_head_sha: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
 
 

@@ -424,16 +424,52 @@ class GitHubScm:
             metadata=dict(payload.metadata),
         )
 
+    def get_head_commit(self, workspace_key: str, _branch_name: str) -> str | None:
+        workspace = self._require_workspace(workspace_key)
+        token = self._token()
+        rev = self._git_run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=workspace.local_path,
+            token=token,
+        )
+        commit_sha = rev.stdout.strip()
+        return commit_sha or None
+
     def commit_changes(self, payload: ScmCommitChangesPayload) -> ScmCommitReference:
         workspace = self._require_workspace(payload.workspace_key)
         token = self._token()
+
+        rev_before = self._git_run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=workspace.local_path,
+            token=token,
+        )
+        head_before = rev_before.stdout.strip()
+
         status = self._git_run(
             ["git", "status", "--porcelain"],
             cwd=workspace.local_path,
             token=token,
         )
         if not status.stdout.strip():
-            raise RuntimeError("no changes to commit")
+            if (
+                payload.pre_run_head_sha is None
+                or payload.pre_run_head_sha == head_before
+                or not self._is_ancestor_commit(
+                    workspace_path=workspace.local_path,
+                    ancestor_sha=payload.pre_run_head_sha,
+                    descendant_sha=head_before,
+                    token=token,
+                )
+            ):
+                raise RuntimeError("no changes to commit")
+            return ScmCommitReference(
+                workspace_key=payload.workspace_key,
+                branch_name=payload.branch_name,
+                commit_sha=head_before,
+                message=payload.message,
+                metadata={**dict(payload.metadata), "reused_existing_commit": True},
+            )
 
         self._git_run(["git", "add", "-A"], cwd=workspace.local_path, token=token)
         commit_args = ["git"]
@@ -455,7 +491,7 @@ class GitHubScm:
             branch_name=payload.branch_name,
             commit_sha=commit_sha,
             message=payload.message,
-            metadata=dict(payload.metadata),
+            metadata={**dict(payload.metadata), "reused_existing_commit": False},
         )
 
     def push_branch(self, payload: ScmPushBranchPayload) -> ScmPushReference:
@@ -698,6 +734,28 @@ class GitHubScm:
         if ref.startswith(prefix):
             return ref[len(prefix) :]
         return ref
+
+    def _is_ancestor_commit(
+        self,
+        *,
+        workspace_path: str,
+        ancestor_sha: str,
+        descendant_sha: str,
+        token: str | None,
+    ) -> bool:
+        try:
+            self._runner.run(
+                ["git", "merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
+                cwd=workspace_path,
+            )
+            return True
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode == 1:
+                return False
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            sanitized = _sanitize_token(stderr or stdout, token)
+            raise RuntimeError(f"git command failed: {sanitized}") from exc
 
     def _checkout_branch(
         self,
