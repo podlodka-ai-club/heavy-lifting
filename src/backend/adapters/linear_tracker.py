@@ -108,6 +108,14 @@ query LinearFetchIssues(
 }
 """.strip()
 
+_VIEWER_QUERY = """
+query LinearViewer {
+  viewer {
+    id
+  }
+}
+""".strip()
+
 _ISSUE_DESCRIPTION_QUERY = """
 query LinearIssueDescription($id: String!) {
   issue(id: $id) {
@@ -479,6 +487,7 @@ class LinearTracker:
             http_requester=http_requester or _default_http_requester,
         )
         self._workflow_states_by_type: dict[str, list[_WorkflowState]] | None = None
+        self._viewer_id: str | None = None
 
     def __repr__(self) -> str:
         return f"LinearTracker(api_url={self._config.api_url!r}, team_id={self._config.team_id!r})"
@@ -555,7 +564,8 @@ class LinearTracker:
         if not state_types:
             return []
 
-        filter_dict = self._build_issues_filter(state_types, query.task_type)
+        assignee_id = self._resolve_viewer_id()
+        filter_dict = self._build_issues_filter(state_types, query.task_type, assignee_id)
 
         collected: list[TrackerTask] = []
         after: str | None = None
@@ -634,6 +644,7 @@ class LinearTracker:
         self,
         state_types: Sequence[str],
         task_type: TaskType | None,
+        assignee_id: str,
     ) -> dict[str, Any]:
         label_ids: list[str] = []
         if task_type is not None:
@@ -649,12 +660,25 @@ class LinearTracker:
             label_ids.append(self._config.fetch_label_id)
 
         state_clause: dict[str, Any] = {"state": {"type": {"in": list(state_types)}}}
-        if not label_ids:
-            return state_clause
-        if len(label_ids) == 1:
-            return {**state_clause, "labels": {"id": {"eq": label_ids[0]}}}
+        assignee_clause: dict[str, Any] = {"assignee": {"id": {"eq": assignee_id}}}
+        clauses: list[dict[str, Any]] = [state_clause, assignee_clause]
         label_clauses = [{"labels": {"id": {"eq": lid}}} for lid in label_ids]
-        return {"and": [state_clause, *label_clauses]}
+        return {"and": [*clauses, *label_clauses]}
+
+    def _resolve_viewer_id(self) -> str:
+        if self._viewer_id:
+            return self._viewer_id
+
+        data = self._client.execute(_VIEWER_QUERY, {})
+        viewer = data.get("viewer")
+        if not isinstance(viewer, dict):
+            raise RuntimeError("Linear viewer response missing 'viewer' object")
+        viewer_id = viewer.get("id")
+        if not isinstance(viewer_id, str) or not viewer_id:
+            raise RuntimeError("Linear viewer response missing viewer.id")
+
+        self._viewer_id = viewer_id
+        return viewer_id
 
     def _to_tracker_task(self, issue: Mapping[str, Any]) -> TrackerTask | None:
         external_id = issue.get("id")

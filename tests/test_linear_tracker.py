@@ -588,6 +588,10 @@ def _scripted_http_requester(
                 "variables": parsed.get("variables"),
             }
         )
+        query = parsed.get("query")
+        if isinstance(query, str) and "query LinearViewer" in query:
+            viewer_body = json.dumps({"data": {"viewer": {"id": "viewer-1"}}}).encode("utf-8")
+            return _FakeResponse(viewer_body)
         if not queue:
             raise AssertionError("no scripted response left for http_requester")
         return _FakeResponse(queue.pop(0))
@@ -690,12 +694,13 @@ def test_fetch_tasks_single_page_maps_issue_fields(
     assert task.metadata["linear_issue_url"] == "https://linear.app/team/issue/ISS-1"
     assert task.metadata["linear_team_id"] == "team-1"
 
-    assert len(calls) == 1
-    variables = calls[0]["variables"]
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    assert len(issue_calls) == 1
+    variables = issue_calls[0]["variables"]
     assert variables["orderBy"] == "createdAt"
     assert variables["first"] <= 250
     assert variables["after"] is None
-    state_filter = variables["filter"]["state"]["type"]["in"]
+    state_filter = variables["filter"]["and"][0]["state"]["type"]["in"]
     assert set(state_filter) == {"triage", "backlog", "unstarted"}
 
 
@@ -794,13 +799,14 @@ def test_fetch_tasks_paginates_with_clamp_to_250_aggregating_to_limit(
     result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=600))
 
     assert len(result) == 600
-    assert len(calls) == 3
-    assert calls[0]["variables"]["first"] == 250
-    assert calls[0]["variables"]["after"] is None
-    assert calls[1]["variables"]["first"] == 250
-    assert calls[1]["variables"]["after"] == "cur-1"
-    assert calls[2]["variables"]["first"] == 100
-    assert calls[2]["variables"]["after"] == "cur-2"
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    assert len(issue_calls) == 3
+    assert issue_calls[0]["variables"]["first"] == 250
+    assert issue_calls[0]["variables"]["after"] is None
+    assert issue_calls[1]["variables"]["first"] == 250
+    assert issue_calls[1]["variables"]["after"] == "cur-1"
+    assert issue_calls[2]["variables"]["first"] == 100
+    assert issue_calls[2]["variables"]["after"] == "cur-2"
 
 
 def test_fetch_tasks_stops_at_max_pages_with_warning(
@@ -825,7 +831,8 @@ def test_fetch_tasks_stops_at_max_pages_with_warning(
     result = tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=1000))
 
     assert len(result) == 500
-    assert len(calls) == 2
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    assert len(issue_calls) == 2
     warnings = [
         r.msg
         for r in caplog.records
@@ -851,9 +858,11 @@ def test_fetch_tasks_filter_includes_task_type_label_when_mapped(
         TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], task_type=TaskType.PR_FEEDBACK, limit=10)
     )
 
-    filter_dict = calls[0]["variables"]["filter"]
-    assert filter_dict["labels"] == {"id": {"eq": "label-prf"}}
-    assert "and" not in filter_dict
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    filter_dict = issue_calls[0]["variables"]["filter"]
+    assert "and" in filter_dict
+    label_clauses = [clause for clause in filter_dict["and"] if "labels" in clause]
+    assert label_clauses == [{"labels": {"id": {"eq": "label-prf"}}}]
 
 
 def test_fetch_tasks_filter_combines_label_and_fetch_label_via_and(
@@ -871,8 +880,10 @@ def test_fetch_tasks_filter_combines_label_and_fetch_label_via_and(
         TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10)
     )
 
-    filter_dict = calls[0]["variables"]["filter"]
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    filter_dict = issue_calls[0]["variables"]["filter"]
     assert "and" in filter_dict
+    assert {"assignee": {"id": {"eq": "viewer-1"}}} in filter_dict["and"]
     label_clauses = [clause for clause in filter_dict["and"] if "labels" in clause]
     label_ids = sorted(c["labels"]["id"]["eq"] for c in label_clauses)
     assert label_ids == ["label-exec", "label-fetch"]
@@ -891,8 +902,10 @@ def test_fetch_tasks_warns_when_task_type_has_no_label_mapping(
         TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], task_type=TaskType.EXECUTE, limit=10)
     )
 
-    filter_dict = calls[0]["variables"]["filter"]
-    assert "labels" not in filter_dict
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    filter_dict = issue_calls[0]["variables"]["filter"]
+    assert "and" in filter_dict
+    assert all("labels" not in clause for clause in filter_dict["and"])
     warnings = [
         r.msg
         for r in caplog.records
@@ -900,6 +913,41 @@ def test_fetch_tasks_warns_when_task_type_has_no_label_mapping(
     ]
     assert len(warnings) == 1
     assert warnings[0]["task_type"] == "execute"
+
+
+def test_fetch_tasks_filter_includes_assignee_gate_without_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, calls = _scripted_http_requester([_issues_response_body([])])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10))
+
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    filter_dict = issue_calls[0]["variables"]["filter"]
+    assert filter_dict == {
+        "and": [
+            {"state": {"type": {"in": ["triage", "backlog", "unstarted"]}}},
+            {"assignee": {"id": {"eq": "viewer-1"}}},
+        ]
+    }
+
+
+def test_fetch_tasks_resolves_viewer_id_once_and_reuses_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    fake, calls = _scripted_http_requester([_issues_response_body([]), _issues_response_body([])])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10))
+    tracker.fetch_tasks(TrackerFetchTasksQuery(statuses=[TaskStatus.NEW], limit=10))
+
+    viewer_calls = [call for call in calls if "query LinearViewer" in (call.get("query") or "")]
+    issue_calls = [call for call in calls if "query LinearFetchIssues" in (call.get("query") or "")]
+    assert len(viewer_calls) == 1
+    assert len(issue_calls) == 2
 
 
 def test_fetch_tasks_skips_issue_with_unknown_state_type(
