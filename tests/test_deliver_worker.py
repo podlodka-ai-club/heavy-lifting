@@ -301,6 +301,80 @@ def test_build_deliver_worker_uses_runtime_settings(session_factory) -> None:
     assert worker.session_factory is session_factory
 
 
+class DbWriteDuringTrackerCall(MockTracker):
+    def __init__(self, session_factory, target_task_id: int) -> None:
+        super().__init__()
+        self.session_factory = session_factory
+        self.target_task_id = target_task_id
+        self.write_attempted = False
+
+    def add_comment(self, payload):
+        self.write_attempted = True
+        with session_scope(session_factory=self.session_factory) as session:
+            target_task = session.get(Task, self.target_task_id)
+            assert target_task is not None
+            target_task.error = "updated-during-tracker-call"
+        return super().add_comment(payload)
+
+
+def test_deliver_worker_commits_claim_before_tracker_calls(session_factory) -> None:
+    tracker = DbWriteDuringTrackerCall(session_factory=session_factory, target_task_id=1)
+    tracker_task = tracker.create_task(
+        _tracker_task_payload(title="Tracker task", repo_url="https://example.test/repo.git")
+    )
+    worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-claim-deliver",
+                context={"title": "Tracker task"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-claim-deliver",
+                branch_name="task-claim-deliver/run",
+                context={"title": "Implement Worker 3"},
+                result_payload={
+                    "summary": "done",
+                    "details": "details",
+                },
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.DELIVER,
+                parent_id=execute_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={"title": "Deliver Worker 3 result"},
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_deliver_tasks == 1
+    assert tracker.write_attempted is True
+    with session_scope(session_factory=session_factory) as session:
+        fetch_task = session.get(Task, 1)
+        assert fetch_task is not None
+        assert fetch_task.error == "updated-during-tracker-call"
+
+
 def _tracker_task_payload(*, title: str, repo_url: str):
     return TrackerTaskCreatePayload(
         context=TaskContext(title=title),

@@ -140,6 +140,51 @@ class RetroAgentRunner:
         )
 
 
+class DbWriteDuringRunAgentRunner:
+    def __init__(self, session_factory, target_task_id: int) -> None:
+        self.session_factory = session_factory
+        self.target_task_id = target_task_id
+        self.write_attempted = False
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.write_attempted = True
+        with session_scope(session_factory=self.session_factory) as session:
+            target_task = session.get(Task, self.target_task_id)
+            assert target_task is not None
+            target_task.error = "updated-during-agent-run"
+        return AgentRunResult(payload=TaskResultPayload(summary="CLI agent run completed."))
+
+
+class DbWriteDuringCreatePrMockScm(MockScm):
+    def __init__(self, session_factory, target_task_id: int) -> None:
+        super().__init__()
+        self.session_factory = session_factory
+        self.target_task_id = target_task_id
+        self.write_attempted = False
+
+    def create_pull_request(self, payload):
+        self.write_attempted = True
+        with session_scope(session_factory=self.session_factory) as session:
+            target_task = session.get(Task, self.target_task_id)
+            assert target_task is not None
+            target_task.error = "updated-during-pr-create"
+        return super().create_pull_request(payload)
+
+
+class FailingHeadCommitDefaultRepoUrlMockScm(MockScm):
+    def __init__(self, default_repo_url: str) -> None:
+        super().__init__()
+        self._default_repo_url = default_repo_url
+
+    def ensure_workspace(self, payload):
+        if payload.repo_url is None:
+            payload = payload.model_copy(update={"repo_url": self._default_repo_url})
+        return super().ensure_workspace(payload)
+
+    def get_head_commit(self, workspace_key: str, branch_name: str) -> str:
+        raise RuntimeError("head lookup failed")
+
+
 def test_execute_worker_processes_execute_task_and_creates_deliver(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     agent_runner = RecordingAgentRunner()
@@ -1386,6 +1431,11 @@ class DefaultRepoUrlMockScm(MockScm):
         return super().ensure_workspace(payload)
 
 
+class FailingCommitDefaultRepoUrlMockScm(DefaultRepoUrlMockScm):
+    def commit_changes(self, payload):
+        raise RuntimeError("commit failed")
+
+
 def test_execute_worker_persists_resolved_repo_url_back_to_task(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     scm = DefaultRepoUrlMockScm("https://example.test/default-repo.git")
@@ -1434,6 +1484,106 @@ def test_execute_worker_persists_resolved_repo_url_back_to_task(tmp_path) -> Non
         assert execute_task.result_payload is not None
         result_metadata = execute_task.result_payload["metadata"]
         assert result_metadata["repo_url"] == "https://example.test/default-repo.git"
+
+
+def test_execute_worker_persists_workspace_context_on_commit_failure(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=FailingCommitDefaultRepoUrlMockScm("https://example.test/default-repo.git"),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-CTX-FAIL",
+                repo_ref="main",
+                context={"title": "Tracker"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-CTX-FAIL",
+                context={"title": "Run"},
+                input_payload={
+                    "instructions": "Run and fail in commit step.",
+                    "branch_name": "task-ctx-fail/run",
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 0
+    assert report.failed_execute_tasks == 1
+
+    with session_scope(session_factory=session_factory) as session:
+        execute_task = session.get(Task, 2)
+        assert execute_task is not None
+        assert execute_task.status == TaskStatus.FAILED
+        assert execute_task.error == "commit failed"
+        assert execute_task.workspace_key == "task-ctx-fail"
+        assert execute_task.repo_url == "https://example.test/default-repo.git"
+        assert execute_task.repo_ref == "main"
+
+
+def test_execute_worker_persists_workspace_context_when_prepare_fails_after_ensure(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=FailingHeadCommitDefaultRepoUrlMockScm(
+            "https://example.test/default-repo.git"
+        ),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-PREP-FAIL",
+                repo_ref="main",
+                context={"title": "Tracker"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-PREP-FAIL",
+                context={"title": "Run"},
+                input_payload={
+                    "instructions": "Run and fail in prepare step.",
+                    "branch_name": "task-prep-fail/run",
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 0
+    assert report.failed_execute_tasks == 1
+
+    with session_scope(session_factory=session_factory) as session:
+        execute_task = session.get(Task, 2)
+        assert execute_task is not None
+        assert execute_task.status == TaskStatus.FAILED
+        assert execute_task.error == "head lookup failed"
+        assert execute_task.workspace_key == "task-prep-fail"
+        assert execute_task.repo_url == "https://example.test/default-repo.git"
+        assert execute_task.repo_ref == "main"
 
 
 def test_execute_worker_uses_scm_branch_prefix_from_settings(tmp_path) -> None:
@@ -1571,6 +1721,107 @@ def test_execute_worker_pr_metadata_uses_workspace_repo_url(tmp_path) -> None:
     pr_metadata = pull_requests[0].pr_metadata
     assert pr_metadata.repo_url == "https://example.test/default-repo.git"
     assert pr_metadata.workspace_key == "repo-300"
+
+
+def test_execute_worker_commits_claim_before_agent_run(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = MockScm()
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-CLAIM",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-claim",
+                context={"title": "Tracker"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-CLAIM",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-claim",
+                context={"title": "Run"},
+                input_payload={
+                    "instructions": "Run.",
+                    "branch_name": "task-claim/run",
+                },
+            )
+        )
+
+    agent_runner = DbWriteDuringRunAgentRunner(session_factory=session_factory, target_task_id=1)
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=agent_runner,
+        session_factory=session_factory,
+    )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 1
+    assert agent_runner.write_attempted is True
+    with session_scope(session_factory=session_factory) as session:
+        fetch_task = session.get(Task, 1)
+        assert fetch_task is not None
+        assert fetch_task.error == "updated-during-agent-run"
+
+
+def test_execute_worker_creates_pr_outside_final_transaction(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-PR-TX",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-pr-tx",
+                context={"title": "Tracker"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-PR-TX",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-pr-tx",
+                context={"title": "Run"},
+                input_payload={
+                    "instructions": "Run.",
+                    "branch_name": "task-pr-tx/run",
+                },
+            )
+        )
+
+    scm = DbWriteDuringCreatePrMockScm(session_factory=session_factory, target_task_id=1)
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 1
+    assert scm.write_attempted is True
+    with session_scope(session_factory=session_factory) as session:
+        fetch_task = session.get(Task, 1)
+        assert fetch_task is not None
+        assert fetch_task.error == "updated-during-pr-create"
 
 
 def _build_session_factory(tmp_path):

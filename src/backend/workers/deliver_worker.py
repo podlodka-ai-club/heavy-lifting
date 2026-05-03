@@ -47,78 +47,90 @@ class DeliverWorker:
             task = repository.poll_task(task_type=TaskType.DELIVER)
             if task is None:
                 return DeliverWorkerReport()
-
             task.attempt += 1
-            logger = _task_logger(task, attempt=task.attempt)
+            task_id = task.id
+            task_attempt = task.attempt
+            logger = _task_logger(task, attempt=task_attempt)
 
-            try:
-                task_chain = repository.load_task_chain(task.root_id or task.id)
-                task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
-                delivery_result = self._resolve_delivery_result(task_context=task_context)
-                if delivery_result is None:
-                    raise ValueError("deliver task requires a completed execute result")
+        with session_scope(session_factory=self.session_factory) as session:
+            repository = TaskRepository(session)
+            task = repository.get_task(task_id)
+            if task is None:
+                raise ValueError(f"Task {task_id} does not exist")
+            task_chain = repository.load_task_chain(task.root_id or task.id)
+            task_context = self.context_builder.build_for_task(task=task, task_chain=task_chain)
 
-                tracker_task_id = self._resolve_tracker_task_id(task_context=task_context)
-                comment_body = self._build_comment_body(execute_result=delivery_result)
-                links = self._build_links(execute_result=delivery_result)
-                logger.info(
-                    "delivery_started",
-                    tracker_external_id=tracker_task_id,
-                    execute_task_id=task_context.execute_task.task.id
-                    if task_context.execute_task is not None
-                    else None,
-                    link_count=len(links),
+        try:
+            delivery_result = self._resolve_delivery_result(task_context=task_context)
+            if delivery_result is None:
+                raise ValueError("deliver task requires a completed execute result")
+
+            tracker_task_id = self._resolve_tracker_task_id(task_context=task_context)
+            comment_body = self._build_comment_body(execute_result=delivery_result)
+            links = self._build_links(execute_result=delivery_result)
+            logger.info(
+                "delivery_started",
+                tracker_external_id=tracker_task_id,
+                execute_task_id=task_context.execute_task.task.id
+                if task_context.execute_task is not None
+                else None,
+                link_count=len(links),
+            )
+
+            self.tracker.add_comment(
+                TrackerCommentCreatePayload(
+                    external_task_id=tracker_task_id,
+                    body=comment_body,
+                    metadata={
+                        "source": "heavy_lifting",
+                        "task_id": task_context.current_task.task.id,
+                        "flow_type": task_context.current_task.task.task_type.value,
+                        "execute_task_id": task_context.execute_task.task.id
+                        if task_context.execute_task is not None
+                        else None,
+                    },
                 )
-
-                self.tracker.add_comment(
-                    TrackerCommentCreatePayload(
+            )
+            estimate_metadata = _extract_estimate_metadata(execute_result=delivery_result)
+            if estimate_metadata is not None:
+                self.tracker.update_task_estimate(
+                    TrackerTaskEstimateUpdatePayload(
                         external_task_id=tracker_task_id,
-                        body=comment_body,
-                        metadata={
-                            "source": "heavy_lifting",
-                            "task_id": task.id,
-                            "flow_type": task.task_type.value,
-                            "execute_task_id": task_context.execute_task.task.id
-                            if task_context.execute_task is not None
-                            else None,
-                        },
+                        story_points=estimate_metadata["story_points"],
+                        can_take_in_work=estimate_metadata["can_take_in_work"],
+                        rationale=estimate_metadata["rationale"],
                     )
                 )
-                estimate_metadata = _extract_estimate_metadata(execute_result=delivery_result)
-                if estimate_metadata is not None:
-                    self.tracker.update_task_estimate(
-                        TrackerTaskEstimateUpdatePayload(
-                            external_task_id=tracker_task_id,
-                            story_points=estimate_metadata["story_points"],
-                            can_take_in_work=estimate_metadata["can_take_in_work"],
-                            rationale=estimate_metadata["rationale"],
-                        )
-                    )
-                if links:
-                    self.tracker.attach_links(
-                        TrackerLinksAttachPayload(
-                            external_task_id=tracker_task_id,
-                            links=links,
-                        )
-                    )
-                self.tracker.update_status(
-                    TrackerStatusUpdatePayload(
+            if links:
+                self.tracker.attach_links(
+                    TrackerLinksAttachPayload(
                         external_task_id=tracker_task_id,
-                        status=TaskStatus.DONE,
+                        links=links,
                     )
                 )
+            self.tracker.update_status(
+                TrackerStatusUpdatePayload(
+                    external_task_id=tracker_task_id,
+                    status=TaskStatus.DONE,
+                )
+            )
 
-                task.status = TaskStatus.DONE
-                task.error = None
-                task.branch_name = delivery_result.branch_name or task_context.branch_name
-                task.pr_url = delivery_result.pr_url or task_context.pr_url
-                task.result_payload = _dump_result_payload(
+            with session_scope(session_factory=self.session_factory) as session:
+                repository = TaskRepository(session)
+                persisted_task = repository.get_task(task_id)
+                if persisted_task is None:
+                    raise ValueError(f"Task {task_id} does not exist")
+                persisted_task.status = TaskStatus.DONE
+                persisted_task.error = None
+                persisted_task.branch_name = delivery_result.branch_name or task_context.branch_name
+                persisted_task.pr_url = delivery_result.pr_url or task_context.pr_url
+                persisted_task.result_payload = _dump_result_payload(
                     TaskResultPayload(
                         summary=f"Delivered result to tracker task {tracker_task_id}.",
                         details=comment_body,
-                        branch_name=task.branch_name,
+                        branch_name=persisted_task.branch_name,
                         commit_sha=delivery_result.commit_sha,
-                        pr_url=task.pr_url,
+                        pr_url=persisted_task.pr_url,
                         links=links,
                         metadata={
                             "tracker_external_id": tracker_task_id,
@@ -128,18 +140,23 @@ class DeliverWorker:
                         },
                     )
                 )
-                logger.info(
-                    "delivery_completed",
-                    tracker_external_id=tracker_task_id,
-                    comment_posted=True,
-                    link_count=len(links),
-                )
-                return DeliverWorkerReport(processed_deliver_tasks=1)
-            except Exception as exc:
-                logger.exception("task_failed", error=str(exc))
-                task.status = TaskStatus.FAILED
-                task.error = str(exc)
-                return DeliverWorkerReport(failed_deliver_tasks=1)
+            logger.info(
+                "delivery_completed",
+                tracker_external_id=tracker_task_id,
+                comment_posted=True,
+                link_count=len(links),
+            )
+            return DeliverWorkerReport(processed_deliver_tasks=1)
+        except Exception as exc:
+            logger.exception("task_failed", error=str(exc))
+            with session_scope(session_factory=self.session_factory) as session:
+                repository = TaskRepository(session)
+                persisted_task = repository.get_task(task_id)
+                if persisted_task is None:
+                    raise ValueError(f"Task {task_id} does not exist") from exc
+                persisted_task.status = TaskStatus.FAILED
+                persisted_task.error = str(exc)
+            return DeliverWorkerReport(failed_deliver_tasks=1)
 
     def run_forever(
         self,
@@ -165,6 +182,14 @@ class DeliverWorker:
         return tracker_task_id
 
     def _build_comment_body(self, *, execute_result: TaskResultPayload) -> str:
+        if (
+            execute_result.tracker_comment
+            and execute_result.metadata.get("delivery_mode") == "estimate_only"
+            and execute_result.metadata.get("flow_type") == TaskType.EXECUTE.value
+            and execute_result.metadata.get("pr_action") == "skipped"
+        ):
+            return execute_result.tracker_comment
+
         estimate_metadata = _extract_estimate_metadata(execute_result=execute_result)
         if estimate_metadata is not None:
             can_take_text = "да" if estimate_metadata["can_take_in_work"] else "нет"
