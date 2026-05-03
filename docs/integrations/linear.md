@@ -370,6 +370,13 @@ Effective filter shape:
 Because the assignee condition is equality on a concrete user id,
 unassigned issues are excluded from intake.
 
+`read_comments` is gated by the same ownership rule: the adapter reads
+`issue.assignee.id`, resolves cached `viewer.id`, and returns an empty
+`TrackerReadCommentsResult` when they differ (or when the issue is
+unassigned). This prevents Worker 1 from creating `tracker_feedback`
+children for locally known chains that are no longer owned by the token
+owner.
+
 ## Rate Limiting
 
 Linear's documented limit is 5 000 GraphQL requests per hour per API

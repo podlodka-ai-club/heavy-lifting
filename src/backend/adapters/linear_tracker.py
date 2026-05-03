@@ -164,6 +164,9 @@ mutation LinearCommentCreate($input: CommentCreateInput!) {
 _READ_ISSUE_COMMENTS_QUERY = """
 query LinearReadIssueComments($id: String!, $first: Int!, $after: String) {
   issue(id: $id) {
+    assignee {
+      id
+    }
     comments(first: $first, after: $after) {
       nodes {
         id
@@ -948,6 +951,17 @@ class LinearTracker:
         issue = data.get("issue")
         if not isinstance(issue, dict):
             raise RuntimeError("Linear issue comments response missing 'issue' object")
+
+        viewer_id = self._resolve_viewer_id()
+        assignee = issue.get("assignee")
+        assignee_id = assignee.get("id") if isinstance(assignee, dict) else None
+        if assignee_id != viewer_id:
+            return TrackerReadCommentsResult(
+                items=[],
+                next_page_cursor=None,
+                latest_cursor=query.since_cursor,
+            )
+
         comments_block = issue.get("comments")
         if not isinstance(comments_block, dict):
             raise RuntimeError("Linear issue comments response missing 'comments' object")
