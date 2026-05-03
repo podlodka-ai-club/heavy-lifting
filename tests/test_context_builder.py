@@ -3,10 +3,11 @@ from __future__ import annotations
 import pytest
 
 from backend.db import build_engine, build_session_factory, session_scope
-from backend.models import Base
+from backend.models import Base, Task
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
 from backend.services.context_builder import ContextBuilder
 from backend.task_constants import TaskType
+from backend.task_context import TaskChainEntry
 
 
 @pytest.fixture
@@ -384,3 +385,70 @@ def test_context_builder_reconstructs_tracker_feedback_flow(session_factory) -> 
     assert context.current_feedback is not None
     assert context.current_feedback.comment_id == "comment-1"
     assert context.current_feedback.body == "Please explain the estimate."
+
+
+def _make_chain_entry(*, task_id: int, task_type: TaskType) -> TaskChainEntry:
+    """Build a transient ``TaskChainEntry`` for unit-testing pure lineage logic.
+
+    No DB session is involved — the underlying ``Task`` is constructed directly with
+    the bare minimum of attributes needed by ``_find_relevant_execute_for_current``.
+    """
+    task = Task(id=task_id, task_type=task_type)
+    entry = TaskChainEntry(task=task)
+    object.__setattr__(entry, "context", None)
+    object.__setattr__(entry, "input_payload", None)
+    object.__setattr__(entry, "result_payload", None)
+    return entry
+
+
+def test_find_relevant_execute_returns_self_when_current_is_execute() -> None:
+    fetch_entry = _make_chain_entry(task_id=1, task_type=TaskType.FETCH)
+    execute_entry = _make_chain_entry(task_id=2, task_type=TaskType.EXECUTE)
+    lineage = (fetch_entry, execute_entry)
+
+    found = ContextBuilder()._find_relevant_execute_for_current(
+        current_entry=execute_entry, lineage=lineage
+    )
+
+    assert found is execute_entry
+
+
+def test_find_relevant_execute_returns_last_ancestor_for_deliver() -> None:
+    fetch_entry = _make_chain_entry(task_id=1, task_type=TaskType.FETCH)
+    impl_execute_entry = _make_chain_entry(task_id=2, task_type=TaskType.EXECUTE)
+    deliver_entry = _make_chain_entry(task_id=3, task_type=TaskType.DELIVER)
+    lineage = (fetch_entry, impl_execute_entry, deliver_entry)
+
+    found = ContextBuilder()._find_relevant_execute_for_current(
+        current_entry=deliver_entry, lineage=lineage
+    )
+
+    assert found is impl_execute_entry
+
+
+def test_find_relevant_execute_returns_none_when_no_execute_in_lineage() -> None:
+    fetch_entry = _make_chain_entry(task_id=1, task_type=TaskType.FETCH)
+    lineage = (fetch_entry,)
+
+    found = ContextBuilder()._find_relevant_execute_for_current(
+        current_entry=fetch_entry, lineage=lineage
+    )
+
+    assert found is None
+
+
+def test_find_relevant_execute_picks_last_when_two_executes_in_lineage() -> None:
+    """Regression for gap #10: with [fetch, triage_execute, impl_execute, deliver]
+    the deliver-task must see the implementation-execute, not the triage-execute."""
+
+    fetch_entry = _make_chain_entry(task_id=1, task_type=TaskType.FETCH)
+    triage_execute_entry = _make_chain_entry(task_id=2, task_type=TaskType.EXECUTE)
+    impl_execute_entry = _make_chain_entry(task_id=3, task_type=TaskType.EXECUTE)
+    deliver_entry = _make_chain_entry(task_id=4, task_type=TaskType.DELIVER)
+    lineage = (fetch_entry, triage_execute_entry, impl_execute_entry, deliver_entry)
+
+    found = ContextBuilder()._find_relevant_execute_for_current(
+        current_entry=deliver_entry, lineage=lineage
+    )
+
+    assert found is impl_execute_entry

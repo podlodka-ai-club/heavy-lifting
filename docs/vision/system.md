@@ -43,6 +43,8 @@ For tracker flows that persist estimate-selection metadata, the orchestrator may
 
 The orchestration layer normalizes the incoming request, determines the business task kind, and fans out internal work such as fetch, execute, and deliver tasks. In the MVP, triage itself runs as an `execute` step owned by `worker2`, while `worker1` remains responsible for ingestion and task creation. Triage is responsible for shaping the pipeline, not for performing the implementation itself.
 
+Every new tracker intake starts with a triage execute task: `worker1` sets `input_payload.action = "triage"` on the first execute it creates, and `worker2` runs the triage agent before any code-touching path. Triage produces a Story Point estimate from the fixed set `1/2/3/5/8/13`. Story Points `1/2/3` route into a sibling implementation execute under the same fetch task; Story Points `5/8/13` stop at a tracker reply (RFI, decomposition plan, or system-design escalation) and wait for the tracker user to edit the issue before a new triage cycle starts.
+
 For new intake, triage may route the task into research, route it into implementation, or stop with a tracker reply such as clarification, rejection, research-only output, or estimate-only output.
 
 ### Research

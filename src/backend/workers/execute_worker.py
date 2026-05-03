@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -29,12 +31,20 @@ from backend.schemas import (
     ScmPushBranchPayload,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
+    TaskHandoffPayload,
+    TaskInputPayload,
     TaskLink,
     TaskResultPayload,
     TokenUsagePayload,
 )
 from backend.services.context_builder import ContextBuilder, parse_task_result_payload
 from backend.services.retro_service import RetroService
+from backend.services.triage_step import (
+    TriageStep,
+    TriageStepError,
+    TriageStepResult,
+    load_triage_prompt,
+)
 from backend.settings import Settings, get_settings
 from backend.task_constants import TaskStatus, TaskType
 from backend.task_context import EffectiveTaskContext
@@ -66,6 +76,31 @@ class _PreparationFailed(Exception):
     cause: Exception
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedTriageExecution:
+    """Prepared input для TriageStep.run (см. task05).
+
+    Отличия от PreparedExecution:
+
+    - ``workspace_path`` всегда строка (либо клон репо, либо пустой
+      tmp-каталог) — соответствует обязательному
+      :attr:`AgentRunRequest.workspace_path`;
+    - ``workspace`` может быть ``None``, если ``task_context.workspace_key``
+      пуст (без workspace_key SCM не сможет подготовить чекаут — даже если
+      ``repo_url`` известен);
+    - ``cleanup_paths`` — каталоги, которые caller (task06) обязан удалить
+      после ``agent_runner.run`` (актуально только для tmp-fallback).
+      ``_prepare_triage_execution`` сам ``shutil.rmtree`` **не** вызывает,
+      потому что lifecycle привязан к моменту завершения agent run.
+    """
+
+    task_context: EffectiveTaskContext
+    workspace_path: str
+    runtime_metadata: dict[str, object]
+    workspace: ScmWorkspace | None = None
+    cleanup_paths: tuple[Path, ...] = ()
+
+
 @dataclass(slots=True)
 class ExecuteWorker:
     scm: ScmProtocol
@@ -74,6 +109,12 @@ class ExecuteWorker:
     poll_interval: int = 30
     context_builder: ContextBuilder = field(default_factory=ContextBuilder)
     settings: Settings = field(default_factory=get_settings)
+    _triage_prompt_text: str | None = field(default=None, init=False, repr=False)
+
+    def _get_triage_prompt_text(self) -> str:
+        if self._triage_prompt_text is None:
+            self._triage_prompt_text = load_triage_prompt(Path(self.settings.prompts_dir))
+        return self._triage_prompt_text
 
     def poll_once(self) -> ExecuteWorkerReport:
         batch_size = self._read_execute_batch_size()
@@ -135,16 +176,36 @@ class ExecuteWorker:
 
         prepared_execution: PreparedExecution | None = None
         try:
+            if task_type == TaskType.EXECUTE:
+                action = self._resolve_execute_action(task=task)
+            else:
+                action = "implementation"
+
+            if action == "triage":
+                with session_scope(session_factory=self.session_factory) as session:
+                    repository = TaskRepository(session)
+                    task = repository.get_task(task_id)
+                    if task is None:
+                        raise ValueError(f"Task {task_id} does not exist")
+                    task_chain = repository.load_task_chain(task.root_id or task.id)
+                    return self._process_triage_execute(
+                        repository=repository,
+                        task=task,
+                        task_chain=task_chain,
+                    )
+
             try:
                 prepared_execution = self._prepare_execution(task=task, task_chain=task_chain)
             except _PreparationFailed as prep_error:
                 prepared_execution = prep_error.prepared_execution
                 raise prep_error.cause from prep_error
+
             run_result = self._execute_prepared_execution(
                 task=task,
                 prepared_execution=prepared_execution,
             )
             if run_result.execution_failed:
+                task_chain = repository.load_task_chain(task.root_id or task.id)
                 with session_scope(session_factory=self.session_factory) as session:
                     repository = TaskRepository(session)
                     persisted_task = repository.get_task(task_id)
@@ -320,6 +381,233 @@ class ExecuteWorker:
                 return ExecuteWorkerReport(failed_pr_feedback_tasks=1)
             return ExecuteWorkerReport(failed_tracker_feedback_tasks=1)
 
+    def _resolve_execute_action(self, *, task: Task) -> str:
+        """Determine which agent flow handles this execute-task.
+
+        Resolution order:
+
+        1. **Explicit** — ``task.input_payload["action"]`` if it is a non-empty
+           string. ``tracker_intake`` (task08) проставляет ``action="triage"``
+           новой execute явно, а ``TriageStep`` через task07 будет создавать
+           sibling-impl-execute с ``action="implementation"``.
+        2. **Default** — ``"implementation"``. Это сохраняет старое
+           impl-flow поведение для legacy execute-задач без action: до
+           миграции worker всегда шёл по impl-пути, и любая уже
+           существующая в БД single-execute-задача должна остаться там же.
+           Триаж назначается **только** через явный ``action="triage"``,
+           который сегодня выставляет лишь ``tracker_intake`` для новых
+           кластеров.
+
+        Возвращает строку (``"triage"``, ``"implementation"``, ...) — caller
+        проверяет конкретное значение.
+        """
+
+        raw_input = task.input_payload if isinstance(task.input_payload, dict) else None
+        explicit_action = raw_input.get("action") if raw_input else None
+        if isinstance(explicit_action, str) and explicit_action:
+            return explicit_action
+        return "implementation"
+
+    def _process_triage_execute(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_chain: list[Task],
+    ) -> ExecuteWorkerReport:
+        logger = _task_logger(task, attempt=task.attempt, action="triage")
+
+        prepared = self._prepare_triage_execution(
+            repository=repository,
+            task=task,
+            task_chain=task_chain,
+        )
+
+        triage_step = TriageStep(
+            agent_runner=self.agent_runner,
+            triage_prompt_text=self._get_triage_prompt_text(),
+        )
+
+        try:
+            try:
+                triage_result = triage_step.run(
+                    task_context=prepared.task_context,
+                    workspace_path=prepared.workspace_path,
+                    runtime_metadata=prepared.runtime_metadata,
+                )
+            except TriageStepError as exc:
+                self._handle_triage_step_error(task=task, exc=exc)
+                logger.warning("triage_output_malformed", error=str(exc))
+                return ExecuteWorkerReport(failed_execute_tasks=1)
+
+            self._complete_triage_execute_task(
+                repository=repository,
+                task=task,
+                task_context=prepared.task_context,
+                triage_result=triage_result,
+            )
+            logger.info(
+                "triage_execute_task_completed",
+                triage_outcome=triage_result.result_payload.outcome,
+                triage_sp=triage_result.decision.story_points,
+            )
+            return ExecuteWorkerReport(processed_execute_tasks=1)
+        finally:
+            self._cleanup_triage_workspace(prepared.cleanup_paths)
+
+    def _handle_triage_step_error(self, *, task: Task, exc: TriageStepError) -> None:
+        raw_stdout = exc.raw_stdout if isinstance(exc.raw_stdout, str) else ""
+        truncated = raw_stdout[:2000]
+        failure_payload = TaskResultPayload(
+            summary="Triage agent output malformed.",
+            metadata={"raw_stdout_preview": truncated},
+        )
+        self._mark_task_failed(
+            task=task,
+            error="triage_output_malformed",
+            result_payload=failure_payload,
+            branch_name=None,
+        )
+
+    def _complete_triage_execute_task(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_context: EffectiveTaskContext,
+        triage_result: TriageStepResult,
+    ) -> None:
+        result_payload = triage_result.result_payload
+        self._mark_task_done(
+            task=task,
+            result_payload=result_payload,
+            branch_name=None,
+            pr_external_id=None,
+            pr_url=None,
+        )
+        self._record_token_usage(
+            repository=repository,
+            task_id=task.id,
+            usage=result_payload.token_usage,
+        )
+        self._record_agent_retro_feedback(
+            repository=repository,
+            task=task,
+            result_payload=result_payload,
+        )
+        self._ensure_followup_implementation_execute(
+            repository=repository,
+            triage_task=task,
+            result_payload=result_payload,
+        )
+        self._ensure_deliver_task(
+            repository=repository,
+            execute_task=task,
+            task_context=task_context,
+        )
+
+    def _ensure_followup_implementation_execute(
+        self,
+        *,
+        repository: TaskRepository,
+        triage_task: Task,
+        result_payload: TaskResultPayload,
+    ) -> Task | None:
+        """Materialise sibling implementation-execute after a successful triage.
+
+        Sibling-модель: создаваемая задача — **не** дочка триажа, а **сиблинг**
+        под тем же fetch-родителем (``parent_id=triage_task.parent_id``).
+        Это требование плана §5.4 + §6.4 п.2 и поддерживается
+        ``ContextBuilder._find_relevant_execute_for_current`` (task16),
+        которая в lineage deliver/PR_FEEDBACK выбирает «последний execute»
+        в parent-chain — что для sibling-impl как раз impl, а не triage.
+
+        Создание выполняется только когда:
+
+        - ``result_payload.routing`` существует и
+          ``create_followup_task is True`` и ``next_task_type == "execute"``
+          (это SP 1/2/3 — план §5.2);
+        - в кластере root_id ещё нет execute-задачи с ``input_payload.action
+          == "implementation"`` (idempotency через
+          ``repository.find_implementation_execute_for_root``).
+
+        Возвращает созданную задачу, либо ``None`` — если sibling не
+        создавался (эскалация SP 5/8/13 или idempotency-skip).
+        """
+
+        routing = result_payload.routing
+        if (
+            routing is None
+            or not routing.create_followup_task
+            or routing.next_task_type != "execute"
+        ):
+            return None
+
+        # Fail-loud BEFORE idempotency lookup: orphan-triage (parent_id is None)
+        # нарушает инвариант tracker_intake и не должен тихо проскакивать через
+        # idempotency-skip, даже если под тем же root_id уже есть impl-execute
+        # (см. AC10 task07.md + Codex review round1 P1).
+        if triage_task.parent_id is None:
+            raise RuntimeError(
+                "triage execute-task must have a fetch parent before sibling "
+                "impl-execute can be created"
+            )
+
+        root_id = triage_task.root_id or triage_task.id
+        existing = repository.find_implementation_execute_for_root(root_id)
+        if existing is not None:
+            _task_logger(
+                triage_task,
+                sibling_execute_task_id=existing.id,
+            ).info("sibling_implementation_execute_skipped_idempotent")
+            return None
+
+        brief_markdown = self._extract_handover_brief(result_payload=result_payload)
+
+        input_payload_model = TaskInputPayload(
+            schema_version=1,
+            action="implementation",
+            handoff=TaskHandoffPayload(
+                from_task_id=triage_task.id,
+                from_role="triage",
+                brief_markdown=brief_markdown,
+            ),
+        )
+
+        sibling = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=triage_task.parent_id,  # fetch-задача
+                status=TaskStatus.NEW,
+                tracker_name=triage_task.tracker_name,
+                external_parent_id=triage_task.external_parent_id,
+                repo_url=triage_task.repo_url,
+                repo_ref=triage_task.repo_ref,
+                workspace_key=triage_task.workspace_key,
+                context=triage_task.context,
+                input_payload=input_payload_model.model_dump(mode="python"),
+            )
+        )
+        _task_logger(
+            triage_task,
+            sibling_execute_task_id=sibling.id,
+            handover_brief_present=brief_markdown is not None,
+        ).info("sibling_implementation_execute_created")
+        return sibling
+
+    @staticmethod
+    def _extract_handover_brief(*, result_payload: TaskResultPayload) -> str | None:
+        raw = result_payload.metadata.get("handover_brief")
+        if isinstance(raw, str) and raw.strip():
+            return raw
+        return None
+
+    def _cleanup_triage_workspace(self, paths: tuple[Path, ...]) -> None:
+        if not paths:
+            return
+        for path in paths:
+            shutil.rmtree(path, ignore_errors=True)
+
     def _prepare_execution(
         self,
         *,
@@ -403,6 +691,115 @@ class ExecuteWorker:
             workspace_key=prepared_execution.workspace.workspace_key,
         )
 
+    def _prepare_triage_execution(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_chain: list[Task],
+    ) -> PreparedTriageExecution:
+        """Lightweight prepare for the triage agent (no ``_ensure_workspace``).
+
+        Triage by contract is allowed to run without a backing repo: when
+        ``workspace_key`` is missing in the lineage, we materialise an empty tmp
+        directory under
+        ``settings.workspace_root / "__triage__" / f"task-{task.id}"`` so that
+        :attr:`AgentRunRequest.workspace_path` is always satisfied. The directory
+        is created idempotently (``mkdir(parents=True, exist_ok=True)``) and
+        returned via ``cleanup_paths`` so the caller can ``rmtree`` it after the
+        agent run.
+
+        When ``workspace_key`` is present but ``repo_url`` / ``repo_ref`` are
+        empty (e.g. installations where ``GitHubScm.ensure_workspace`` resolves
+        the URL via ``default_repo_url``), we still go through the SCM path —
+        the resolved fields are written back both to the DB row and to the
+        returned ``task_context``, so ``TriageStep.build_prompt`` sees the
+        canonical repo signals.
+        """
+
+        brief_resolver = self._build_brief_resolver(repository=repository)
+        task_context = self.context_builder.build_for_task(
+            task=task,
+            task_chain=task_chain,
+            brief_resolver=brief_resolver,
+        )
+
+        # Наличие ``workspace_key`` — единственный устойчивый сигнал «backend
+        # готов выдать workspace»: ``_ensure_workspace`` raise'ит только если
+        # ``workspace_key`` пуст, тогда как ``repo_url`` SCM-адаптер волен
+        # дорезолвить через ``default_repo_url`` (см. GitHubScm). Поэтому не
+        # уводим триаж в tmp-каталог только из-за пустого ``repo_url``.
+        has_repo = bool(task_context.workspace_key)
+
+        workspace: ScmWorkspace | None
+        cleanup_paths: tuple[Path, ...]
+        if has_repo:
+            workspace = self._ensure_workspace(task_context=task_context)
+            repository.update_task_workspace_context(
+                task.id,
+                repo_url=workspace.repo_url,
+                repo_ref=workspace.repo_ref,
+                workspace_key=workspace.workspace_key,
+            )
+            # SCM мог дорезолвить repo_url / repo_ref (default_repo_url /
+            # default_repo_ref) — пробрасываем канонные значения в task_context,
+            # чтобы TriageStep.build_prompt видел свежие repo signals.
+            task_context = replace(
+                task_context,
+                repo_url=workspace.repo_url,
+                repo_ref=workspace.repo_ref,
+                workspace_key=workspace.workspace_key,
+            )
+            workspace_path = workspace.local_path
+            cleanup_paths = ()
+        else:
+            tmp_dir = Path(self.settings.workspace_root) / "__triage__" / f"task-{task.id}"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            workspace = None
+            workspace_path = str(tmp_dir)
+            cleanup_paths = (tmp_dir,)
+
+        runtime_metadata: dict[str, object] = {
+            "task_id": task.id,
+            "task_type": task.task_type.value,
+            "action": "triage",
+            "workspace_path": workspace_path,
+            "workspace_key": workspace.workspace_key if workspace is not None else None,
+            "repo_url": workspace.repo_url if workspace is not None else None,
+            "repo_ref": workspace.repo_ref if workspace is not None else None,
+            "branch_name": None,
+            "repo_available": has_repo,
+        }
+        _task_logger(
+            task,
+            workspace_path=workspace_path,
+            repo_available=has_repo,
+            action="triage",
+        ).info("triage_workspace_prepared")
+        return PreparedTriageExecution(
+            task_context=task_context,
+            workspace_path=workspace_path,
+            runtime_metadata=runtime_metadata,
+            workspace=workspace,
+            cleanup_paths=cleanup_paths,
+        )
+
+    def _build_brief_resolver(
+        self, *, repository: TaskRepository
+    ) -> Callable[[int], str | None]:
+        def _resolve_handover_brief(from_task_id: int) -> str | None:
+            triage_task = repository.get_task(from_task_id)
+            if triage_task is None:
+                return None
+            payload = parse_task_result_payload(triage_task)
+            if payload is None:
+                return None
+            raw = payload.metadata.get("handover_brief")
+            if isinstance(raw, str) and raw.strip():
+                return raw
+            return None
+
+        return _resolve_handover_brief
     def _execute_prepared_execution(
         self,
         *,

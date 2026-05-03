@@ -49,6 +49,7 @@ class EffectiveTaskContext:
     pr_url: str | None
     instructions: str | None
     commit_message_hint: str | None
+    handover_brief: str | None = None
 
     @property
     def tracker_context(self) -> TaskContext | None:

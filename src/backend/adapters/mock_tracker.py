@@ -4,6 +4,7 @@ from backend.schemas import (
     TrackerCommentCreatePayload,
     TrackerCommentPayload,
     TrackerCommentReference,
+    TrackerEstimateUpdatePayload,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerReadCommentsQuery,
@@ -109,6 +110,33 @@ class MockTracker:
         task.status = payload.status
         return TrackerTaskReference(external_id=task.external_id)
 
+    def update_estimate(
+        self, payload: TrackerEstimateUpdatePayload
+    ) -> TrackerTaskReference:
+        task = self._tasks[payload.external_task_id]
+        metadata = dict(task.metadata)
+
+        if payload.story_points is not None:
+            estimate_metadata = dict(get_nested_mapping(metadata, "estimate"))
+            estimate_metadata["story_points"] = payload.story_points
+            metadata["estimate"] = estimate_metadata
+
+        existing_labels_raw = metadata.get("labels")
+        if isinstance(existing_labels_raw, list):
+            current_labels = [label for label in existing_labels_raw if isinstance(label, str)]
+        else:
+            current_labels = []
+
+        remove_set = set(payload.labels_to_remove)
+        next_labels = [label for label in current_labels if label not in remove_set]
+        for label in payload.labels_to_add:
+            if label not in next_labels:
+                next_labels.append(label)
+        metadata["labels"] = next_labels
+
+        task.metadata = metadata
+        return TrackerTaskReference(external_id=task.external_id)
+
     def claim_task_selection(
         self, payload: TrackerTaskSelectionClaimPayload
     ) -> TrackerTaskReference:
@@ -135,7 +163,11 @@ class MockTracker:
 
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference:
         task = self._tasks[payload.external_task_id]
-        task.context.references.extend(link.model_copy(deep=True) for link in payload.links)
+        own_write_links = [
+            link.model_copy(deep=True, update={"origin": "own_write"})
+            for link in payload.links
+        ]
+        task.context.references.extend(own_write_links)
         return TrackerTaskReference(external_id=task.external_id)
 
     def _next_task_id(self) -> str:

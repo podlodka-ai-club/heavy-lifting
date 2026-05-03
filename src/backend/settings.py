@@ -2,6 +2,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -102,6 +103,16 @@ class Settings:
     linear_task_type_label_mapping: dict[str, str]
     linear_max_pages: int
     linear_description_warn_threshold: int
+    linear_label_id_sp_1: str | None
+    linear_label_id_sp_2: str | None
+    linear_label_id_sp_3: str | None
+    linear_label_id_sp_5: str | None
+    linear_label_id_sp_8: str | None
+    linear_label_id_sp_13: str | None
+    linear_label_id_triage_ready: str | None
+    linear_label_id_triage_rfi: str | None
+    linear_label_id_triage_split: str | None
+    linear_label_id_triage_block: str | None
     github_api_base_url: str
     github_token_env_var: str
     github_user_name: str | None
@@ -110,6 +121,7 @@ class Settings:
     github_default_repo_url: str | None
     scm_default_base_branch: str | None
     scm_branch_prefix: str
+    prompts_dir: str
 
 
 @lru_cache(maxsize=1)
@@ -172,6 +184,16 @@ def get_settings() -> Settings:
         linear_task_type_label_mapping=_get_dict("LINEAR_TASK_TYPE_LABEL_MAPPING", "{}"),
         linear_max_pages=_get_int("LINEAR_MAX_PAGES", 4),
         linear_description_warn_threshold=_get_int("LINEAR_DESCRIPTION_WARN_THRESHOLD", 50000),
+        linear_label_id_sp_1=os.getenv("LINEAR_LABEL_ID_SP_1") or None,
+        linear_label_id_sp_2=os.getenv("LINEAR_LABEL_ID_SP_2") or None,
+        linear_label_id_sp_3=os.getenv("LINEAR_LABEL_ID_SP_3") or None,
+        linear_label_id_sp_5=os.getenv("LINEAR_LABEL_ID_SP_5") or None,
+        linear_label_id_sp_8=os.getenv("LINEAR_LABEL_ID_SP_8") or None,
+        linear_label_id_sp_13=os.getenv("LINEAR_LABEL_ID_SP_13") or None,
+        linear_label_id_triage_ready=os.getenv("LINEAR_LABEL_ID_TRIAGE_READY") or None,
+        linear_label_id_triage_rfi=os.getenv("LINEAR_LABEL_ID_TRIAGE_RFI") or None,
+        linear_label_id_triage_split=os.getenv("LINEAR_LABEL_ID_TRIAGE_SPLIT") or None,
+        linear_label_id_triage_block=os.getenv("LINEAR_LABEL_ID_TRIAGE_BLOCK") or None,
         github_api_base_url=os.getenv("GITHUB_API_BASE_URL", "https://api.github.com"),
         github_token_env_var=os.getenv("GITHUB_TOKEN_ENV_VAR", "GITHUB_TOKEN"),
         github_user_name=os.getenv("GITHUB_USER_NAME") or None,
@@ -180,6 +202,10 @@ def get_settings() -> Settings:
         github_default_repo_url=os.getenv("GITHUB_DEFAULT_REPO_URL") or None,
         scm_default_base_branch=os.getenv("SCM_DEFAULT_BASE_BRANCH") or None,
         scm_branch_prefix=os.getenv("SCM_BRANCH_PREFIX", "execute/"),
+        prompts_dir=os.getenv(
+            "PROMPTS_DIR",
+            str(Path(__file__).resolve().parents[2] / "prompts"),
+        ),
     )
 
     return _apply_database_overrides(env_settings)

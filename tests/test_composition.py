@@ -187,6 +187,40 @@ def test_create_runtime_container_passes_through_linear_settings(monkeypatch) ->
     assert config.task_type_to_label_id == {TaskType.FETCH: "lbl-fetch"}
 
 
+def test_composition_linear_tracker_picks_up_label_id_settings(monkeypatch) -> None:
+    _clear_tracker_env(monkeypatch)
+    settings = replace(
+        get_settings(),
+        tracker_adapter="linear",
+        linear_team_id="team-x",
+        linear_label_id_sp_1="lbl-sp-1",
+        linear_label_id_sp_2="lbl-sp-2",
+        linear_label_id_sp_3="lbl-sp-3",
+        linear_label_id_sp_5="lbl-sp-5",
+        linear_label_id_sp_8=None,  # not configured — must be skipped
+        linear_label_id_sp_13="lbl-sp-13",
+        linear_label_id_triage_ready="lbl-triage-ready",
+        linear_label_id_triage_rfi="lbl-triage-rfi",
+        linear_label_id_triage_split=None,
+        linear_label_id_triage_block="lbl-triage-block",
+    )
+
+    runtime = create_runtime_container(settings=settings)
+
+    assert isinstance(runtime.tracker, LinearTracker)
+    label_map = runtime.tracker._config.label_string_to_label_id
+    assert label_map == {
+        "sp:1": "lbl-sp-1",
+        "sp:2": "lbl-sp-2",
+        "sp:3": "lbl-sp-3",
+        "sp:5": "lbl-sp-5",
+        "sp:13": "lbl-sp-13",
+        "triage:ready": "lbl-triage-ready",
+        "triage:rfi": "lbl-triage-rfi",
+        "triage:block": "lbl-triage-block",
+    }
+
+
 def test_create_runtime_container_skips_unknown_task_type_label_mapping(monkeypatch) -> None:
     _clear_tracker_env(monkeypatch)
     settings = replace(

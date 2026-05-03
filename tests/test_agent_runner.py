@@ -5,8 +5,9 @@ from decimal import Decimal
 
 from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import Base
-from backend.protocols.agent_runner import AgentRunRequest
+from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
+from backend.schemas import TaskResultPayload
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.services.context_builder import ContextBuilder
 from backend.task_constants import TaskType
@@ -934,6 +935,131 @@ def test_cli_agent_runner_uses_model_hint_without_provider(monkeypatch, tmp_path
     assert "--agent" not in captured["command"]
 
 
+def test_agent_run_result_default_raw_stdout_empty() -> None:
+    result = AgentRunResult(payload=TaskResultPayload(summary="placeholder"))
+
+    assert result.raw_stdout == ""
+    assert result.raw_stderr == ""
+
+
+def test_local_agent_runner_returns_empty_raw_stdout(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = build_session_factory(engine)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-14",
+                context={"title": "Tracker task"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                branch_name="task14/runner",
+                context={"title": "Runner abstraction"},
+                input_payload={
+                    "instructions": "Placeholder.",
+                    "base_branch": "main",
+                    "branch_name": "task14/runner",
+                },
+            )
+        )
+
+        task_context = ContextBuilder().build_for_task(
+            task=execute_task,
+            task_chain=repository.load_task_chain(fetch_task.root_id),
+        )
+
+    result = LocalAgentRunner().run(
+        AgentRunRequest(task_context=task_context, workspace_path="/workspace/repos/repo-14")
+    )
+
+    assert result.raw_stdout == ""
+    assert result.raw_stderr == ""
+
+
+def test_cli_agent_runner_returns_full_raw_stdout(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=120,
+            preview_chars=1000,
+        )
+    )
+
+    long_text = "x" * 3000
+    full_stdout = (
+        f'{{"type":"text","part":{{"type":"text","text":"{long_text}"}}}}\n'
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=full_stdout,
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.raw_stdout == full_stdout
+    assert len(result.raw_stdout) > 1000
+
+    stdout_preview = result.summary_metadata["stdout_preview"]
+    assert isinstance(stdout_preview, str)
+    assert len(stdout_preview) <= 1000
+    assert len(stdout_preview) < len(result.raw_stdout)
+
+
+def test_cli_agent_runner_returns_full_raw_stderr(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=120,
+            preview_chars=1000,
+        )
+    )
+
+    long_stderr = "warning: " + ("y" * 3000)
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"type":"text","part":{"type":"text","text":"ok"}}\n',
+            stderr=long_stderr,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.run(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert result.raw_stderr == long_stderr
+    assert len(result.raw_stderr) > 1000
+
+    stderr_preview = result.summary_metadata["stderr_preview"]
+    assert isinstance(stderr_preview, str)
+    assert len(stderr_preview) <= 1000
+    assert len(stderr_preview) < len(result.raw_stderr)
+
+
 def _build_task_context(tmp_path):
     engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
     Base.metadata.create_all(engine)
@@ -970,6 +1096,46 @@ def _build_task_context(tmp_path):
         )
 
 
+def test_cli_agent_runner_prompt_includes_handover_brief() -> None:
+    """``CliAgentRunner._build_prompt`` must emit ``handover_brief:`` block.
+
+    The block is rendered as two consecutive lines:
+    ``handover_brief:`` followed by the raw brief body. This protects the
+    contract consumed by the implementation-agent prompt template
+    (``temp/plans/triage-story-point-agent.md`` §6.6 / §8.2).
+    """
+
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=120,
+        )
+    )
+
+    class _Context:
+        flow_type = TaskType.EXECUTE
+        repo_url = None
+        repo_ref = None
+        branch_name = None
+        base_branch = None
+        instructions = "Implement the change."
+        tracker_context = None
+        execution_context = None
+        current_feedback = None
+        feedback_history = ()
+        handover_brief = "BRIEF-X"
+
+    prompt = runner._build_prompt(
+        AgentRunRequest(task_context=_Context(), workspace_path="/workspace/task09")
+    )
+
+    lines = prompt.splitlines()
+    assert "handover_brief:" in lines
+    handover_index = lines.index("handover_brief:")
+    assert lines[handover_index + 1] == "BRIEF-X"
+
+
 def _build_task_context_for_command():
     class _Context:
         flow_type = TaskType.EXECUTE
@@ -982,5 +1148,6 @@ def _build_task_context_for_command():
         execution_context = None
         current_feedback = None
         feedback_history = ()
+        handover_brief = None
 
     return _Context()

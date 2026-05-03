@@ -67,19 +67,21 @@ It should contain:
 
 `input_payload` is the current-step command. It tells the worker or agent what to do now, under which constraints, and what kind of structured output is required.
 
+The contract is materialised in `backend.schemas.TaskInputPayload` as a `pydantic` model with `extra="forbid"`.
+
 ### Top-Level Fields
 
-- `schema_version` - contract version, initial value `1`
-- `action` - current step action such as `triage`, `research`, `implementation`, `respond_pr`, or `deliver`
+- `schema_version` - contract version, integer; default `1`
+- `action` - current step action; one of `triage`, `research`, `implementation`, `respond_pr`, `deliver`, or `null`
 - `role` - current step role; may refine `action`, for example `estimate_reply`
 - `instructions` - short step-specific instruction
-- `constraints` - execution constraints for the step
-- `handoff` - structured information from the previous step
+- `constraints` - execution constraints for the step (free `JsonObject`; structured fields will be added when a consumer requires them)
+- `handoff` - structured information from the previous step (`TaskHandoffPayload`)
 - `expected_output` - required result sections
 - `base_branch` - optional base branch for code flows
 - `branch_name` - optional branch name for implementation or PR response flows
 - `commit_message_hint` - optional commit message hint for code flows
-- `pr_feedback` - structured PR feedback input for review-response steps
+- `pr_feedback` - structured PR feedback input for review-response steps (`PrFeedbackPayload`)
 - `tracker_feedback` - structured tracker comment input for tracker-thread follow-up steps
 - `metadata` - non-critical extensions that do not change routing semantics
 
@@ -87,7 +89,7 @@ It should contain:
 
 ### Constraints Fields
 
-`constraints` should support at least:
+`constraints` is currently a free `JsonObject` placeholder; concrete keys will be added when a worker actually consumes them. The keys reserved for future use are:
 
 - `may_touch_repo`
 - `may_create_pr`
@@ -97,12 +99,13 @@ It should contain:
 
 ### Handoff Fields
 
-`handoff` should support at least:
+`handoff` is materialised in `backend.schemas.TaskHandoffPayload`:
 
-- `from_task_id`
-- `from_role`
+- `from_task_id` (required)
+- `from_role` (required)
 - `reason`
 - `decision_ref`
+- `brief_markdown` - serialized Handover Brief; populated for SP `1/2/3` triage outcomes so the receiving implementation execute can read it inline through `EffectiveTaskContext.handover_brief` without an extra repository lookup
 
 ### Expected Output Fields
 
@@ -118,61 +121,89 @@ It should contain:
 
 `result_payload` is the structured outcome of the current step and the input to downstream orchestration decisions.
 
+The contract is materialised in `backend.schemas.TaskResultPayload`. Existing top-level fields `branch_name`, `commit_sha`, `pr_url`, `tracker_comment`, and `links` remain on the payload alongside the new structured sections; readers will migrate to `artifacts` and `delivery` in a follow-up task.
+
 ### Top-Level Fields
 
-- `schema_version` - contract version, initial value `1`
-- `outcome` - current step result such as `completed`, `routed`, `needs_clarification`, `blocked`, `failed`
-- `summary` - short human-readable result summary
+- `schema_version` - contract version, integer; default `1`
+- `outcome` - current step result; one of `completed`, `routed`, `needs_clarification`, `blocked`, `failed`, or `null`
+- `summary` - short human-readable result summary (required)
 - `details` - optional longer explanation
-- `classification` - machine-readable business task classification
-- `estimate` - story points, complexity, and take-in-work decision
-- `routing` - next-step instructions for the orchestrator
-- `delivery` - tracker-ready status and comment instructions for delivery
-- `artifacts` - branch, commit, PR, or other generated execution artifacts
+- `classification` - machine-readable business task classification (`TaskClassificationPayload`)
+- `estimate` - story points, complexity, and take-in-work decision (`TaskEstimatePayload`)
+- `routing` - next-step instructions for the orchestrator (`TaskRoutingPayload`)
+- `delivery` - tracker-ready status and comment instructions for delivery (`TaskDeliveryPayload`)
+- `artifacts` - branch, commit, PR, or other generated execution artifacts (`TaskArtifactsPayload`)
 - `token_usage` - model usage records when an agent call occurs
 - `metadata` - secondary diagnostics and implementation-specific extensions
 
 ### Section Rules
 
-`classification` should support at least:
+`classification` (`TaskClassificationPayload`):
 
-- `task_kind`
+- `task_kind` - one of `research`, `implementation`, `clarification`, `review_response`, `rejected`
 - `confidence`
 - `signals`
 
-The MVP business kinds are:
+`estimate` (`TaskEstimatePayload`):
 
-- `research`
-- `implementation`
-- `clarification`
-- `review_response`
-- `rejected`
-
-`estimate` should support at least:
-
-- `story_points`
-- `complexity`
+- `story_points` - one of `1`, `2`, `3`, `5`, `8`, `13`
+- `complexity` - one of `trivial`, `low`, `medium`, `high`, `epic`, `architectural`
 - `can_take_in_work`
 - `blocking_reasons`
 
-`routing` should support at least:
+`routing` (`TaskRoutingPayload`):
 
-- `next_task_type`
-- `next_role`
+- `next_task_type` - one of `execute`, `deliver`, `pr_feedback`, or `null`
+- `next_role` - one of `triage`, `research`, `implementation`, `deliver`, `respond_pr`, or `null`
 - `create_followup_task`
 - `requires_human_approval`
 
-`delivery` should support at least:
+`delivery` (`TaskDeliveryPayload`):
 
-- `tracker_status`
+- `tracker_status` - base `TaskStatus` value or `null`; must be `null` for triage outcomes so the tracker issue stays in its incoming state
+- `tracker_estimate` - integer Story Point value (`1/2/3/5/8/13`) when the upstream step set an estimate
+- `tracker_labels` - tracker labels to apply, for example `sp:2` plus `triage:ready`
+- `escalation_kind` - one of `rfi`, `decomposition`, `system_design`, or `null`; populated by triage for SP `5/8/13`
 - `comment_body`
 - `links`
 
-`artifacts` should support at least:
+`artifacts` (`TaskArtifactsPayload`):
 
 - `branch_name`
 - `commit_sha`
 - `pr_url`
+
+## Triage Section Rules
+
+Triage is the first execute step for a new tracker intake. Its `result_payload` shape is fixed by `docs/contracts/triage-routing.md`:
+
+- `outcome` is `routed` for SP `1/2/3`, `needs_clarification` for SP `5`, and `blocked` for SP `8/13`.
+- `routing.create_followup_task` is `true` only for SP `1/2/3`; the followup is a sibling implementation execute under the same `fetch` parent.
+- `delivery.tracker_status` is always `null`. The triage `deliver` task only writes labels and a comment; closing the tracker issue is the responsibility of a later step.
+- `metadata.handover_brief` carries the full Handover Brief markdown for SP `1/2/3`. The same text is also copied inline into `input_payload.handoff.brief_markdown` of the new sibling implementation execute, so the implementation worker can read it through `EffectiveTaskContext.handover_brief` without a separate repository lookup.
+
+Example for a SP=2 triage outcome (abbreviated):
+
+```json
+{
+  "schema_version": 1,
+  "outcome": "routed",
+  "summary": "Triage завершён: SP=2, routed to implementer.",
+  "classification": {"task_kind": "implementation", "signals": []},
+  "estimate": {"story_points": 2, "complexity": "low", "can_take_in_work": true, "blocking_reasons": []},
+  "routing": {"next_task_type": "execute", "next_role": "implementation", "create_followup_task": true, "requires_human_approval": false},
+  "delivery": {
+    "tracker_status": null,
+    "tracker_estimate": 2,
+    "tracker_labels": ["sp:2", "triage:ready"],
+    "escalation_kind": null,
+    "comment_body": "Triage SP=2: Brief сохранён, передано в работу.",
+    "links": []
+  },
+  "metadata": {"handover_brief": "## Agent Handover Brief\n..."}
+}
+```
 
 ## Worker Handoff Rules
 
@@ -204,9 +235,10 @@ That rule applies to:
 
 ### Triage
 
-- A new tracker task enters the system with `input_payload.action = triage`.
-- Triage classifies the business task, estimates whether it can be taken into work, and decides the next executable path.
-- Triage runs as an `execute` task and may either finish with delivery-only output or route to a follow-up `execute` task for research or implementation.
+- A new tracker task enters the system with `input_payload.action = triage`. `worker1` (`tracker_intake`) sets this default on the first execute task it creates.
+- Triage classifies the business task, estimates Story Points (one of `1/2/3/5/8/13`), and decides the next executable path.
+- Triage runs as an `execute` task. For SP `1/2/3` it creates a sibling implementation execute under the same `fetch` parent with `input_payload.action = "implementation"` and `input_payload.handoff.brief_markdown` populated with the Handover Brief. For SP `5/8/13` it stops at the triage `deliver` task and waits for a tracker user edit to start a new triage cycle.
+- Triage never sets `delivery.tracker_status`; the tracker issue keeps its incoming status until a later step explicitly closes it.
 
 For the backlog-selection branch, the system may first choose one already estimated parent task and create a tracker subtask that carries the original context, repository coordinates, executable `input_payload`, and selection metadata. That subtask then enters the same `fetch -> execute -> deliver` pipeline as any other tracker intake.
 

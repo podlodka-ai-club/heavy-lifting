@@ -267,6 +267,72 @@ def test_update_task_workspace_context_raises_for_unknown_task(session_factory) 
             repository.update_task_workspace_context(999, repo_url="x")
 
 
+def test_find_implementation_execute_for_root_returns_none_when_only_triage(
+    session_factory,
+) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(TaskCreateParams(task_type=TaskType.FETCH))
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                input_payload={"action": "triage"},
+            )
+        )
+
+        found = repository.find_implementation_execute_for_root(fetch_task.id)
+
+        assert found is None
+
+
+def test_find_implementation_execute_for_root_returns_impl_when_sibling_exists(
+    session_factory,
+) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+
+        fetch_task = repository.create_task(TaskCreateParams(task_type=TaskType.FETCH))
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                input_payload={"action": "triage"},
+            )
+        )
+        impl_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                input_payload={"action": "implementation"},
+            )
+        )
+
+        found = repository.find_implementation_execute_for_root(fetch_task.id)
+
+        assert found is not None
+        assert found.id == impl_task.id
+
+
+def test_find_implementation_execute_for_root_ignores_other_root_id(session_factory) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+
+        target_root = repository.create_task(TaskCreateParams(task_type=TaskType.FETCH))
+        other_root = repository.create_task(TaskCreateParams(task_type=TaskType.FETCH))
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=other_root.id,
+                input_payload={"action": "implementation"},
+            )
+        )
+
+        found = repository.find_implementation_execute_for_root(target_root.id)
+
+        assert found is None
+
+
 def test_restart_failed_task_requeues_task_without_losing_workspace_or_pr_context(
     session_factory,
 ) -> None:

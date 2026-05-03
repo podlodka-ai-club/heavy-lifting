@@ -10,11 +10,14 @@ class AgentRunRequest:
     task_context: EffectiveTaskContext
     workspace_path: str
     metadata: dict[str, object] = field(default_factory=dict)
+    prompt_override: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class AgentRunResult:
     payload: TaskResultPayload
+    raw_stdout: str = ""
+    raw_stderr: str = ""
 
     @property
     def token_usage(self) -> tuple[TokenUsagePayload, ...]:

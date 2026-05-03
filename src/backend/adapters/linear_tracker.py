@@ -5,8 +5,8 @@ import os
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -18,6 +18,7 @@ from backend.schemas import (
     TrackerCommentCreatePayload,
     TrackerCommentPayload,
     TrackerCommentReference,
+    TrackerEstimateUpdatePayload,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerReadCommentsQuery,
@@ -40,6 +41,7 @@ INPUT_BLOCK_CLOSE = "<!-- /heavy-lifting:input -->"
 COMMENT_METADATA_OPEN = "<!-- heavy-lifting:comment-meta -->"
 COMMENT_METADATA_CLOSE = "<!-- /heavy-lifting:comment-meta -->"
 _HIDDEN_METADATA_KEYS = frozenset({"estimate", "selection"})
+_OWN_WRITE_SUBTITLE_MARKER = "heavy-lifting:own-write"
 
 _logger = get_logger(component="linear_tracker")
 
@@ -98,7 +100,7 @@ query LinearFetchIssues(
       description
       state { id type name }
       labels { nodes { id name } }
-      attachments { nodes { url title } }
+      attachments { nodes { url title subtitle } }
       url
     }
     pageInfo { hasNextPage endCursor }
@@ -111,6 +113,19 @@ query LinearIssueDescription($id: String!) {
   issue(id: $id) {
     id
     description
+  }
+}
+""".strip()
+
+_ISSUE_LABELS_QUERY = """
+query LinearIssueLabels($id: String!) {
+  issue(id: $id) {
+    id
+    labels {
+      nodes {
+        id
+      }
+    }
   }
 }
 """.strip()
@@ -202,6 +217,7 @@ class LinearTrackerConfig:
     task_type_to_label_id: Mapping[TaskType, str]
     max_pages: int
     description_warn_threshold: int
+    label_string_to_label_id: Mapping[str, str] = field(default_factory=dict)
 
 
 def _default_http_requester(request: urllib.request.Request, timeout: float) -> Any:
@@ -713,7 +729,13 @@ class LinearTracker:
                 continue
             title = raw.get("title")
             label = title if isinstance(title, str) and title else url
-            result.append(TaskLink(label=label, url=url))
+            subtitle = raw.get("subtitle")
+            origin: Literal["user", "own_write"]
+            if isinstance(subtitle, str) and subtitle == _OWN_WRITE_SUBTITLE_MARKER:
+                origin = "own_write"
+            else:
+                origin = "user"
+            result.append(TaskLink(label=label, url=url, origin=origin))
         return result
 
     def _extract_task_type(self, labels: Any) -> TaskType | None:
@@ -949,6 +971,71 @@ class LinearTracker:
         url = url_raw if isinstance(url_raw, str) and url_raw else None
         return TrackerTaskReference(external_id=payload.external_task_id, url=url)
 
+    def update_estimate(
+        self, payload: TrackerEstimateUpdatePayload
+    ) -> TrackerTaskReference:
+        input_payload: dict[str, Any] = {}
+
+        if payload.story_points is not None:
+            input_payload["estimate"] = payload.story_points
+
+        resolved_add = self._resolve_label_ids_for_strings(payload.labels_to_add)
+        resolved_remove = self._resolve_label_ids_for_strings(payload.labels_to_remove)
+
+        if resolved_add or resolved_remove:
+            current_label_ids = self._fetch_issue_label_ids(payload.external_task_id)
+            remove_set = set(resolved_remove)
+            target = [lid for lid in current_label_ids if lid not in remove_set]
+            for lid in resolved_add:
+                if lid not in target:
+                    target.append(lid)
+            input_payload["labelIds"] = target
+
+        if not input_payload:
+            return TrackerTaskReference(external_id=payload.external_task_id)
+
+        variables = {
+            "id": payload.external_task_id,
+            "input": input_payload,
+        }
+        data = self._client.execute(_ISSUE_UPDATE_MUTATION, variables)
+        issue = self._require_success_child(data, mutation_key="issueUpdate", child_key="issue")
+        url_raw = issue.get("url")
+        url = url_raw if isinstance(url_raw, str) and url_raw else None
+        return TrackerTaskReference(external_id=payload.external_task_id, url=url)
+
+    def _resolve_label_ids_for_strings(self, labels: Sequence[str]) -> list[str]:
+        resolved: list[str] = []
+        for label in labels:
+            label_id = self._config.label_string_to_label_id.get(label)
+            if not label_id:
+                _logger.warning(
+                    "linear_label_id_not_configured",
+                    label=label,
+                )
+                continue
+            if label_id not in resolved:
+                resolved.append(label_id)
+        return resolved
+
+    def _fetch_issue_label_ids(self, issue_id: str) -> list[str]:
+        data = self._client.execute(_ISSUE_LABELS_QUERY, {"id": issue_id})
+        issue = data.get("issue")
+        if not isinstance(issue, dict):
+            raise RuntimeError("Linear issue labels query response missing 'issue' object")
+        labels_block = issue.get("labels")
+        nodes = labels_block.get("nodes") if isinstance(labels_block, dict) else None
+        if not isinstance(nodes, list):
+            return []
+        result: list[str] = []
+        for raw in nodes:
+            if not isinstance(raw, dict):
+                continue
+            label_id = raw.get("id")
+            if isinstance(label_id, str) and label_id:
+                result.append(label_id)
+        return result
+
     def claim_task_selection(
         self, payload: TrackerTaskSelectionClaimPayload
     ) -> TrackerTaskReference:
@@ -1003,6 +1090,7 @@ class LinearTracker:
                     "issueId": payload.external_task_id,
                     "url": link.url,
                     "title": link.label,
+                    "subtitle": _OWN_WRITE_SUBTITLE_MARKER,
                 }
             }
             data = self._client.execute(_ATTACHMENT_CREATE_MUTATION, variables)

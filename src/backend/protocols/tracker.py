@@ -3,6 +3,7 @@ from typing import Protocol, runtime_checkable
 from backend.schemas import (
     TrackerCommentCreatePayload,
     TrackerCommentReference,
+    TrackerEstimateUpdatePayload,
     TrackerFetchTasksQuery,
     TrackerLinksAttachPayload,
     TrackerReadCommentsQuery,
@@ -30,6 +31,10 @@ class TrackerProtocol(Protocol):
     def read_comments(self, query: TrackerReadCommentsQuery) -> TrackerReadCommentsResult: ...
 
     def update_status(self, payload: TrackerStatusUpdatePayload) -> TrackerTaskReference: ...
+
+    def update_estimate(
+        self, payload: TrackerEstimateUpdatePayload
+    ) -> TrackerTaskReference: ...
 
     def claim_task_selection(
         self, payload: TrackerTaskSelectionClaimPayload

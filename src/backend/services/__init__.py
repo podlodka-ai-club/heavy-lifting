@@ -15,6 +15,17 @@ from backend.services.token_costs import (
     TokenPrice,
     zero_cost,
 )
+from backend.services.triage_parser import (
+    TriageDecision,
+    TriageOutputError,
+    parse_triage_output,
+)
+from backend.services.triage_step import (
+    TriageStep,
+    TriageStepError,
+    TriageStepResult,
+    load_triage_prompt,
+)
 from backend.task_context import EffectiveTaskContext, FeedbackHistoryEntry, TaskChainEntry
 
 __all__ = [
@@ -32,8 +43,15 @@ __all__ = [
     "TaskChainEntry",
     "TokenCostService",
     "TokenPrice",
+    "TriageDecision",
+    "TriageOutputError",
+    "TriageStep",
+    "TriageStepError",
+    "TriageStepResult",
+    "load_triage_prompt",
     "parse_task_context",
     "parse_task_input_payload",
     "parse_task_result_payload",
+    "parse_triage_output",
     "zero_cost",
 ]

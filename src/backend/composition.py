@@ -27,6 +27,19 @@ _TASK_STATUS_BY_STATE_ENV: Mapping[TaskStatus, str] = {
     TaskStatus.FAILED: "linear_state_id_failed",
 }
 
+_LABEL_STRING_TO_SETTING_ATTR: Mapping[str, str] = {
+    "sp:1": "linear_label_id_sp_1",
+    "sp:2": "linear_label_id_sp_2",
+    "sp:3": "linear_label_id_sp_3",
+    "sp:5": "linear_label_id_sp_5",
+    "sp:8": "linear_label_id_sp_8",
+    "sp:13": "linear_label_id_sp_13",
+    "triage:ready": "linear_label_id_triage_ready",
+    "triage:rfi": "linear_label_id_triage_rfi",
+    "triage:split": "linear_label_id_triage_split",
+    "triage:block": "linear_label_id_triage_block",
+}
+
 TrackerFactory = Callable[[Settings], TrackerProtocol]
 ScmFactory = Callable[[Settings], ScmProtocol]
 AgentRunnerFactory = Callable[[Settings], AgentRunnerProtocol]
@@ -80,6 +93,12 @@ def _build_linear_tracker(settings: Settings) -> TrackerProtocol:
         if label_id:
             task_type_to_label_id[task_type] = label_id
 
+    label_string_to_label_id: dict[str, str] = {}
+    for label_string, attr_name in _LABEL_STRING_TO_SETTING_ATTR.items():
+        label_id = getattr(settings, attr_name)
+        if label_id:
+            label_string_to_label_id[label_string] = label_id
+
     config = LinearTrackerConfig(
         api_url=settings.linear_api_url,
         token_env_var=settings.linear_token_env_var,
@@ -91,6 +110,7 @@ def _build_linear_tracker(settings: Settings) -> TrackerProtocol:
         task_type_to_label_id=task_type_to_label_id,
         max_pages=settings.linear_max_pages,
         description_warn_threshold=settings.linear_description_warn_threshold,
+        label_string_to_label_id=label_string_to_label_id,
     )
     return LinearTracker(config)
 
