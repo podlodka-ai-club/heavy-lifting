@@ -21,6 +21,7 @@ from backend.schemas import (
     TaskContext,
     TaskInputPayload,
     TrackerCommentCreatePayload,
+    TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
 )
 from backend.settings import get_settings
@@ -135,7 +136,7 @@ def test_tracker_intake_creates_fetch_and_execute_tasks(session_factory) -> None
             "commit_message_hint": None,
             "pr_feedback": None,
             "tracker_feedback": None,
-            "metadata": {},
+            "metadata": {"estimate_only": True},
         }
 
 
@@ -227,8 +228,55 @@ def test_tracker_intake_restores_missing_execute_child(session_factory) -> None:
             "commit_message_hint": None,
             "pr_feedback": None,
             "tracker_feedback": None,
-            "metadata": {},
+            "metadata": {"estimate_only": True},
         }
+
+
+def test_tracker_intake_does_not_force_estimate_only_for_tracker_subtasks(session_factory) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    parent = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Estimated parent"),
+            input_payload=TaskInputPayload(instructions="Parent task"),
+        )
+    )
+    child = tracker.create_subtask(
+        TrackerSubtaskCreatePayload(
+            context=TaskContext(title="Selected child task"),
+            input_payload=TaskInputPayload(
+                instructions="Implement selected child task.",
+                base_branch="main",
+                branch_name="task120/selected-from-estimate",
+            ),
+            parent_external_id=parent.external_id,
+        )
+    )
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+    )
+
+    report = worker.poll_once()
+
+    assert report.created_execute_tasks == 2
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        child_fetch = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=child.external_id,
+        )
+        assert child_fetch is not None
+        child_execute = repository.find_child_task(
+            parent_id=child_fetch.id, task_type=TaskType.EXECUTE
+        )
+        assert child_execute is not None
+        assert child_execute.input_payload is not None
+        assert child_execute.input_payload["metadata"] == {}
 
 
 def test_tracker_intake_creates_pr_feedback_children_for_scm_comments(session_factory) -> None:

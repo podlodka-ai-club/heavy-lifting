@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
+from backend.estimate_mode import is_explicit_estimate_only_context
 from backend.logging_setup import configure_logging, get_logger
 from backend.models import Task
 from backend.protocols.agent_runner import AgentRunnerProtocol, AgentRunRequest, AgentRunResult
@@ -924,6 +925,8 @@ def should_skip_scm_artifacts(*, task_context: EffectiveTaskContext) -> bool:
         return True
     if task_context.flow_type != TaskType.EXECUTE:
         return False
+    if is_explicit_estimate_only_context(task_context):
+        return True
     text_parts = [
         task_context.instructions,
         task_context.tracker_context.title if task_context.tracker_context else None,

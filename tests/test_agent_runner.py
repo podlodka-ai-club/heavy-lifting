@@ -315,6 +315,52 @@ def test_cli_agent_runner_prompt_marks_estimate_only_execute_without_code_change
     assert "- Apply concrete file changes directly in the workspace." not in prompt
 
 
+def test_cli_agent_runner_prompt_prefers_explicit_estimate_only_mode(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = build_session_factory(engine)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                context={
+                    "title": "Assess task",
+                    "description": "Assess complexity for planning.",
+                },
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                context={"title": "Assess task"},
+                input_payload={
+                    "instructions": "Assess complexity and provide estimate.",
+                    "metadata": {"estimate_only": True},
+                },
+            )
+        )
+
+        task_context = ContextBuilder().build_for_task(
+            task=execute_task,
+            task_chain=repository.load_task_chain(fetch_task.root_id),
+        )
+
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    prompt = runner._build_prompt(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert "- This is an estimate-only task." in prompt
+    assert "- Do not modify code or create SCM artifacts." in prompt
+    assert "- Apply concrete file changes directly in the workspace." not in prompt
+
+
 def test_cli_agent_runner_prompt_keeps_tracker_feedback_estimate_thread_comment_only(
     tmp_path,
 ) -> None:

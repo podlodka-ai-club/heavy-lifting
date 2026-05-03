@@ -21,6 +21,7 @@ from backend.schemas import (
     TaskResultPayload,
     TokenUsagePayload,
     TrackerCommentCreatePayload,
+    TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
 )
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
@@ -206,37 +207,25 @@ def test_http_intake_flow_runs_workers_end_to_end(session_factory) -> None:
         assert fetch_task.status == TaskStatus.DONE
         assert execute_task.status == TaskStatus.DONE
         assert deliver_task.status == TaskStatus.DONE
-        assert execute_task.branch_name == "task48/http-intake-e2e"
-        assert execute_task.pr_external_id == "1"
-        assert execute_task.pr_url == "https://example.test/repo/pull/1"
+        assert execute_task.branch_name is None
+        assert execute_task.pr_external_id is None
+        assert execute_task.pr_url is None
         assert execute_task.result_payload is not None
         assert execute_task.result_payload["summary"] == "Fake CLI runner completed execution."
-        assert execute_task.result_payload["commit_sha"] == "mock-commit-0001"
-        assert execute_task.result_payload["metadata"] == {
-            "runner_adapter": "fake-cli",
-            "mode": "test-double",
-            "request_metadata": {
-                "task_id": execute_task.id,
-                "task_type": "execute",
-                "workspace_key": "repo-48",
-                "workspace_path": "/tmp/mock-scm/repo-48",
-                "branch_name": "task48/http-intake-e2e",
-                "repo_url": "https://example.test/repo.git",
-                "repo_ref": "main",
-            },
-            "workspace_path": "/tmp/mock-scm/repo-48",
-            "workspace_key": "repo-48",
-            "repo_url": "https://example.test/repo.git",
-            "repo_ref": "main",
-            "flow_type": "execute",
-            "pr_action": "created",
-        }
+        assert execute_task.result_payload["commit_sha"] is None
+        metadata = execute_task.result_payload["metadata"]
+        assert metadata["runner_adapter"] == "fake-cli"
+        assert metadata["mode"] == "test-double"
+        assert metadata["flow_type"] == "execute"
+        assert metadata["pr_action"] == "skipped"
+        assert metadata["delivery_mode"] == "estimate_only"
+        assert metadata["request_metadata"]["branch_name"] is None
         assert deliver_task.result_payload is not None
         assert deliver_task.result_payload["metadata"] == {
             "tracker_external_id": "task-1",
             "tracker_status": "done",
             "comment_posted": True,
-            "links_attached": 3,
+            "links_attached": 0,
         }
 
         token_usage_entries = session.query(TokenUsage).order_by(TokenUsage.id.asc()).all()
@@ -248,13 +237,10 @@ def test_http_intake_flow_runs_workers_end_to_end(session_factory) -> None:
     assert runtime.tracker._tasks["task-1"].status == TaskStatus.DONE
     assert len(runtime.tracker._comments["task-1"]) == 1
     assert runtime.tracker._comments["task-1"][0].body == (
-        "CLI runner delivered a deterministic happy-path result."
+        "CLI runner delivered a deterministic happy-path result.\n"
+        "Runner executed through the e2e HTTP intake path."
     )
-    assert [reference.url for reference in runtime.tracker._tasks["task-1"].context.references] == [
-        "https://example.test/artifacts/task48-report",
-        "https://example.test/repo/tree/task48/http-intake-e2e",
-        "https://example.test/repo/pull/1",
-    ]
+    assert runtime.tracker._tasks["task-1"].context.references == []
 
 
 def test_http_intake_flow_persists_cli_token_usage_from_json_events(
@@ -683,18 +669,19 @@ def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
         assert fetch_task.status == TaskStatus.DONE
         assert execute_task.status == TaskStatus.DONE
         assert deliver_task.status == TaskStatus.DONE
-        assert execute_task.branch_name == "task33/e2e-flow"
-        assert execute_task.pr_external_id == "1"
-        assert execute_task.pr_url == "https://example.test/repo/pull/1"
+        assert execute_task.branch_name is None
+        assert execute_task.pr_external_id is None
+        assert execute_task.pr_url is None
         assert execute_task.result_payload is not None
         assert execute_task.result_payload["metadata"]["flow_type"] == "execute"
-        assert execute_task.result_payload["metadata"]["pr_action"] == "created"
+        assert execute_task.result_payload["metadata"]["pr_action"] == "skipped"
+        assert execute_task.result_payload["metadata"]["delivery_mode"] == "estimate_only"
         assert deliver_task.result_payload is not None
         assert deliver_task.result_payload["metadata"] == {
             "tracker_external_id": tracker_task.external_id,
             "tracker_status": "done",
             "comment_posted": True,
-            "links_attached": 2,
+            "links_attached": 0,
         }
 
         token_usage_entries = session.query(TokenUsage).order_by(TokenUsage.id.asc()).all()
@@ -704,17 +691,11 @@ def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
     assert tracker._tasks[tracker_task.external_id].status == TaskStatus.DONE
     assert len(tracker._comments[tracker_task.external_id]) == 1
     assert tracker._comments[tracker_task.external_id][0].body == (
-        "Prepared local agent execution for Implement orchestration e2e"
-        ".\n\nWorkspace: /tmp/mock-scm/repo-33\n"
+        "Workspace: /tmp/mock-scm/repo-33\n"
         "Flow: execute\n"
         "Instructions: Implement the full orchestration flow."
     )
-    assert [
-        reference.url for reference in tracker._tasks[tracker_task.external_id].context.references
-    ] == [
-        "https://example.test/repo/tree/task33/e2e-flow",
-        "https://example.test/repo/pull/1",
-    ]
+    assert tracker._tasks[tracker_task.external_id].context.references == []
 
 
 def test_orchestration_flow_routes_estimate_only_to_delivery_without_scm_side_effects(
@@ -865,6 +846,61 @@ def test_orchestration_flow_merges_estimate_and_rationale_for_estimate_only_deli
     )
 
 
+def test_orchestration_top_level_intake_uses_explicit_estimate_mode_without_keywords(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    scm = MockScm()
+    runner = EstimateOnlyRecordingRunner(
+        stdout_preview="2 story points",
+        details="Reason: this is a small isolated change.",
+    )
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(
+                title="Assess CLI logging task",
+                description="Assess complexity for planning.",
+                acceptance_criteria=["Return an estimate to tracker"],
+            ),
+            input_payload=TaskInputPayload(
+                instructions="Assess complexity and report result.",
+                base_branch="main",
+                branch_name="task163/assess",
+            ),
+            repo_url="https://example.test/repo.git",
+            repo_ref="main",
+            workspace_key="repo-163",
+        )
+    )
+    intake_worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=scm,
+        tracker_name="mock",
+        session_factory=session_factory,
+        poll_interval=1,
+        pr_poll_interval=1,
+    )
+    execute_worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+    )
+    deliver_worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    intake_worker.poll_once()
+    execute_report = execute_worker.poll_once()
+    deliver_report = deliver_worker.poll_once()
+
+    assert execute_report.processed_execute_tasks == 1
+    assert deliver_report.processed_deliver_tasks == 1
+    assert scm._branches == {}
+    assert scm._pull_requests == {}
+    assert scm._commit_sequence == 0
+    assert tracker._comments[tracker_task.external_id][0].body == (
+        "2 story points\nReason: this is a small isolated change."
+    )
+
+
 def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session_factory) -> None:
     tracker = MockTracker()
     scm = MockScm()
@@ -940,6 +976,7 @@ def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session
         assert execute_task.external_parent_id == selected.created_task.external_id
         assert execute_task.status == TaskStatus.DONE
         assert execute_task.branch_name == "task120/selected-from-estimate"
+        assert execute_task.input_payload["metadata"] == {}
         assert deliver_task.status == TaskStatus.DONE
 
     selected_tracker_task = tracker._tasks[selected.created_task.external_id]
@@ -954,8 +991,19 @@ def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session
 def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_factory) -> None:
     tracker = MockTracker()
     scm = MockScm()
-    tracker_task = tracker.create_task(
+    parent_task = tracker.create_task(
         TrackerTaskCreatePayload(
+            context=TaskContext(title="Estimated parent task"),
+            status=TaskStatus.DONE,
+            metadata={
+                "estimate": {"story_points": 2, "can_take_in_work": True},
+                "selection": {"taken_in_work": False},
+            },
+        )
+    )
+    selected_ref = tracker.create_subtask(
+        TrackerSubtaskCreatePayload(
+            parent_external_id=parent_task.external_id,
             context=TaskContext(title="Handle PR feedback e2e"),
             input_payload=TaskInputPayload(
                 instructions="Implement the initial PR version.",
@@ -967,6 +1015,7 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
             workspace_key="repo-33-feedback",
         )
     )
+    tracker_task_external_id = selected_ref.external_id
     intake_worker = TrackerIntakeWorker(
         tracker=tracker,
         scm=scm,
@@ -992,7 +1041,7 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
         repository = TaskRepository(session)
         fetch_task = repository.find_fetch_task_by_tracker_task(
             tracker_name="mock",
-            external_task_id=tracker_task.external_id,
+            external_task_id=tracker_task_external_id,
         )
 
         assert fetch_task is not None
@@ -1024,7 +1073,7 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
         repository = TaskRepository(session)
         fetch_task = repository.find_fetch_task_by_tracker_task(
             tracker_name="mock",
-            external_task_id=tracker_task.external_id,
+            external_task_id=tracker_task_external_id,
         )
 
         assert fetch_task is not None
@@ -1076,9 +1125,9 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
         assert token_usage_entries[0].task_id == execute_task.id
         assert token_usage_entries[1].task_id == feedback_task.id
 
-    assert tracker._tasks[tracker_task.external_id].status == TaskStatus.DONE
-    assert len(tracker._comments[tracker_task.external_id]) == 1
-    assert tracker._comments[tracker_task.external_id][0].body == (
+    assert tracker._tasks[tracker_task_external_id].status == TaskStatus.DONE
+    assert len(tracker._comments[tracker_task_external_id]) == 1
+    assert tracker._comments[tracker_task_external_id][0].body == (
         "Prepared local agent execution for Handle PR feedback e2e"
         ".\n\nWorkspace: /tmp/mock-scm/repo-33-feedback\n"
         "Flow: execute\n"

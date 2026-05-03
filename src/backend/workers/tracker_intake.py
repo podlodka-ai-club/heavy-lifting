@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.composition import RuntimeContainer, create_runtime_container
 from backend.db import get_session_factory, session_scope
+from backend.estimate_mode import mark_input_payload_estimate_only
 from backend.logging_setup import get_logger
 from backend.protocols.scm import ScmProtocol
 from backend.protocols.tracker import TrackerProtocol
@@ -297,6 +298,7 @@ class TrackerIntakeWorker:
             parent_id=fetch_task.id, task_type=TaskType.EXECUTE
         )
         created_execute_task = False
+        execute_payload = self._build_execute_input_payload(tracker_task=tracker_task)
 
         if execute_task is None:
             execute_task = repository.create_task(
@@ -310,10 +312,12 @@ class TrackerIntakeWorker:
                     repo_ref=tracker_task.repo_ref,
                     workspace_key=tracker_task.workspace_key,
                     context=tracker_task.context.model_dump(mode="python"),
-                    input_payload=_dump_model_or_none(tracker_task.input_payload),
+                    input_payload=execute_payload,
                 )
             )
             created_execute_task = True
+        elif execute_task.input_payload != execute_payload:
+            execute_task.input_payload = execute_payload
 
         if created_execute_task:
             logger.info(
@@ -333,6 +337,14 @@ class TrackerIntakeWorker:
             created_fetch_task=created_fetch_task,
             created_execute_task=created_execute_task,
         )
+
+    def _build_execute_input_payload(
+        self, *, tracker_task: TrackerTask
+    ) -> dict[str, object] | None:
+        input_payload = tracker_task.input_payload
+        if tracker_task.parent_external_id is None:
+            input_payload = mark_input_payload_estimate_only(payload=input_payload)
+        return _dump_model_or_none(input_payload)
 
     def _ingest_pr_feedback(
         self,

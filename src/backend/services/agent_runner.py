@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
+from backend.estimate_mode import is_explicit_estimate_only_context
 from backend.logging_setup import get_logger
 from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.schemas import TaskContext, TaskResultPayload, TokenUsagePayload
@@ -780,6 +781,8 @@ class _CliStderrParseResult:
 
 
 def _is_estimate_only_context(context: EffectiveTaskContext) -> bool:
+    if is_explicit_estimate_only_context(context):
+        return True
     text_parts = [
         context.instructions,
         context.tracker_context.title if context.tracker_context else None,
