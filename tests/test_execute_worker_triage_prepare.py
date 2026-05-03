@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from tests.test_execute_worker import EnsureWorkspaceRecorderMockScm, RecordingAgentRunner
+from test_execute_worker import EnsureWorkspaceRecorderMockScm, RecordingAgentRunner
 
 from backend.adapters.mock_scm import MockScm
 from backend.db import build_engine, build_session_factory, session_scope

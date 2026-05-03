@@ -8,7 +8,7 @@ and the negative paths for SP 5/8/13 escalations + edge cases.
 from __future__ import annotations
 
 import pytest
-from tests.test_execute_worker_triage_dispatch import (
+from test_execute_worker_triage_dispatch import (
     _HANDOVER_BRIEF_BODY,
     _build_session_factory,
     _build_settings,

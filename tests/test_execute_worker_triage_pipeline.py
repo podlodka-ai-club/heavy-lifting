@@ -15,7 +15,7 @@ Covers the four scenarios described in
 
 from __future__ import annotations
 
-from tests.test_execute_worker_triage_dispatch import (
+from test_execute_worker_triage_dispatch import (
     _HANDOVER_BRIEF_BODY,
     _build_session_factory,
     _build_settings,
