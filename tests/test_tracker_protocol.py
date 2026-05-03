@@ -10,6 +10,7 @@ from backend.schemas import (
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
+    TrackerTaskEstimateUpdatePayload,
     TrackerTaskSelectionClaimPayload,
 )
 from backend.task_constants import TaskStatus, TaskType
@@ -177,6 +178,33 @@ def test_mock_tracker_attach_links_copies_payload_before_storing() -> None:
     stored_task = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
 
     assert stored_task.context.references[0].label == "PR"
+
+
+def test_mock_tracker_update_estimate_preserves_selection_metadata() -> None:
+    tracker = MockTracker()
+    created_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Estimated task"),
+            metadata={"selection": {"taken_in_work": False}},
+        )
+    )
+
+    tracker.update_task_estimate(
+        TrackerTaskEstimateUpdatePayload(
+            external_task_id=created_task.external_id,
+            story_points=1,
+            can_take_in_work=True,
+            rationale="small change.",
+        )
+    )
+
+    stored_task = tracker.fetch_tasks(TrackerFetchTasksQuery())[0]
+    assert stored_task.metadata["estimate"] == {
+        "story_points": 1,
+        "can_take_in_work": True,
+        "rationale": "small change.",
+    }
+    assert stored_task.metadata["selection"] == {"taken_in_work": False}
 
 
 def test_mock_tracker_filters_eligible_estimated_tasks_via_explicit_query() -> None:

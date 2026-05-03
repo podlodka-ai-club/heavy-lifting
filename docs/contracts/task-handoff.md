@@ -225,6 +225,14 @@ For the backlog-selection branch, the system may first choose one already estima
 
 For the current estimate-only MVP branch, `worker2` may also complete an `execute` task without SCM artifacts. In that case the execute result keeps the tracker-facing estimate text in `tracker_comment`, leaves branch and PR fields empty, marks `metadata.delivery_mode = estimate_only`, and still creates a downstream `deliver` task.
 
+Before handoff to `worker3`, estimate-only execute output is normalized into a stable estimate contract under `result_payload.metadata.estimate` with at least:
+
+- `story_points: int`
+- `can_take_in_work: bool` (product rule: `story_points <= 2` is `true`, otherwise `false`)
+- `rationale: str`
+
+`worker2` prefers already structured estimate metadata when present, but must still derive the same contract from legacy free-text estimate outputs (for example `2 story points\nReason: ...`).
+
 For new top-level tracker intake (`TrackerTask.parent_external_id` is empty), `worker1` now persists an explicit execute-mode flag in `input_payload.metadata.estimate_only = true`. `worker2` and the CLI runtime contract must prefer this explicit flag over free-text heuristics when deciding estimate-only behavior. Tracker subtasks (for example selected small estimated child tasks) are ingested without that forced flag and continue through normal SCM-backed execution unless another explicit signal is present.
 
 When estimate-only agent output is split across multiple text fields, `worker2` normalizes the final `tracker_comment` by merging `metadata.stdout_preview`, `tracker_comment`, and `details` in that order. The merged comment must preserve an already complete message, append missing rationale when only the estimate is present in the first field, and avoid duplicating the same estimate or reason twice.
@@ -251,7 +259,7 @@ Tracker-thread follow-up for estimate-only work uses the same delivery-only patt
 - It runs as a `deliver` task owned by `worker3`.
 - The delivery worker reads tracker instructions from upstream `result_payload.delivery` rather than from `summary` or `details`.
 - Delivery may attach links from `result_payload.artifacts` when present.
-- If the upstream execute result is estimate-only, delivery sends the normalized estimate text from `tracker_comment` and attaches no SCM links.
+- If the upstream execute result is estimate-only, delivery sends a normalized tracker comment format that explicitly includes story points, take-in-work decision, and rationale; then it persists the same structured estimate back to tracker metadata (`metadata.estimate`) through the tracker boundary while preserving existing `metadata.selection`.
 
 ## Scenario Summary
 

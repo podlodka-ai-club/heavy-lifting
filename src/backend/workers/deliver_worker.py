@@ -19,6 +19,7 @@ from backend.schemas import (
     TrackerCommentCreatePayload,
     TrackerLinksAttachPayload,
     TrackerStatusUpdatePayload,
+    TrackerTaskEstimateUpdatePayload,
 )
 from backend.services.context_builder import ContextBuilder
 from backend.services.tracker_task_resolution import resolve_tracker_external_task_id
@@ -83,6 +84,16 @@ class DeliverWorker:
                         },
                     )
                 )
+                estimate_metadata = _extract_estimate_metadata(execute_result=delivery_result)
+                if estimate_metadata is not None:
+                    self.tracker.update_task_estimate(
+                        TrackerTaskEstimateUpdatePayload(
+                            external_task_id=tracker_task_id,
+                            story_points=estimate_metadata["story_points"],
+                            can_take_in_work=estimate_metadata["can_take_in_work"],
+                            rationale=estimate_metadata["rationale"],
+                        )
+                    )
                 if links:
                     self.tracker.attach_links(
                         TrackerLinksAttachPayload(
@@ -154,6 +165,15 @@ class DeliverWorker:
         return tracker_task_id
 
     def _build_comment_body(self, *, execute_result: TaskResultPayload) -> str:
+        estimate_metadata = _extract_estimate_metadata(execute_result=execute_result)
+        if estimate_metadata is not None:
+            can_take_text = "да" if estimate_metadata["can_take_in_work"] else "нет"
+            return (
+                "Оценка задачи:\n"
+                f"- Стоимость: {estimate_metadata['story_points']} SP\n"
+                f"- Можно брать в работу сейчас: {can_take_text}\n"
+                f"- Обоснование: {estimate_metadata['rationale']}"
+            )
         if execute_result.tracker_comment:
             return execute_result.tracker_comment
 
@@ -230,6 +250,21 @@ def _task_logger(task: Task, **fields: Any):
     }
     log_fields.update(fields)
     return get_logger(__name__, component="worker3").bind(**log_fields)
+
+
+def _extract_estimate_metadata(*, execute_result: TaskResultPayload) -> dict[str, Any] | None:
+    estimate = execute_result.metadata.get("estimate")
+    if not isinstance(estimate, dict):
+        return None
+    story_points = estimate.get("story_points")
+    rationale = estimate.get("rationale")
+    if not isinstance(story_points, int) or not isinstance(rationale, str) or not rationale.strip():
+        return None
+    return {
+        "story_points": story_points,
+        "can_take_in_work": story_points <= 2,
+        "rationale": rationale.strip(),
+    }
 
 
 __all__ = [

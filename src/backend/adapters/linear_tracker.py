@@ -26,6 +26,7 @@ from backend.schemas import (
     TrackerSubtaskCreatePayload,
     TrackerTask,
     TrackerTaskCreatePayload,
+    TrackerTaskEstimateUpdatePayload,
     TrackerTaskReference,
     TrackerTaskSelectionClaimPayload,
 )
@@ -958,6 +959,30 @@ class LinearTracker:
         selection_metadata = dict(selection_value) if isinstance(selection_value, dict) else {}
         selection_metadata["taken_in_work"] = True
         next_payload["selection"] = selection_metadata
+
+        variables = {
+            "id": payload.external_task_id,
+            "input": {
+                "description": _inject_input_block(cleaned_description or None, next_payload),
+            },
+        }
+        data = self._client.execute(_ISSUE_UPDATE_MUTATION, variables)
+        issue = self._require_success_child(data, mutation_key="issueUpdate", child_key="issue")
+        url_raw = issue.get("url")
+        url = url_raw if isinstance(url_raw, str) and url_raw else None
+        return TrackerTaskReference(external_id=payload.external_task_id, url=url)
+
+    def update_task_estimate(
+        self, payload: TrackerTaskEstimateUpdatePayload
+    ) -> TrackerTaskReference:
+        description = self._fetch_issue_description(payload.external_task_id)
+        cleaned_description, payload_dict = _extract_input_block(description)
+        next_payload = dict(payload_dict) if isinstance(payload_dict, dict) else {}
+        next_payload["estimate"] = {
+            "story_points": payload.story_points,
+            "can_take_in_work": payload.can_take_in_work,
+            "rationale": payload.rationale,
+        }
 
         variables = {
             "id": payload.external_task_id,

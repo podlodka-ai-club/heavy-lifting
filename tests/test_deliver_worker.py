@@ -165,6 +165,132 @@ def test_deliver_worker_marks_task_failed_when_execute_result_is_missing(session
         assert deliver_task.error == "deliver task requires a completed execute result"
 
 
+def test_deliver_worker_normalizes_estimate_comment_and_persists_estimate_metadata(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(
+            context=TaskContext(title="Estimate task"),
+            status=TaskStatus.NEW,
+            metadata={"selection": {"taken_in_work": False}},
+        )
+    )
+    worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+                context={"title": "Tracker task"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={"title": "Estimate task"},
+                result_payload={
+                    "summary": "Estimate completed.",
+                    "tracker_comment": "2 story points\nReason: small isolated change.",
+                    "metadata": {
+                        "delivery_mode": "estimate_only",
+                        "estimate": {
+                            "story_points": 2,
+                            "can_take_in_work": True,
+                            "rationale": "small isolated change.",
+                        },
+                    },
+                },
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.DELIVER,
+                parent_id=execute_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={"title": "Deliver estimate"},
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_deliver_tasks == 1
+    comment = tracker._comments[tracker_task.external_id][0].body
+    assert "Стоимость: 2 SP" in comment
+    assert "Можно брать в работу сейчас: да" in comment
+    assert "Обоснование: small isolated change." in comment
+    assert tracker._tasks[tracker_task.external_id].metadata["estimate"] == {
+        "story_points": 2,
+        "can_take_in_work": True,
+        "rationale": "small isolated change.",
+    }
+    assert tracker._tasks[tracker_task.external_id].metadata["selection"] == {
+        "taken_in_work": False
+    }
+
+
+def test_deliver_worker_marks_three_plus_sp_as_not_takeable_now(session_factory) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="Estimate task"), status=TaskStatus.NEW)
+    )
+    worker = DeliverWorker(tracker=tracker, session_factory=session_factory)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+                context={"title": "Tracker task"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={"title": "Estimate task"},
+                result_payload={
+                    "summary": "Estimate completed.",
+                    "metadata": {
+                        "estimate": {
+                            "story_points": 3,
+                            "can_take_in_work": False,
+                            "rationale": "requires broader refactoring.",
+                        }
+                    },
+                },
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.DELIVER,
+                parent_id=execute_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={"title": "Deliver estimate"},
+            )
+        )
+
+    worker.poll_once()
+
+    comment = tracker._comments[tracker_task.external_id][0].body
+    assert "Стоимость: 3 SP" in comment
+    assert "Можно брать в работу сейчас: нет" in comment
+
+
 def test_build_deliver_worker_uses_runtime_settings(session_factory) -> None:
     runtime = _runtime_with_tracker_poll_interval(poll_interval=17)
 

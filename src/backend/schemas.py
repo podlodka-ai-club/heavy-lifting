@@ -207,6 +207,13 @@ class TrackerTaskSelectionClaimPayload(SchemaModel):
     external_task_id: str
 
 
+class TrackerTaskEstimateUpdatePayload(SchemaModel):
+    external_task_id: str
+    story_points: int = Field(ge=0)
+    can_take_in_work: bool
+    rationale: str = Field(min_length=1)
+
+
 class TrackerLinksAttachPayload(SchemaModel):
     external_task_id: str
     links: list[TaskLink] = Field(min_length=1)
@@ -353,6 +360,7 @@ __all__ = [
     "TrackerEstimatedSelectionQuery",
     "TrackerFetchTasksQuery",
     "TrackerLinksAttachPayload",
+    "TrackerTaskEstimateUpdatePayload",
     "TrackerTaskSelectionClaimPayload",
     "TrackerStatusUpdatePayload",
     "TrackerSubtaskCreatePayload",

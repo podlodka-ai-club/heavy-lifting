@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from backend.adapters.mock_scm import MockScm
 from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import AgentFeedbackEntry, Base, Task, TokenUsage
@@ -613,6 +615,11 @@ def test_execute_worker_skips_scm_artifacts_for_estimate_only_requests(tmp_path)
         assert execute_task.result_payload["tracker_comment"] == (
             "2 story points\nReason: logging the CLI command is a small isolated change."
         )
+        assert execute_task.result_payload["metadata"]["estimate"] == {
+            "story_points": 2,
+            "can_take_in_work": True,
+            "rationale": "logging the CLI command is a small isolated change.",
+        }
         assert execute_task.result_payload["links"] == []
         assert execute_task.result_payload["metadata"]["delivery_mode"] == "estimate_only"
         assert execute_task.result_payload["metadata"]["pr_action"] == "skipped"
@@ -726,6 +733,132 @@ def test_build_delivery_only_comment_uses_combined_details_without_duplication(t
     assert comment == (
         "2 story points\nReason: logging the CLI command is a small isolated change."
     )
+
+
+def test_execute_worker_estimate_metadata_prefers_structured_payload(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    payload = worker._build_delivery_only_payload(
+        agent_payload=TaskResultPayload(
+            summary="Estimate completed.",
+            details="2 story points\nReason: fallback rationale.",
+            metadata={
+                "stdout_preview": "2 story points",
+                "estimate": {
+                    "story_points": 3,
+                    "can_take_in_work": True,
+                    "rationale": "structured rationale wins",
+                },
+            },
+        )
+    )
+
+    assert payload.metadata["estimate"] == {
+        "story_points": 3,
+        "can_take_in_work": False,
+        "rationale": "structured rationale wins",
+    }
+
+
+def test_build_delivery_only_payload_raises_when_estimate_cannot_be_derived(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        worker._build_delivery_only_payload(
+            agent_payload=TaskResultPayload(
+                summary="Estimate completed.",
+                details="No structured estimate here.",
+                metadata={"stdout_preview": "Unparseable estimate text"},
+            )
+        )
+
+    assert "estimate_only normalization requires parseable story_points" in str(exc_info.value)
+
+
+def test_build_delivery_only_payload_rejects_multiline_without_explicit_reason(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        worker._build_delivery_only_payload(
+            agent_payload=TaskResultPayload(
+                summary="Estimate completed.",
+                details="2 story points\nCan take in work: yes",
+                metadata={"stdout_preview": "2 story points"},
+            )
+        )
+
+    assert "estimate_only normalization requires parseable story_points" in str(exc_info.value)
+
+
+def test_execute_worker_fails_estimate_only_task_when_estimate_is_unparseable(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=EstimateOnlyAgentRunner(
+            stdout_preview="Unparseable estimate",
+            details="No reason or story points provided.",
+        ),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-FAILSAFE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-failsafe",
+                context={"title": "Estimate task"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id="TASK-FAILSAFE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-failsafe",
+                context={
+                    "title": "Estimate task",
+                    "description": "Estimate only. Do not modify code.",
+                },
+                input_payload={
+                    "instructions": "Return only estimate. Do not modify code.",
+                    "metadata": {"estimate_only": True},
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_execute_tasks == 0
+    assert report.failed_execute_tasks == 1
+    with session_scope(session_factory=session_factory) as session:
+        execute_task = session.get(Task, 2)
+        assert execute_task is not None
+        assert execute_task.status == TaskStatus.FAILED
+        assert execute_task.error is not None
+        assert "estimate_only normalization requires parseable story_points" in execute_task.error
 
 
 def test_execute_worker_marks_task_failed_when_workspace_key_is_missing(tmp_path) -> None:

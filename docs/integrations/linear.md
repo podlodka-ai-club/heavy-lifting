@@ -232,6 +232,12 @@ Behaviour:
   `selection.taken_in_work = true`, and writes the description back
   through `issueUpdate`. User-visible description text is preserved, and
   other hidden keys in the block remain unchanged.
+- **On estimate update (`update_task_estimate`):** Worker 3 uses a dedicated
+  tracker boundary call to persist normalized estimate metadata on the
+  existing issue. The adapter reads the current description, updates only
+  `estimate` in the hidden block (including `story_points`,
+  `can_take_in_work`, and `rationale`), preserves user-visible text, and
+  keeps existing `selection` metadata intact.
 - **Length guard:** if the resulting `description` exceeds
   `LINEAR_DESCRIPTION_WARN_THRESHOLD` characters (default 50 000), the
   adapter logs `linear_description_warn_threshold_exceeded` but still

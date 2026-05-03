@@ -772,6 +772,12 @@ class ExecuteWorker:
         metadata = dict(agent_payload.metadata)
         metadata["delivery_mode"] = "estimate_only"
         tracker_comment = self._build_delivery_only_comment(agent_payload=agent_payload)
+        metadata["estimate"] = _derive_estimate_metadata(
+            metadata=metadata,
+            tracker_comment=tracker_comment,
+            summary=agent_payload.summary,
+            details=agent_payload.details,
+        )
         return agent_payload.model_copy(
             update={
                 "branch_name": None,
@@ -1056,6 +1062,62 @@ def _merge_delivery_comment_text(current: str, candidate: str) -> str:
         merged_lines.append(normalized_line)
         existing_lines.add(canonical_line)
     return "\n".join(line for line in merged_lines if line.strip())
+
+
+def _derive_estimate_metadata(
+    *,
+    metadata: dict[str, object],
+    tracker_comment: str,
+    summary: str,
+    details: str | None,
+) -> dict[str, object]:
+    structured = metadata.get("estimate")
+    if isinstance(structured, dict):
+        story_points = structured.get("story_points")
+        rationale = structured.get("rationale")
+        if isinstance(story_points, int) and isinstance(rationale, str) and rationale.strip():
+            return {
+                "story_points": story_points,
+                "can_take_in_work": story_points <= 2,
+                "rationale": rationale.strip(),
+            }
+
+    parsed_story_points = _extract_story_points_from_text([tracker_comment, summary, details])
+    rationale = _extract_rationale_from_text([tracker_comment, details, summary])
+    if parsed_story_points is None or rationale is None:
+        raise ValueError(
+            "estimate_only normalization requires parseable story_points and non-empty rationale"
+        )
+    return {
+        "story_points": parsed_story_points,
+        "can_take_in_work": parsed_story_points <= 2,
+        "rationale": rationale,
+    }
+
+
+def _extract_story_points_from_text(candidates: list[str | None]) -> int | None:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        match = re.search(r"\b(\d+)\s*(?:sp|story\s*points?)\b", candidate, re.IGNORECASE)
+        if match is None:
+            continue
+        return int(match.group(1))
+    return None
+
+
+def _extract_rationale_from_text(candidates: list[str | None]) -> str | None:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        lines = [line.strip() for line in candidate.splitlines() if line.strip()]
+        for line in lines:
+            lowered = line.lower()
+            if lowered.startswith("reason:"):
+                value = line.split(":", 1)[1].strip()
+                if value:
+                    return value
+    return None
 
 
 def _slugify(value: str) -> str:

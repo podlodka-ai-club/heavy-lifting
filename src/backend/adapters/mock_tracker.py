@@ -12,6 +12,7 @@ from backend.schemas import (
     TrackerSubtaskCreatePayload,
     TrackerTask,
     TrackerTaskCreatePayload,
+    TrackerTaskEstimateUpdatePayload,
     TrackerTaskReference,
     TrackerTaskSelectionClaimPayload,
 )
@@ -116,6 +117,19 @@ class MockTracker:
         selection_metadata = dict(get_nested_mapping(metadata, "selection"))
         selection_metadata["taken_in_work"] = True
         metadata["selection"] = selection_metadata
+        task.metadata = metadata
+        return TrackerTaskReference(external_id=task.external_id)
+
+    def update_task_estimate(
+        self, payload: TrackerTaskEstimateUpdatePayload
+    ) -> TrackerTaskReference:
+        task = self._tasks[payload.external_task_id]
+        metadata = dict(task.metadata)
+        metadata["estimate"] = {
+            "story_points": payload.story_points,
+            "can_take_in_work": payload.can_take_in_work,
+            "rationale": payload.rationale,
+        }
         task.metadata = metadata
         return TrackerTaskReference(external_id=task.external_id)
 

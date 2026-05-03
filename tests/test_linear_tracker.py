@@ -33,6 +33,7 @@ from backend.schemas import (
     TrackerStatusUpdatePayload,
     TrackerSubtaskCreatePayload,
     TrackerTaskCreatePayload,
+    TrackerTaskEstimateUpdatePayload,
     TrackerTaskSelectionClaimPayload,
 )
 from backend.task_constants import TaskStatus, TaskType
@@ -1741,6 +1742,53 @@ def test_claim_task_selection_injects_hidden_block_when_issue_has_none(
     cleaned, parsed = _extract_input_block(updated_description)
     assert cleaned == "Plain text only"
     assert parsed == {"selection": {"taken_in_work": True}}
+
+
+def test_update_task_estimate_preserves_selection_hidden_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    description = _inject_input_block(
+        "User-visible description",
+        {
+            "selection": {
+                "taken_in_work": False,
+                "selected_from_parent_external_id": "ISS-ROOT",
+            }
+        },
+    )
+    fake, calls = _scripted_http_requester(
+        [
+            _issue_description_response_body(issue_id="ISS-EST", description=description),
+            _issue_update_response_body(issue_id="ISS-EST", url="https://l/i/est"),
+        ]
+    )
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    ref = tracker.update_task_estimate(
+        TrackerTaskEstimateUpdatePayload(
+            external_task_id="ISS-EST",
+            story_points=2,
+            can_take_in_work=True,
+            rationale="small isolated change.",
+        )
+    )
+
+    assert ref.external_id == "ISS-EST"
+    updated_description = calls[1]["variables"]["input"]["description"]
+    cleaned, parsed = _extract_input_block(updated_description)
+    assert cleaned == "User-visible description"
+    assert parsed == {
+        "estimate": {
+            "story_points": 2,
+            "can_take_in_work": True,
+            "rationale": "small isolated change.",
+        },
+        "selection": {
+            "taken_in_work": False,
+            "selected_from_parent_external_id": "ISS-ROOT",
+        },
+    }
 
 
 def test_attach_links_sends_one_mutation_per_link_in_order(

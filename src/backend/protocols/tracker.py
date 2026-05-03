@@ -11,6 +11,7 @@ from backend.schemas import (
     TrackerSubtaskCreatePayload,
     TrackerTask,
     TrackerTaskCreatePayload,
+    TrackerTaskEstimateUpdatePayload,
     TrackerTaskReference,
     TrackerTaskSelectionClaimPayload,
 )
@@ -32,6 +33,10 @@ class TrackerProtocol(Protocol):
 
     def claim_task_selection(
         self, payload: TrackerTaskSelectionClaimPayload
+    ) -> TrackerTaskReference: ...
+
+    def update_task_estimate(
+        self, payload: TrackerTaskEstimateUpdatePayload
     ) -> TrackerTaskReference: ...
 
     def attach_links(self, payload: TrackerLinksAttachPayload) -> TrackerTaskReference: ...
