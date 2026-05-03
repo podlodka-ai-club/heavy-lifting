@@ -125,7 +125,7 @@ If the footer is missing (legacy PR, edited body, fork mismatch), each feedback 
 
 #### Durable workspace identity after workspace sync
 
-After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. For normal `execute` flows that arrived without `workspace_key`, Worker 2 first generates a deterministic fallback from the tracker lineage and persists it on the execute task before workspace sync. Subsequent polling cycles and child tasks see the same durable `repo_url` and `workspace_key`.
+After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. For normal `execute` flows that arrived without `workspace_key`, Worker 2 first generates a deterministic fallback from the tracker lineage and persists it on the execute task before workspace sync. For estimate-thread `tracker_feedback` child tasks, Worker 2 also derives the same deterministic fallback when lineage still has an empty `workspace_key`, so SCM-skipped reply flows do not fail before response generation. Subsequent polling cycles and child tasks see the same durable `repo_url` and `workspace_key`.
 
 ## Deduplication Rules
 

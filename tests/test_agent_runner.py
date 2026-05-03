@@ -314,6 +314,7 @@ def test_cli_agent_runner_prompt_marks_estimate_only_execute_without_code_change
 
     assert "- This is an estimate-only task." in prompt
     assert "- Do not modify code or create SCM artifacts." in prompt
+    assert "ESTIMATE_JSON:" in prompt
     assert "- Apply concrete file changes directly in the workspace." not in prompt
 
 

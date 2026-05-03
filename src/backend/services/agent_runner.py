@@ -267,7 +267,10 @@ class CliAgentRunner:
             return [
                 "- This is an estimate-only task.",
                 "- Do not modify code or create SCM artifacts.",
-                "- Return the estimate together with a short rationale.",
+                "- Return exactly one machine-readable line:",
+                "  ESTIMATE_JSON: {\"story_points\": <int>, \"rationale\": \"<text>\"}.",
+                "- Optionally add a short human explanation after that line.",
+                "- Keep rationale specific and concise.",
             ]
         if context.flow_type == TaskType.TRACKER_FEEDBACK and _is_estimate_thread(context):
             return [

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections.abc import Callable
@@ -571,8 +572,20 @@ class ExecuteWorker:
         if current_feedback is None:
             raise ValueError("tracker_feedback task requires current feedback")
 
+        execute_task_entry = task_context.execute_task
+        if execute_task_entry is None:
+            raise ValueError("tracker_feedback task requires an execute ancestor")
+        execute_task = execute_task_entry.task
+        execute_result = parse_task_result_payload(execute_task) or TaskResultPayload(
+            summary="Tracker thread updated after follow-up comment."
+        )
+        inherited_estimate = _extract_normalized_estimate(metadata=execute_result.metadata)
+
         result_payload = self._build_result_payload(
-            agent_payload=self._build_delivery_only_payload(agent_payload=agent_payload),
+            agent_payload=self._build_delivery_only_payload(
+                agent_payload=agent_payload,
+                inherited_estimate=inherited_estimate,
+            ),
             flow_type=TaskType.TRACKER_FEEDBACK,
             branch_name=None,
             commit_sha=None,
@@ -587,14 +600,6 @@ class ExecuteWorker:
             branch_name=None,
             pr_external_id=None,
             pr_url=None,
-        )
-
-        execute_task_entry = task_context.execute_task
-        if execute_task_entry is None:
-            raise ValueError("tracker_feedback task requires an execute ancestor")
-        execute_task = execute_task_entry.task
-        execute_result = parse_task_result_payload(execute_task) or TaskResultPayload(
-            summary="Tracker thread updated after follow-up comment."
         )
         execute_metadata = dict(execute_result.metadata)
         execute_metadata.update(
@@ -774,17 +779,23 @@ class ExecuteWorker:
         )
 
     def _build_delivery_only_payload(
-        self, *, agent_payload: TaskResultPayload
+        self,
+        *,
+        agent_payload: TaskResultPayload,
+        inherited_estimate: dict[str, object] | None = None,
     ) -> TaskResultPayload:
         metadata = dict(agent_payload.metadata)
         metadata["delivery_mode"] = "estimate_only"
         tracker_comment = self._build_delivery_only_comment(agent_payload=agent_payload)
-        metadata["estimate"] = _derive_estimate_metadata(
-            metadata=metadata,
-            tracker_comment=tracker_comment,
-            summary=agent_payload.summary,
-            details=agent_payload.details,
-        )
+        if inherited_estimate is not None:
+            metadata["estimate"] = inherited_estimate
+        else:
+            metadata["estimate"] = _derive_estimate_metadata(
+                metadata=metadata,
+                tracker_comment=tracker_comment,
+                summary=agent_payload.summary,
+                details=agent_payload.details,
+            )
         return agent_payload.model_copy(
             update={
                 "branch_name": None,
@@ -845,6 +856,8 @@ class ExecuteWorker:
     def _resolve_workspace_key(self, *, task: Task, task_context: EffectiveTaskContext) -> str:
         if task_context.workspace_key:
             return task_context.workspace_key
+        if task.task_type == TaskType.TRACKER_FEEDBACK:
+            return _slugify(self._resolve_tracker_identifier(task=task, task_context=task_context))
         if task.task_type != TaskType.EXECUTE:
             raise ValueError("Worker 2 requires workspace_key for SCM workspace sync")
         return _slugify(self._resolve_tracker_identifier(task=task, task_context=task_context))
@@ -1089,6 +1102,17 @@ def _derive_estimate_metadata(
                 "rationale": rationale.strip(),
             }
 
+    structured_from_text = _extract_structured_estimate_from_text(
+        [tracker_comment, summary, details]
+    )
+    if structured_from_text is not None:
+        story_points, rationale = structured_from_text
+        return {
+            "story_points": story_points,
+            "can_take_in_work": story_points <= 2,
+            "rationale": rationale,
+        }
+
     parsed_story_points = _extract_story_points_from_text([tracker_comment, summary, details])
     rationale = _extract_rationale_from_text([tracker_comment, details, summary])
     if parsed_story_points is None or rationale is None:
@@ -1113,6 +1137,32 @@ def _extract_story_points_from_text(candidates: list[str | None]) -> int | None:
     return None
 
 
+def _extract_structured_estimate_from_text(
+    candidates: list[str | None],
+) -> tuple[int, str] | None:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        for line in candidate.splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith("estimate_json:"):
+                continue
+            raw_json = stripped.split(":", 1)[1].strip()
+            if not raw_json:
+                continue
+            try:
+                parsed = json.loads(raw_json)
+            except Exception:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            story_points = parsed.get("story_points")
+            rationale = parsed.get("rationale")
+            if isinstance(story_points, int) and isinstance(rationale, str) and rationale.strip():
+                return (story_points, rationale.strip())
+    return None
+
+
 def _extract_rationale_from_text(candidates: list[str | None]) -> str | None:
     for candidate in candidates:
         if not candidate:
@@ -1125,6 +1175,21 @@ def _extract_rationale_from_text(candidates: list[str | None]) -> str | None:
                 if value:
                     return value
     return None
+
+
+def _extract_normalized_estimate(*, metadata: dict[str, object]) -> dict[str, object] | None:
+    estimate = metadata.get("estimate")
+    if not isinstance(estimate, dict):
+        return None
+    story_points = estimate.get("story_points")
+    rationale = estimate.get("rationale")
+    if not isinstance(story_points, int) or not isinstance(rationale, str) or not rationale.strip():
+        return None
+    return {
+        "story_points": story_points,
+        "can_take_in_work": story_points <= 2,
+        "rationale": rationale.strip(),
+    }
 
 
 def _slugify(value: str) -> str:

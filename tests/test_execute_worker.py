@@ -805,6 +805,31 @@ def test_build_delivery_only_payload_rejects_multiline_without_explicit_reason(t
     assert "estimate_only normalization requires parseable story_points" in str(exc_info.value)
 
 
+def test_build_delivery_only_payload_parses_estimate_json_line(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=MockScm(),
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    payload = worker._build_delivery_only_payload(
+        agent_payload=TaskResultPayload(
+            summary=(
+                'ESTIMATE_JSON: {"story_points": 5, "rationale": "requires schema migration"}'
+            ),
+            details="Additional context for humans.",
+            metadata={"stdout_preview": "Estimate emitted."},
+        )
+    )
+
+    assert payload.metadata["estimate"] == {
+        "story_points": 5,
+        "can_take_in_work": False,
+        "rationale": "requires schema migration",
+    }
+
+
 def test_execute_worker_fails_estimate_only_task_when_estimate_is_unparseable(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     worker = ExecuteWorker(
@@ -1024,6 +1049,96 @@ def test_pr_feedback_still_requires_existing_workspace_key(tmp_path) -> None:
         assert feedback_task is not None
         assert feedback_task.status == TaskStatus.FAILED
         assert feedback_task.error == "Worker 2 requires workspace_key for SCM workspace sync"
+
+
+def test_tracker_feedback_derives_workspace_key_when_execute_lineage_missing_it(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = EnsureWorkspaceRecorderMockScm()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=RecordingAgentRunner(),
+        session_factory=session_factory,
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-TF-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                context={"title": "Estimate task"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_parent_id="TASK-TF-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                context={"title": "Estimate task"},
+                input_payload={
+                    "instructions": "Return only estimate. Do not modify code.",
+                    "metadata": {"estimate_only": True},
+                },
+                result_payload={
+                    "summary": "Estimate delivered.",
+                    "tracker_comment": "2 story points\nReason: small isolated change.",
+                    "metadata": {
+                        "delivery_mode": "estimate_only",
+                        "estimate": {
+                            "story_points": 2,
+                            "can_take_in_work": True,
+                            "rationale": "small isolated change.",
+                        },
+                    },
+                },
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.TRACKER_FEEDBACK,
+                parent_id=execute_task.id,
+                tracker_name="mock",
+                external_task_id="comment-42",
+                external_parent_id="TASK-TF-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                input_payload={
+                    "tracker_feedback": {
+                        "external_task_id": "TASK-TF-27",
+                        "comment_id": "comment-42",
+                        "body": "Поясни оценку",
+                    }
+                },
+            )
+        )
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert report.failed_tracker_feedback_tasks == 0
+    assert scm.ensure_workspace_payloads[0].workspace_key == "task-tf-27"
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert feedback_task.workspace_key == "task-tf-27"
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["metadata"]["estimate"] == {
+            "story_points": 2,
+            "can_take_in_work": True,
+            "rationale": "small isolated change.",
+        }
+        assert feedback_task.result_payload["tracker_comment"]
+        assert "story point" not in feedback_task.result_payload["tracker_comment"].lower()
+        assert "reason:" not in feedback_task.result_payload["tracker_comment"].lower()
 
 
 def test_execute_worker_propagates_repo_url_errors_from_scm_adapter(tmp_path) -> None:
