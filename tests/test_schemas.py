@@ -42,7 +42,7 @@ def test_task_context_serializes_mvp_fields() -> None:
         "title": "Add worker flow",
         "description": "Implement the execute worker.",
         "acceptance_criteria": ["Create PR", "Persist task result"],
-        "references": [{"label": "spec", "url": "https://example.test/spec"}],
+        "references": [{"label": "spec", "url": "https://example.test/spec", "origin": None}],
         "metadata": {"tracker": "mock"},
     }
 
@@ -178,7 +178,7 @@ def test_tracker_task_reuses_shared_task_context_and_enums() -> None:
             "title": "Implement tracker boundary",
             "description": None,
             "acceptance_criteria": [],
-            "references": [{"label": "spec", "url": "https://example.test/spec"}],
+            "references": [{"label": "spec", "url": "https://example.test/spec", "origin": None}],
             "metadata": {},
         },
         "input_payload": None,
