@@ -108,6 +108,8 @@ Runtime logs are emitted as structured JSON events from the API, workers, and ag
 
 The read-only factory API exposes the current pipeline view through `GET /factory`. It aggregates existing `tasks` rows into the ordered stations `fetch`, `execute`, `pr_feedback`, `tracker_feedback`, and `deliver`, reports WIP and queue/active/failed counts, and names the current bottleneck by largest WIP. It does not fabricate throughput, transition history, worker capacity, rework-loop, or business-kind analytics that are not present in the MVP data model.
 
+The operator API also exposes `POST /tasks/{task_id}/restart` for best-effort local retries of failed worker-owned tasks. It accepts only `failed` tasks of type `execute`, `pr_feedback`, `tracker_feedback`, or `deliver`, clears the task's stored failure/result state, and requeues the same row back to `new` without changing its `attempt` counter until a worker picks it up again. Workspace, branch, and PR context stay on the task so the next run can reuse the same execution thread. Because the original failure may have happened after a partial external side effect, a restart may repeat tracker, git, or PR actions and should be used as an operator-controlled retry rather than as an exactly-once guarantee.
+
 The economics API exposes the current money view through `GET /economics`, `POST /economics/mock-revenue`, and `PUT /economics/revenue/{root_task_id}`. It treats a root chain as closed when the chain has a successful `deliver` task and uses the first such `deliver.updated_at` as `closed_at`. Revenue is stored once per root in `task_revenue`, token cost is summed from `token_usage` across all tasks in the closed root chain, and aggregate profit is reported as displayed revenue minus displayed token cost. `GET /economics` defaults to the last 30 days when no period is supplied. Known gaps such as infra cost, runner hours, external accounting import, and retry waste remain explicit rather than being estimated silently.
 
 ## MVP Scope
@@ -126,6 +128,7 @@ The MVP intentionally stays narrow:
 - append-only agent retro feedback persistence plus read-only `/retro/entries` and `/retro/tags`;
 - prompt-management API for listing stored agent prompts, reading one prompt, and updating prompt content;
 - runtime-settings API for listing and updating persisted non-secret operational settings;
+- authenticated operator API for restarting a failed worker-owned local task by id;
 - authenticated operator API support for posting a manual tracker comment to an existing task thread by local task id;
 - support for implementation and PR feedback loops, with enough metadata to continue follow-up work.
 - estimate-only delivery-only routing that avoids SCM side effects while preserving the same execute-to-deliver pipeline.

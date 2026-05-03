@@ -245,6 +245,18 @@ class TaskRepository:
         self._session.flush()
         return task
 
+    def restart_failed_task(self, task_id: int) -> Task:
+        task = self._session.get(Task, task_id)
+        if task is None:
+            raise ValueError(f"Task {task_id} does not exist")
+
+        task.status = TaskStatus.NEW
+        task.error = None
+        task.result_payload = None
+
+        self._session.flush()
+        return task
+
     def record_token_usage(self, *, task_id: int, usage: TokenUsageCreateParams) -> TokenUsage:
         entry = TokenUsage(
             task_id=task_id,

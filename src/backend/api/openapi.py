@@ -474,6 +474,30 @@ def _cached_openapi_schema() -> dict[str, Any]:
                     },
                 }
             },
+            "/tasks/{task_id}/restart": {
+                "post": {
+                    "summary": "Restart a failed worker-owned local task",
+                    "operationId": "restartTask",
+                    "tags": ["tasks"],
+                    "security": [_basic_auth_security_requirement()],
+                    "parameters": [
+                        {
+                            "name": "task_id",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "integer", "minimum": 1},
+                        }
+                    ],
+                    "responses": {
+                        "200": _json_response("Restarted local task", "TaskResponse"),
+                        "404": _json_response("Task was not found", "ErrorResponse"),
+                        "409": _json_response(
+                            "Task cannot be restarted in its current state",
+                            "ErrorResponse",
+                        ),
+                    },
+                }
+            },
             "/openapi.json": {
                 "get": {
                     "summary": "Get OpenAPI schema",

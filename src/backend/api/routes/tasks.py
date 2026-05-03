@@ -18,8 +18,18 @@ from backend.schemas import (
     TrackerTaskCreatePayload,
 )
 from backend.services.tracker_task_resolution import resolve_tracker_external_task_id
+from backend.task_constants import TaskStatus, TaskType
 
 tasks_blueprint = Blueprint("tasks", __name__)
+
+_RESTARTABLE_TASK_TYPES = frozenset(
+    {
+        TaskType.EXECUTE,
+        TaskType.DELIVER,
+        TaskType.PR_FEEDBACK,
+        TaskType.TRACKER_FEEDBACK,
+    }
+)
 
 
 def _serialize_task(task: Task) -> dict[str, Any]:
@@ -203,6 +213,58 @@ def add_manual_tracker_comment(task_id: int):
         ),
         201,
     )
+
+
+@tasks_blueprint.post("/tasks/<int:task_id>/restart")
+def restart_task(task_id: int):
+    logger = get_logger(__name__, component="api")
+    session, repository = _build_repository()
+    try:
+        task = repository.get_task(task_id)
+        if task is None:
+            return jsonify({"error": f"Task {task_id} not found"}), 404
+
+        if task.task_type not in _RESTARTABLE_TASK_TYPES:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Only failed worker-owned tasks can be restarted; "
+                            f"task {task_id} has unsupported type {task.task_type.value}"
+                        )
+                    }
+                ),
+                409,
+            )
+
+        if task.status is not TaskStatus.FAILED:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Only failed worker-owned tasks can be restarted; "
+                            f"task {task_id} is {task.status.value}"
+                        )
+                    }
+                ),
+                409,
+            )
+
+        restarted_task = repository.restart_failed_task(task_id)
+        session.commit()
+    finally:
+        session.close()
+
+    logger.info(
+        "task_restarted",
+        task_id=restarted_task.id,
+        task_type=restarted_task.task_type.value,
+        root_task_id=restarted_task.root_id or restarted_task.id,
+        workspace_key=restarted_task.workspace_key,
+        branch_name=restarted_task.branch_name,
+        pr_external_id=restarted_task.pr_external_id,
+    )
+    return jsonify({"task": _serialize_task(restarted_task)})
 
 
 __all__ = ["tasks_blueprint"]

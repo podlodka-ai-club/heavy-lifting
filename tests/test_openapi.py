@@ -37,6 +37,7 @@ def test_get_openapi_json_describes_public_api() -> None:
         "/stats",
         "/tasks",
         "/tasks/{task_id}",
+        "/tasks/{task_id}/restart",
         "/tasks/{task_id}/tracker-comments",
         "/tasks/intake",
     }
@@ -114,6 +115,22 @@ def test_openapi_json_describes_manual_tracker_comment_endpoint() -> None:
             "scheme": "basic",
             "description": "HTTP Basic authentication for operator endpoints.",
         }
+    }
+
+
+def test_openapi_json_describes_task_restart_endpoint() -> None:
+    app = create_app(runtime=_runtime())
+
+    schema = app.test_client().get("/openapi.json").get_json()
+
+    assert schema is not None
+    operation = schema["paths"]["/tasks/{task_id}/restart"]["post"]
+    assert operation["security"] == [{"BasicAuth": []}]
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/TaskResponse"
+    }
+    assert operation["responses"]["409"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ErrorResponse"
     }
 
 

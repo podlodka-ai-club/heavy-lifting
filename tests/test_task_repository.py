@@ -267,6 +267,41 @@ def test_update_task_workspace_context_raises_for_unknown_task(session_factory) 
             repository.update_task_workspace_context(999, repo_url="x")
 
 
+def test_restart_failed_task_requeues_task_without_losing_workspace_or_pr_context(
+    session_factory,
+) -> None:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                status=TaskStatus.FAILED,
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-1",
+                branch_name="task26/retry-me",
+                pr_external_id="pr-26",
+                pr_url="https://example.test/pr/26",
+                result_payload={"summary": "failed"},
+                error="boom",
+                attempt=2,
+            )
+        )
+
+        restarted = repository.restart_failed_task(task.id)
+
+        assert restarted.status == TaskStatus.NEW
+        assert restarted.error is None
+        assert restarted.result_payload is None
+        assert restarted.repo_url == "https://example.test/repo.git"
+        assert restarted.repo_ref == "main"
+        assert restarted.workspace_key == "repo-1"
+        assert restarted.branch_name == "task26/retry-me"
+        assert restarted.pr_external_id == "pr-26"
+        assert restarted.pr_url == "https://example.test/pr/26"
+        assert restarted.attempt == 2
+
+
 def test_record_token_usage_persists_entry_for_task(session_factory) -> None:
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)

@@ -188,6 +188,19 @@ The MVP follow-up task creation rules are:
 
 This keeps event ingestion separate from the worker handoff contract: external events first become normalized facts, then routing decides whether to create a task.
 
+## Operator Restarts
+
+Operator-triggered restarts are not a new ingestion event kind. In the MVP they are a local API control that mutates one existing failed worker-owned task (`execute`, `pr_feedback`, `tracker_feedback`, or `deliver`) back to `new` so the normal worker polling loop can pick it up again.
+
+The restart path intentionally stays minimal:
+
+- it never creates a replacement task row;
+- it preserves repo/workspace/branch/PR linkage already stored on the task;
+- it clears stored `error` and `result_payload` from the failed attempt before requeueing;
+- it rejects unsupported task types such as `fetch` and any task not currently in `failed` state.
+
+This is best-effort retry behavior. If the original failed attempt already performed a partial external side effect before surfacing the error, a restart may repeat that side effect.
+
 ## Responsibility Split
 
 ### MVP Recommendation
