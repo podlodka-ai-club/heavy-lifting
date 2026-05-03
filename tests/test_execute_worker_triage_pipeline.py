@@ -15,6 +15,12 @@ Covers the four scenarios described in
 
 from __future__ import annotations
 
+from backend.adapters.mock_scm import MockScm
+from backend.db import session_scope
+from backend.models import Task
+from backend.repositories.task_repository import TaskCreateParams, TaskRepository
+from backend.task_constants import TaskStatus, TaskType
+from backend.workers.execute_worker import ExecuteWorker
 from test_execute_worker_triage_dispatch import (
     _HANDOVER_BRIEF_BODY,
     _build_session_factory,
@@ -23,13 +29,6 @@ from test_execute_worker_triage_dispatch import (
     _envelope,
     _FakeAgentRunner,
 )
-
-from backend.adapters.mock_scm import MockScm
-from backend.db import session_scope
-from backend.models import Task
-from backend.repositories.task_repository import TaskCreateParams, TaskRepository
-from backend.task_constants import TaskStatus, TaskType
-from backend.workers.execute_worker import ExecuteWorker
 
 # ---------------------------------------------------------------------------
 # Scenario A — SP=2 happy path → sibling impl + deliver(triage)

@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from test_execute_worker import EnsureWorkspaceRecorderMockScm, RecordingAgentRunner
-
 from backend.adapters.mock_scm import MockScm
 from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import Base, Task
@@ -13,6 +11,7 @@ from backend.schemas import ScmWorkspace, ScmWorkspaceEnsurePayload
 from backend.settings import get_settings
 from backend.task_constants import TaskType
 from backend.workers.execute_worker import ExecuteWorker
+from test_execute_worker import EnsureWorkspaceRecorderMockScm, RecordingAgentRunner
 
 
 def _build_session_factory(tmp_path):

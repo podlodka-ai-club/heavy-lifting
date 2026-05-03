@@ -8,14 +8,6 @@ and the negative paths for SP 5/8/13 escalations + edge cases.
 from __future__ import annotations
 
 import pytest
-from test_execute_worker_triage_dispatch import (
-    _HANDOVER_BRIEF_BODY,
-    _build_session_factory,
-    _build_settings,
-    _create_fetch,
-    _envelope,
-    _FakeAgentRunner,
-)
 
 from backend.adapters.mock_scm import MockScm
 from backend.db import session_scope
@@ -24,6 +16,14 @@ from backend.repositories.task_repository import TaskCreateParams, TaskRepositor
 from backend.schemas import TaskInputPayload, TaskResultPayload, TaskRoutingPayload
 from backend.task_constants import TaskStatus, TaskType
 from backend.workers.execute_worker import ExecuteWorker
+from test_execute_worker_triage_dispatch import (
+    _HANDOVER_BRIEF_BODY,
+    _build_session_factory,
+    _build_settings,
+    _create_fetch,
+    _envelope,
+    _FakeAgentRunner,
+)
 
 # ---------------------------------------------------------------------------
 # Test 1 — SP=2 happy path → sibling created with all expected fields
