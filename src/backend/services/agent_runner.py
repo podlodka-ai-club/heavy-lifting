@@ -272,10 +272,12 @@ class CliAgentRunner:
             text=True,
             timeout=self.config.timeout_seconds,
         )
+        stdout_parse = self._parse_stdout(completed_process.stdout)
         payload = self._build_payload(
             request=request,
             command=command,
             completed_process=completed_process,
+            stdout_parse=stdout_parse,
         )
         usage_metadata = payload.metadata.get("usage")
         usage_status = usage_metadata.get("status") if isinstance(usage_metadata, dict) else None
@@ -291,6 +293,7 @@ class CliAgentRunner:
             payload=payload,
             raw_stdout=completed_process.stdout,
             raw_stderr=completed_process.stderr,
+            parsed_stdout=stdout_parse.parsed_text,
         )
 
     def _build_command(self, *, request: AgentRunRequest, prompt: str) -> list[str]:
@@ -426,9 +429,9 @@ class CliAgentRunner:
         request: AgentRunRequest,
         command: list[str],
         completed_process: subprocess.CompletedProcess[str],
+        stdout_parse: _CliStdoutParseResult,
     ) -> TaskResultPayload:
         exit_code = completed_process.returncode
-        stdout_parse = self._parse_stdout(completed_process.stdout)
         stdout_preview = stdout_parse.preview
         stderr_parse = self._parse_stderr(completed_process.stderr)
         stderr_preview = stderr_parse.preview
@@ -560,6 +563,7 @@ class CliAgentRunner:
         if not lines:
             return _CliStdoutParseResult(
                 preview=None,
+                parsed_text=None,
                 raw_preview=raw_preview,
                 preview_source=None,
                 token_usage=[],
@@ -584,6 +588,7 @@ class CliAgentRunner:
             except json.JSONDecodeError as exc:
                 return _CliStdoutParseResult(
                     preview=raw_preview,
+                    parsed_text=None,
                     raw_preview=raw_preview,
                     preview_source="raw_stdout",
                     token_usage=[],
@@ -603,6 +608,7 @@ class CliAgentRunner:
             if not isinstance(event, dict):
                 return _CliStdoutParseResult(
                     preview=raw_preview,
+                    parsed_text=None,
                     raw_preview=raw_preview,
                     preview_source="raw_stdout",
                     token_usage=[],
@@ -638,6 +644,7 @@ class CliAgentRunner:
                 error_event = event
                 error_message = self._extract_error_message(event, part=part)
 
+        parsed_text = "\n".join(text_parts).strip() or None
         preview = self._build_preview("\n".join(text_parts))
         preview_source = "text_events" if preview else None
         if preview is None:
@@ -649,6 +656,7 @@ class CliAgentRunner:
         if step_finish_part is None:
             return _CliStdoutParseResult(
                 preview=preview,
+                parsed_text=parsed_text,
                 raw_preview=raw_preview,
                 preview_source=preview_source,
                 token_usage=[],
@@ -663,6 +671,7 @@ class CliAgentRunner:
         usage_parse_result = self._build_token_usage(step_finish_part)
         return _CliStdoutParseResult(
             preview=preview,
+            parsed_text=parsed_text,
             raw_preview=raw_preview,
             preview_source=preview_source,
             token_usage=usage_parse_result.token_usage,
@@ -885,6 +894,7 @@ class _CliUsageParseResult:
 @dataclass(frozen=True, slots=True)
 class _CliStdoutParseResult:
     preview: str | None
+    parsed_text: str | None
     raw_preview: str | None
     preview_source: str | None
     token_usage: list[TokenUsagePayload]

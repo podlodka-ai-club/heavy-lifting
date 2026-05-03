@@ -18,6 +18,7 @@ class AgentRunResult:
     payload: TaskResultPayload
     raw_stdout: str = ""
     raw_stderr: str = ""
+    parsed_stdout: str | None = None
 
     @property
     def token_usage(self) -> tuple[TokenUsagePayload, ...]:

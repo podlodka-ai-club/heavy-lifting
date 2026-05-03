@@ -128,6 +128,7 @@ class _FakeAgentRunner:
     """Minimal :class:`AgentRunnerProtocol` test double."""
 
     canned_stdout: str
+    parsed_stdout: str | None = None
     last_request: AgentRunRequest | None = None
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
@@ -136,6 +137,7 @@ class _FakeAgentRunner:
             payload=TaskResultPayload(summary="fake", token_usage=[]),
             raw_stdout=self.canned_stdout,
             raw_stderr="",
+            parsed_stdout=self.parsed_stdout,
         )
 
 
@@ -427,6 +429,31 @@ def test_triage_step_raises_on_malformed_output() -> None:
         )
 
     assert "triage_output_malformed" in str(excinfo.value)
+
+
+def test_triage_step_prefers_parsed_stdout_from_cli_text_events() -> None:
+    parsed_stdout = _envelope(
+        story_points=5,
+        task_kind="clarification",
+        outcome="needs_clarification",
+        markdown_body=_RFI_BODY,
+    )
+    runner = _FakeAgentRunner(
+        canned_stdout=(
+            '{"type":"text","part":{"type":"text",'
+            '"text":"<triage_result>\\nstory_points: 5"}}'
+        ),
+        parsed_stdout=parsed_stdout,
+    )
+    step = TriageStep(agent_runner=runner, triage_prompt_text=_TRIAGE_PROMPT_FIXTURE)
+
+    result = step.run(
+        task_context=_make_task_context(),
+        workspace_path="/tmp/workspace/repo-x",
+    )
+
+    assert result.decision.story_points == 5
+    assert result.result_payload.outcome == "needs_clarification"
 
 
 # ---------------------------------------------------------------------------

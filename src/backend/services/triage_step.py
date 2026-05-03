@@ -160,9 +160,10 @@ class TriageStep:
             prompt_override=prompt,
         )
         agent_result = self.agent_runner.run(request)
+        triage_raw_output = agent_result.parsed_stdout or agent_result.raw_stdout
 
         try:
-            decision = parse_triage_output(agent_result.raw_stdout)
+            decision = parse_triage_output(triage_raw_output)
         except TriageOutputError as exc:
             raise TriageStepError(
                 f"triage_output_malformed: {exc}",

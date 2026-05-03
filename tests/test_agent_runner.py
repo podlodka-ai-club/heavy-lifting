@@ -507,6 +507,8 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
             "cost_usd": Decimal("0.004321"),
         }
     ]
+    assert result.parsed_stdout == "Applied requested changes.\nCreated patch."
+    assert "stdout_parsed_text" not in result.summary_metadata
     assert result.summary_metadata == {
         "runner_adapter": "cli",
         "runner": "opencode",
@@ -1115,6 +1117,7 @@ def test_cli_agent_runner_prompt_includes_handover_brief() -> None:
 
     class _Context:
         flow_type = TaskType.EXECUTE
+        execute_task = None
         repo_url = None
         repo_ref = None
         branch_name = None
