@@ -30,6 +30,7 @@ from backend.schemas import (
     ScmReadPrFeedbackResult,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
+    ScmWorkspaceState,
 )
 
 _PR_METADATA_TAG = "heavy-lifting:pr-metadata:v1"
@@ -336,7 +337,8 @@ class GitHubScm:
         self._config.workspace_root.mkdir(parents=True, exist_ok=True)
         token = self._token()
 
-        if not local_path.exists():
+        workspace_existed = local_path.exists()
+        if not workspace_existed:
             self._git_run(
                 [
                     "git",
@@ -368,6 +370,16 @@ class GitHubScm:
                 branch_name=checked_out_branch,
                 token=token,
             )
+        elif payload.preserve_current_checkout and workspace_existed:
+            try:
+                branch = self._git_run(
+                    ["git", "branch", "--show-current"],
+                    cwd=str(local_path),
+                    token=token,
+                )
+                checked_out_branch = branch.stdout.strip() or None
+            except RuntimeError:
+                checked_out_branch = None
         else:
             self._git_run(
                 ["git", "checkout", resolved_ref],
@@ -434,6 +446,69 @@ class GitHubScm:
         )
         commit_sha = rev.stdout.strip()
         return commit_sha or None
+
+    def inspect_workspace(self, workspace_key: str) -> ScmWorkspaceState:
+        workspace = self._require_workspace(workspace_key)
+        token = self._token()
+
+        rev = self._git_run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=workspace.local_path,
+            token=token,
+        )
+        head_sha = rev.stdout.strip()
+
+        status = self._git_run(
+            ["git", "status", "--porcelain"],
+            cwd=workspace.local_path,
+            token=token,
+        )
+
+        branch = self._git_run(
+            ["git", "branch", "--show-current"],
+            cwd=workspace.local_path,
+            token=token,
+        )
+        branch_name = branch.stdout.strip() or None
+        has_commits_ahead_of_base = self._head_is_ahead_of_base(
+            workspace_path=workspace.local_path,
+            head_sha=head_sha,
+            base_ref=workspace.repo_ref,
+            token=token,
+        )
+
+        return ScmWorkspaceState(
+            workspace_key=workspace_key,
+            branch_name=branch_name,
+            head_commit_sha=head_sha or None,
+            has_uncommitted_changes=bool(status.stdout.strip()),
+            has_commits_ahead_of_base=has_commits_ahead_of_base,
+        )
+
+    def create_branch_from_current_head(
+        self, payload: ScmBranchCreatePayload
+    ) -> ScmBranchReference:
+        workspace = self._require_workspace(payload.workspace_key)
+        token = self._token()
+        self._git_run(
+            ["git", "checkout", "-B", payload.branch_name],
+            cwd=workspace.local_path,
+            token=token,
+        )
+        rev = self._git_run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=workspace.local_path,
+            token=token,
+        )
+        head_sha = rev.stdout.strip()
+        workspace.branch_name = payload.branch_name
+        return ScmBranchReference(
+            workspace_key=payload.workspace_key,
+            branch_name=payload.branch_name,
+            from_ref=head_sha or None,
+            head_commit_sha=head_sha or None,
+            metadata=dict(payload.metadata),
+        )
 
     def commit_changes(self, payload: ScmCommitChangesPayload) -> ScmCommitReference:
         workspace = self._require_workspace(payload.workspace_key)
@@ -756,6 +831,37 @@ class GitHubScm:
             stdout = (exc.stdout or "").strip()
             sanitized = _sanitize_token(stderr or stdout, token)
             raise RuntimeError(f"git command failed: {sanitized}") from exc
+
+    def _head_is_ahead_of_base(
+        self,
+        *,
+        workspace_path: str,
+        head_sha: str,
+        base_ref: str | None,
+        token: str | None,
+    ) -> bool:
+        if not head_sha or not base_ref:
+            return False
+
+        candidate_refs = [f"{self._config.default_remote}/{base_ref}", base_ref]
+        local_path = Path(workspace_path)
+        for candidate_ref in candidate_refs:
+            if not self._git_ref_exists(
+                local_path=local_path,
+                ref=candidate_ref,
+                token=token,
+            ):
+                continue
+            try:
+                result = self._git_run(
+                    ["git", "rev-list", "--count", f"{candidate_ref}..{head_sha}"],
+                    cwd=workspace_path,
+                    token=token,
+                )
+                return int(result.stdout.strip() or "0") > 0
+            except (RuntimeError, ValueError):
+                return False
+        return False
 
     def _checkout_branch(
         self,

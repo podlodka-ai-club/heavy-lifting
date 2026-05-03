@@ -17,6 +17,7 @@ from backend.schemas import (
     ScmReadPrFeedbackResult,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
+    ScmWorkspaceState,
 )
 
 
@@ -26,6 +27,8 @@ class MockScm:
         self._branches: dict[tuple[str, str], ScmBranchReference] = {}
         self._pull_requests: dict[str, ScmPullRequestReference] = {}
         self._pr_feedback: list[ScmPullRequestFeedback] = []
+        self._workspace_heads: dict[str, str | None] = {}
+        self._dirty_workspaces: set[str] = set()
         self._commit_sequence = 0
         self._pull_request_sequence = 0
         self._feedback_sequence = 0
@@ -50,6 +53,7 @@ class MockScm:
                 metadata=stored_payload.metadata,
             )
             self._workspaces[stored_payload.workspace_key] = workspace
+            self._workspace_heads[stored_payload.workspace_key] = None
         else:
             workspace.repo_url = repo_url
             workspace.repo_ref = stored_payload.repo_ref
@@ -78,6 +82,39 @@ class MockScm:
             return None
         return branch.head_commit_sha
 
+    def inspect_workspace(self, workspace_key: str) -> ScmWorkspaceState:
+        workspace = self._require_workspace(workspace_key)
+        head_commit_sha = self._workspace_heads.get(workspace_key)
+        if workspace.branch_name is not None:
+            branch = self._branches.get((workspace_key, workspace.branch_name))
+            if branch is not None:
+                head_commit_sha = branch.head_commit_sha
+        return ScmWorkspaceState(
+            workspace_key=workspace_key,
+            branch_name=workspace.branch_name,
+            head_commit_sha=head_commit_sha,
+            has_uncommitted_changes=workspace_key in self._dirty_workspaces,
+            has_commits_ahead_of_base=False,
+        )
+
+    def create_branch_from_current_head(
+        self, payload: ScmBranchCreatePayload
+    ) -> ScmBranchReference:
+        workspace = self._require_workspace(payload.workspace_key)
+        stored_payload = payload.model_copy(deep=True)
+        state = self.inspect_workspace(stored_payload.workspace_key)
+        branch = ScmBranchReference(
+            workspace_key=stored_payload.workspace_key,
+            branch_name=stored_payload.branch_name,
+            from_ref=state.head_commit_sha or stored_payload.from_ref or workspace.repo_ref,
+            head_commit_sha=state.head_commit_sha,
+            metadata=stored_payload.metadata,
+        )
+        self._branches[(stored_payload.workspace_key, stored_payload.branch_name)] = branch
+        workspace.branch_name = stored_payload.branch_name
+        self._workspace_heads[stored_payload.workspace_key] = state.head_commit_sha
+        return branch.model_copy(deep=True)
+
     def commit_changes(self, payload: ScmCommitChangesPayload) -> ScmCommitReference:
         branch = self._require_branch(payload.workspace_key, payload.branch_name)
         stored_payload = payload.model_copy(deep=True)
@@ -90,6 +127,10 @@ class MockScm:
             metadata=stored_payload.metadata,
         )
         branch.head_commit_sha = commit.commit_sha
+        workspace = self._require_workspace(stored_payload.workspace_key)
+        workspace.branch_name = stored_payload.branch_name
+        self._workspace_heads[stored_payload.workspace_key] = commit.commit_sha
+        self._dirty_workspaces.discard(stored_payload.workspace_key)
         return commit.model_copy(deep=True)
 
     def push_branch(self, payload: ScmPushBranchPayload) -> ScmPushReference:

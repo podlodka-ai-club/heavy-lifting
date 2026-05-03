@@ -269,7 +269,9 @@ For new top-level tracker intake (`TrackerTask.parent_external_id` is empty), `w
 
 When estimate-only agent output is split across multiple text fields, `worker2` normalizes the final `tracker_comment` by merging `metadata.stdout_preview`, `tracker_comment`, and `details` in that order. The merged comment must preserve an already complete message, append missing rationale when only the estimate is present in the first field, and avoid duplicating the same estimate or reason twice.
 
-Tracker-thread follow-up for estimate-only work uses the same delivery-only pattern. `worker1` creates a `tracker_feedback` child with `input_payload.tracker_feedback`, `worker2` replies without branch/commit/push/PR side effects, and `worker3` posts the follow-up comment back into the same tracker thread. The reply result keeps `metadata.flow_type = tracker_feedback`, `metadata.pr_action = skipped`, and updates the owning execute result metadata with the last tracker feedback id.
+Tracker-thread follow-up for estimate-only work starts in the delivery-only pattern. `worker1` creates a `tracker_feedback` child with `input_payload.tracker_feedback`, and `worker2` prepares the workspace without creating or resetting a branch. After the agent run, `worker2` compares the post-run workspace state with the pre-run state. If no committed `HEAD` advance, dirty tree, or clean `HEAD` already ahead of the base ref exists, the reply stays tracker-only: no branch/commit/push/PR side effects, `metadata.flow_type = tracker_feedback`, `metadata.pr_action = skipped`, and the owning execute result metadata records the last tracker feedback id. This text-only path must not require estimate normalization when the upstream result has no estimate metadata.
+
+If the tracker follow-up produces code work, `worker2` publishes the current post-run `HEAD` and dirty tree through SCM without resetting from the base ref. The backend then commits dirty changes when needed, pushes the branch, reuses an existing PR when lineage has one, or creates a PR for the code-work follow-up.
 
 ### PR Feedback
 
@@ -283,7 +285,7 @@ Tracker-thread follow-up for estimate-only work uses the same delivery-only patt
 - A tracker follow-up step uses `input_payload.action = reply_tracker` when an explicit business action is modeled.
 - It runs as a `tracker_feedback` task.
 - Feedback-specific data belongs in `input_payload.tracker_feedback`.
-- The task reuses the same tracker thread, skips SCM side effects, and creates a downstream `deliver` task under the feedback child so the reply is posted back to the same external task.
+- The task reuses the same tracker thread. Text-only replies skip SCM side effects; code-work replies follow the SCM publish/update path from the current post-run workspace state. In both cases the worker creates a downstream `deliver` task under the feedback child so the reply is posted back to the same external task.
 
 ### Delivery
 

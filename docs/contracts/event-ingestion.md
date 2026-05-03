@@ -125,7 +125,9 @@ If the footer is missing (legacy PR, edited body, fork mismatch), each feedback 
 
 #### Durable workspace identity after workspace sync
 
-After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. For normal `execute` flows that arrived without `workspace_key`, Worker 2 first generates a deterministic fallback from the tracker lineage and persists it on the execute task before workspace sync. For estimate-thread `tracker_feedback` child tasks, Worker 2 also derives the same deterministic fallback when lineage still has an empty `workspace_key`, so SCM-skipped reply flows do not fail before response generation. Subsequent polling cycles and child tasks see the same durable `repo_url` and `workspace_key`.
+After Worker 2 calls `ensure_workspace`, the resolved `repo_url` (which may have come from `GITHUB_DEFAULT_REPO_URL` rather than the task) is written back to the `tasks` row via `TaskRepository.update_task_workspace_context`. For normal `execute` flows that arrived without `workspace_key`, Worker 2 first generates a deterministic fallback from the tracker lineage and persists it on the execute task before workspace sync. For estimate-thread `tracker_feedback` child tasks, Worker 2 also derives the same deterministic fallback when lineage still has an empty `workspace_key`, so reply flows do not fail before response generation. Subsequent polling cycles and child tasks see the same durable `repo_url` and `workspace_key`.
+
+`tracker_feedback` workspace preparation must not create or reset a branch before the agent runs. Worker 2 records the pre-run workspace state, runs the agent, then inspects the post-run state. Text-only replies continue as tracker-only delivery with no SCM artifacts. If the post-run state contains a committed `HEAD` advance, dirty tree, or a clean `HEAD` that was already ahead of the base ref before a retry, Worker 2 publishes a branch from the current post-run `HEAD` while preserving dirty changes; it must not call the normal base/from_ref branch sync in a way that discards the agent's workspace result.
 
 ## Deduplication Rules
 
@@ -180,7 +182,7 @@ The MVP follow-up task creation rules are:
 
 - brand-new tracker tasks create a new thread that starts at triage;
 - clarification-bearing tracker comments may create a new `execute` task for re-triage;
-- estimate-only tracker follow-up comments may create a `tracker_feedback` child task that replies back into the same tracker thread without SCM side effects;
+- estimate-only tracker follow-up comments may create a `tracker_feedback` child task; text-only results reply back into the same tracker thread without SCM side effects, while code-work results are published from the current post-run workspace state before delivery;
 - other tracker comments are `metadata_only` unless a later MVP rule explicitly promotes them into actionable follow-up work;
 - tracker status changes are `metadata_only` in the MVP;
 - actionable PR feedback may create a new `pr_feedback` child task;

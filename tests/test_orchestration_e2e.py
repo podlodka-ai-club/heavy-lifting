@@ -1424,9 +1424,8 @@ def test_orchestration_flow_replies_to_estimate_only_tracker_comment_without_scm
         _RFI_BODY_SP5_ESTIMATE_ONLY.strip(),
         "Can you justify this estimate in more detail?",
         (
-            "Оценка задачи:\n"
-            "- Стоимость: 2 SP\n"
-            "- Можно брать в работу сейчас: да\n"
-            "- Обоснование: adding CLI command logging is a small isolated change."
+            "2 story points\n"
+            "Reason: adding CLI command logging is a small isolated change.\n"
+            "Reason: the extra explanation still does not require code changes."
         ),
     ]

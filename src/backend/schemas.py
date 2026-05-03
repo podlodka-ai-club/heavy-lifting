@@ -312,6 +312,9 @@ class ScmWorkspaceEnsurePayload(SchemaModel):
     workspace_key: str
     repo_ref: str | None = None
     branch_name: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    preserve_current_checkout: bool = Field(
+        default=False, exclude_if=lambda value: value is False
+    )
     metadata: JsonObject = Field(default_factory=dict)
 
 
@@ -321,6 +324,15 @@ class ScmWorkspace(SchemaModel):
     repo_ref: str | None = None
     local_path: str
     branch_name: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ScmWorkspaceState(SchemaModel):
+    workspace_key: str
+    branch_name: str | None = None
+    head_commit_sha: str | None = None
+    has_uncommitted_changes: bool = False
+    has_commits_ahead_of_base: bool = False
     metadata: JsonObject = Field(default_factory=dict)
 
 

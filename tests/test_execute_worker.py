@@ -9,7 +9,7 @@ from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import AgentFeedbackEntry, Base, Task, TokenUsage
 from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
-from backend.schemas import TaskLink, TaskResultPayload
+from backend.schemas import ScmCommitReference, TaskLink, TaskResultPayload
 from backend.services.agent_runner import LocalAgentRunner
 from backend.settings import get_settings
 from backend.task_constants import TaskStatus, TaskType
@@ -37,6 +37,93 @@ class EnsureWorkspaceRecorderMockScm(MockScm):
     def ensure_workspace(self, payload):
         self.ensure_workspace_payloads.append(payload.model_copy(deep=True))
         return super().ensure_workspace(payload)
+
+
+class TrackerFeedbackCodeWorkMockScm(MockScm):
+    def __init__(self) -> None:
+        super().__init__()
+        self.operation_log: list[str] = []
+        self.ensure_workspace_payloads = []
+        self.create_branch_calls: list[tuple[str, str]] = []
+        self.create_branch_from_current_head_calls: list[tuple[str, str, str | None]] = []
+        self.inspect_workspace_calls: list[str] = []
+        self._ahead_workspaces: set[str] = set()
+        self._pending_existing_ahead_heads: dict[str, str] = {}
+
+    def ensure_workspace(self, payload):
+        self.operation_log.append(f"ensure_workspace:{payload.branch_name}")
+        self.ensure_workspace_payloads.append(payload.model_copy(deep=True))
+        workspace = super().ensure_workspace(payload)
+        if payload.branch_name is not None:
+            stored_workspace = self._require_workspace(workspace.workspace_key)
+            stored_workspace.branch_name = payload.branch_name
+        existing_ahead_head = self._pending_existing_ahead_heads.get(workspace.workspace_key)
+        if existing_ahead_head is not None:
+            self._workspace_heads[workspace.workspace_key] = existing_ahead_head
+            self._ahead_workspaces.add(workspace.workspace_key)
+        elif self._workspace_heads[workspace.workspace_key] is None:
+            self._workspace_heads[workspace.workspace_key] = "base-commit-0001"
+        return workspace
+
+    def create_branch(self, payload):
+        self.operation_log.append(f"create_branch:{payload.branch_name}")
+        self.create_branch_calls.append((payload.workspace_key, payload.branch_name))
+        return super().create_branch(payload)
+
+    def inspect_workspace(self, workspace_key: str):
+        self.operation_log.append(f"inspect_workspace:{workspace_key}")
+        self.inspect_workspace_calls.append(workspace_key)
+        state = super().inspect_workspace(workspace_key)
+        return state.model_copy(
+            update={"has_commits_ahead_of_base": workspace_key in self._ahead_workspaces}
+        )
+
+    def create_branch_from_current_head(self, payload):
+        self.operation_log.append(f"create_branch_from_current_head:{payload.branch_name}")
+        self.create_branch_from_current_head_calls.append(
+            (payload.workspace_key, payload.branch_name, payload.from_ref)
+        )
+        return super().create_branch_from_current_head(payload)
+
+    def commit_changes(self, payload):
+        self.operation_log.append(f"commit_changes:{payload.branch_name}")
+        branch = self._require_branch(payload.workspace_key, payload.branch_name)
+        if (
+            payload.pre_run_head_sha is not None
+            and branch.head_commit_sha is not None
+            and branch.head_commit_sha != payload.pre_run_head_sha
+        ):
+            return ScmCommitReference(
+                workspace_key=payload.workspace_key,
+                branch_name=payload.branch_name,
+                commit_sha=branch.head_commit_sha,
+                message=payload.message,
+                metadata={**dict(payload.metadata), "reused_existing_commit": True},
+            )
+        return super().commit_changes(payload)
+
+    def push_branch(self, payload):
+        self.operation_log.append(f"push_branch:{payload.branch_name}")
+        return super().push_branch(payload)
+
+    def create_pull_request(self, payload):
+        self.operation_log.append(f"create_pull_request:{payload.branch_name}")
+        return super().create_pull_request(payload)
+
+    def mark_dirty(self, workspace_key: str) -> None:
+        self._dirty_workspaces.add(workspace_key)
+
+    def set_existing_ahead_head(self, workspace_key: str, commit_sha: str) -> None:
+        self._pending_existing_ahead_heads[workspace_key] = commit_sha
+
+    def advance_head(self, workspace_key: str, commit_sha: str) -> None:
+        workspace = self._require_workspace(workspace_key)
+        self._workspace_heads[workspace_key] = commit_sha
+        self._ahead_workspaces.add(workspace_key)
+        if workspace.branch_name is not None:
+            branch = self._branches.get((workspace_key, workspace.branch_name))
+            if branch is not None:
+                branch.head_commit_sha = commit_sha
 
 
 class RecordingAgentRunner(LocalAgentRunner):
@@ -121,6 +208,55 @@ class FailedCliAgentRunner:
                     "execution_status": "failed",
                     "failure_message": (f"CLI agent run failed with exit code {self.exit_code}."),
                 },
+            )
+        )
+
+
+class TrackerFeedbackCodeWorkAgentRunner:
+    def __init__(
+        self,
+        *,
+        scm: TrackerFeedbackCodeWorkMockScm,
+        mode: str,
+        commit_sha: str = "agent-commit-0001",
+    ) -> None:
+        self.scm = scm
+        self.mode = mode
+        self.commit_sha = commit_sha
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        self.scm.operation_log.append("agent_run")
+        workspace_key = request.metadata["workspace_key"]
+        assert isinstance(workspace_key, str)
+        if self.mode == "commit":
+            self.scm.advance_head(workspace_key, self.commit_sha)
+        elif self.mode == "dirty":
+            self.scm.mark_dirty(workspace_key)
+        else:
+            raise AssertionError(f"unknown code-work mode: {self.mode}")
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary="Tracker feedback code changes applied.",
+                details="Implemented requested follow-up.",
+            )
+        )
+
+
+class TrackerFeedbackTextAgentRunner:
+    def __init__(self, scm: TrackerFeedbackCodeWorkMockScm | None = None) -> None:
+        self.scm = scm
+        self.requests: list[AgentRunRequest] = []
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        if self.scm is not None:
+            self.scm.operation_log.append("agent_run")
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary="Tracker feedback answered.",
+                tracker_comment="I clarified the implementation details.",
             )
         )
 
@@ -1169,6 +1305,7 @@ def test_tracker_feedback_derives_workspace_key_when_execute_lineage_missing_it(
     assert report.processed_tracker_feedback_tasks == 1
     assert report.failed_tracker_feedback_tasks == 0
     assert scm.ensure_workspace_payloads[0].workspace_key == "task-tf-27"
+    assert scm.ensure_workspace_payloads[0].preserve_current_checkout is True
 
     with session_scope(session_factory=session_factory) as session:
         feedback_task = session.get(Task, 3)
@@ -1184,6 +1321,271 @@ def test_tracker_feedback_derives_workspace_key_when_execute_lineage_missing_it(
         assert feedback_task.result_payload["tracker_comment"]
         assert "story point" not in feedback_task.result_payload["tracker_comment"].lower()
         assert "reason:" not in feedback_task.result_payload["tracker_comment"].lower()
+
+
+def test_tracker_feedback_text_only_does_not_create_scm_artifacts_or_require_estimate(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = TrackerFeedbackCodeWorkMockScm()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=TrackerFeedbackTextAgentRunner(),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_chain(
+        session_factory=session_factory,
+        execute_result_payload={
+            "summary": "Previous text-only result.",
+            "tracker_comment": "Answered without estimate metadata.",
+            "metadata": {"delivery_mode": "text_reply"},
+        },
+    )
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert report.failed_tracker_feedback_tasks == 0
+    assert scm.create_branch_calls == []
+    assert scm.create_branch_from_current_head_calls == []
+    assert scm._branches == {}
+    assert scm._pull_requests == {}
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert feedback_task.branch_name is None
+        assert feedback_task.pr_external_id is None
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["metadata"]["pr_action"] == "skipped"
+        assert "estimate" not in feedback_task.result_payload["metadata"]
+
+
+def test_tracker_feedback_committed_head_advance_publishes_current_head_without_reset(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = TrackerFeedbackCodeWorkMockScm()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=TrackerFeedbackCodeWorkAgentRunner(
+            scm=scm,
+            mode="commit",
+            commit_sha="agent-commit-0001",
+        ),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_chain(session_factory=session_factory)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert report.failed_tracker_feedback_tasks == 0
+    assert scm.create_branch_calls == []
+    assert scm.create_branch_from_current_head_calls == [
+        ("repo-tf-code", "execute/task-tf-code", "agent-commit-0001")
+    ]
+    assert scm.operation_log.index("agent_run") < scm.operation_log.index(
+        "create_branch_from_current_head:execute/task-tf-code"
+    )
+    assert "create_branch:execute/task-tf-code" not in scm.operation_log
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        execute_task = session.get(Task, 2)
+        assert feedback_task is not None
+        assert execute_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert feedback_task.branch_name == "execute/task-tf-code"
+        assert feedback_task.pr_external_id == "1"
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["commit_sha"] == "agent-commit-0001"
+        assert feedback_task.result_payload["metadata"]["pr_action"] == "created"
+        assert execute_task.result_payload is not None
+        assert execute_task.result_payload["commit_sha"] == "agent-commit-0001"
+        deliver_task = TaskRepository(session).find_child_task(
+            parent_id=feedback_task.id,
+            task_type=TaskType.DELIVER,
+        )
+        assert deliver_task is not None
+        assert deliver_task.pr_external_id == "1"
+
+
+def test_tracker_feedback_retry_existing_ahead_head_is_published_without_reset(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = TrackerFeedbackCodeWorkMockScm()
+    scm.set_existing_ahead_head("repo-tf-code", "retry-ahead-commit-0001")
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=TrackerFeedbackTextAgentRunner(scm=scm),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_chain(session_factory=session_factory)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert report.failed_tracker_feedback_tasks == 0
+    assert scm.create_branch_calls == []
+    assert scm.create_branch_from_current_head_calls == [
+        ("repo-tf-code", "execute/task-tf-code", "retry-ahead-commit-0001")
+    ]
+    assert "commit_changes:execute/task-tf-code" not in scm.operation_log
+    assert scm.operation_log.index("agent_run") < scm.operation_log.index(
+        "create_branch_from_current_head:execute/task-tf-code"
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["commit_sha"] == "retry-ahead-commit-0001"
+        assert feedback_task.result_payload["metadata"]["pr_action"] == "created"
+
+
+def test_tracker_feedback_existing_pr_ahead_text_only_skips_scm_publish(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = TrackerFeedbackCodeWorkMockScm()
+    scm.set_existing_ahead_head("repo-tf-code", "existing-pr-ahead-commit-0001")
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=TrackerFeedbackTextAgentRunner(scm=scm),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_chain(
+        session_factory=session_factory,
+        execute_branch_name="feature/existing-pr",
+        execute_pr_external_id="7",
+        execute_pr_url="https://example.test/repo/pull/7",
+        execute_result_payload={
+            "summary": "Previous result.",
+            "branch_name": "feature/existing-pr",
+            "commit_sha": "existing-pr-ahead-commit-0001",
+            "pr_url": "https://example.test/repo/pull/7",
+            "tracker_comment": "Initial tracker answer.",
+            "metadata": {
+                "delivery_mode": "pull_request",
+                "pr_action": "created",
+            },
+        },
+    )
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert report.failed_tracker_feedback_tasks == 0
+    assert scm.create_branch_calls == []
+    assert scm.create_branch_from_current_head_calls == []
+    assert not any(entry.startswith("push_branch:") for entry in scm.operation_log)
+    assert not any(
+        entry.startswith("create_pull_request:") for entry in scm.operation_log
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert feedback_task.branch_name is None
+        assert feedback_task.pr_external_id is None
+        assert feedback_task.pr_url is None
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["metadata"]["pr_action"] == "skipped"
+        assert feedback_task.result_payload["branch_name"] is None
+        assert feedback_task.result_payload["pr_url"] is None
+
+
+def test_tracker_feedback_dirty_workspace_is_committed_and_published(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = TrackerFeedbackCodeWorkMockScm()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=TrackerFeedbackCodeWorkAgentRunner(scm=scm, mode="dirty"),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_chain(session_factory=session_factory)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert report.failed_tracker_feedback_tasks == 0
+    assert scm.create_branch_calls == []
+    assert scm.create_branch_from_current_head_calls == [
+        ("repo-tf-code", "execute/task-tf-code", "base-commit-0001")
+    ]
+    assert "commit_changes:execute/task-tf-code" in scm.operation_log
+    assert scm.inspect_workspace("repo-tf-code").has_uncommitted_changes is False
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["commit_sha"] == "mock-commit-0001"
+        assert feedback_task.result_payload["metadata"]["pr_action"] == "created"
+
+
+def test_tracker_feedback_existing_pr_branch_is_checked_out_before_agent_run(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = TrackerFeedbackCodeWorkMockScm()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=TrackerFeedbackCodeWorkAgentRunner(scm=scm, mode="dirty"),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_chain(
+        session_factory=session_factory,
+        execute_branch_name="feature/existing-pr",
+        execute_pr_external_id="7",
+        execute_pr_url="https://example.test/repo/pull/7",
+        execute_result_payload={
+            "summary": "Previous result.",
+            "branch_name": "feature/existing-pr",
+            "pr_url": "https://example.test/repo/pull/7",
+            "tracker_comment": "Initial tracker answer.",
+            "metadata": {
+                "delivery_mode": "pull_request",
+                "pr_action": "created",
+            },
+        },
+    )
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert report.failed_tracker_feedback_tasks == 0
+    assert scm.ensure_workspace_payloads[0].branch_name == "feature/existing-pr"
+    assert scm.ensure_workspace_payloads[0].preserve_current_checkout is False
+    assert scm.operation_log.index("ensure_workspace:feature/existing-pr") < (
+        scm.operation_log.index("agent_run")
+    )
+    assert scm.create_branch_calls == []
+    assert scm.create_branch_from_current_head_calls == [
+        ("repo-tf-code", "feature/existing-pr", "base-commit-0001")
+    ]
+    assert "create_pull_request:feature/existing-pr" not in scm.operation_log
+
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        execute_task = session.get(Task, 2)
+        assert feedback_task is not None
+        assert execute_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert feedback_task.branch_name == "feature/existing-pr"
+        assert feedback_task.pr_external_id == "7"
+        assert feedback_task.pr_url == "https://example.test/repo/pull/7"
+        assert feedback_task.result_payload is not None
+        assert feedback_task.result_payload["metadata"]["pr_action"] == "reused"
+        assert execute_task.branch_name == "feature/existing-pr"
+        assert execute_task.pr_external_id == "7"
+        assert execute_task.pr_url == "https://example.test/repo/pull/7"
 
 
 def test_execute_worker_propagates_repo_url_errors_from_scm_adapter(tmp_path) -> None:
@@ -1828,3 +2230,69 @@ def _build_session_factory(tmp_path):
     engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
     Base.metadata.create_all(engine)
     return build_session_factory(engine)
+
+
+def _seed_tracker_feedback_chain(
+    *,
+    session_factory,
+    execute_result_payload: dict | None = None,
+    execute_branch_name: str | None = None,
+    execute_pr_external_id: str | None = None,
+    execute_pr_url: str | None = None,
+) -> None:
+    if execute_result_payload is None:
+        execute_result_payload = {
+            "summary": "Previous result.",
+            "tracker_comment": "Initial tracker answer.",
+            "metadata": {"delivery_mode": "text_reply"},
+        }
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-TF-CODE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-tf-code",
+                context={"title": "Tracker code feedback"},
+            )
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_parent_id="TASK-TF-CODE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-tf-code",
+                branch_name=execute_branch_name,
+                pr_external_id=execute_pr_external_id,
+                pr_url=execute_pr_url,
+                context={"title": "Tracker code feedback"},
+                result_payload=execute_result_payload,
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.TRACKER_FEEDBACK,
+                parent_id=execute_task.id,
+                tracker_name="mock",
+                external_task_id="comment-code-1",
+                external_parent_id="TASK-TF-CODE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-tf-code",
+                input_payload={
+                    "tracker_feedback": {
+                        "external_task_id": "TASK-TF-CODE",
+                        "comment_id": "comment-code-1",
+                        "body": "Please make the follow-up change.",
+                    }
+                },
+            )
+        )

@@ -202,6 +202,58 @@ def test_ensure_workspace_resolves_default_branch_when_repo_ref_absent(tmp_path)
     assert sym_args[1:] == ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]
 
 
+def test_ensure_workspace_preserves_current_checkout_when_requested(tmp_path) -> None:
+    repo_dir = tmp_path / "widgets-preserve"
+    repo_dir.mkdir()
+    runner = FakeRunner()
+    runner.add_response()  # fetch
+    runner.add_response(stdout="retry-work\n")  # branch --show-current
+    scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
+
+    workspace = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://github.com/acme/widgets",
+            workspace_key="widgets-preserve",
+            repo_ref="main",
+            preserve_current_checkout=True,
+        )
+    )
+
+    assert workspace.repo_ref == "main"
+    assert workspace.branch_name == "retry-work"
+    fetch_args, fetch_cwd = runner.calls[0]
+    assert "fetch" in fetch_args
+    assert fetch_cwd == str(repo_dir)
+    assert runner.calls[1] == (["git", "branch", "--show-current"], str(repo_dir))
+    assert not any(call[0] == ["git", "checkout", "main"] for call in runner.calls)
+
+
+def test_ensure_workspace_preserve_checkout_still_checks_out_repo_ref_after_fresh_clone(
+    tmp_path,
+) -> None:
+    runner = FakeRunner()
+    runner.add_response()  # clone
+    runner.add_response()  # checkout
+    scm = GitHubScm(_build_config(tmp_path), runner=runner, http_client=FakeHttpClient())
+
+    workspace = scm.ensure_workspace(
+        ScmWorkspaceEnsurePayload(
+            repo_url="https://github.com/acme/widgets",
+            workspace_key="widgets-preserve-fresh",
+            repo_ref="develop",
+            preserve_current_checkout=True,
+        )
+    )
+
+    expected_local_path = (tmp_path / "widgets-preserve-fresh").resolve()
+    assert workspace.repo_ref == "develop"
+    assert workspace.local_path == str(expected_local_path)
+    clone_args, clone_cwd = runner.calls[0]
+    assert "clone" in clone_args
+    assert clone_cwd == str(tmp_path)
+    assert runner.calls[1] == (["git", "checkout", "develop"], str(expected_local_path))
+
+
 def test_ensure_workspace_checks_out_remote_branch_when_branch_name_requested(tmp_path) -> None:
     repo_dir = tmp_path / "widgets-feedback"
     repo_dir.mkdir()

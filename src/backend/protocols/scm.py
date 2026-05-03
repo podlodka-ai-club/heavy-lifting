@@ -13,6 +13,7 @@ from backend.schemas import (
     ScmReadPrFeedbackResult,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
+    ScmWorkspaceState,
 )
 
 
@@ -22,7 +23,13 @@ class ScmProtocol(Protocol):
 
     def get_head_commit(self, workspace_key: str, branch_name: str) -> str | None: ...
 
+    def inspect_workspace(self, workspace_key: str) -> ScmWorkspaceState: ...
+
     def create_branch(self, payload: ScmBranchCreatePayload) -> ScmBranchReference: ...
+
+    def create_branch_from_current_head(
+        self, payload: ScmBranchCreatePayload
+    ) -> ScmBranchReference: ...
 
     def commit_changes(self, payload: ScmCommitChangesPayload) -> ScmCommitReference: ...
 

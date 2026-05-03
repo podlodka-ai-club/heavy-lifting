@@ -26,11 +26,13 @@ from backend.repositories.task_repository import (
 from backend.schemas import (
     ScmBranchCreatePayload,
     ScmCommitChangesPayload,
+    ScmCommitReference,
     ScmPullRequestCreatePayload,
     ScmPullRequestMetadata,
     ScmPushBranchPayload,
     ScmWorkspace,
     ScmWorkspaceEnsurePayload,
+    ScmWorkspaceState,
     TaskHandoffPayload,
     TaskInputPayload,
     TaskLink,
@@ -66,6 +68,7 @@ class PreparedExecution:
     workspace: ScmWorkspace
     branch_name: str | None
     pre_run_head_sha: str | None
+    pre_run_workspace_state: ScmWorkspaceState | None
     runtime_metadata: dict[str, object]
     skip_scm_artifacts: bool = False
 
@@ -99,6 +102,16 @@ class PreparedTriageExecution:
     runtime_metadata: dict[str, object]
     workspace: ScmWorkspace | None = None
     cleanup_paths: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PublishedScmArtifacts:
+    branch_name: str
+    commit_sha: str
+    branch_url: str | None
+    pr_external_id: str
+    pr_url: str
+    pr_action: str
 
 
 @dataclass(slots=True)
@@ -236,12 +249,29 @@ class ExecuteWorker:
             branch_name = prepared_execution.branch_name
             commit_sha: str | None = None
             branch_url: str | None = None
-            pr_external_id = task.pr_external_id
-            pr_url = task.pr_url
+            pr_external_id = (
+                task.pr_external_id or prepared_execution.task_context.pr_external_id
+            )
+            pr_url = task.pr_url or prepared_execution.task_context.pr_url
             pr_action = "reused"
             if prepared_execution.skip_scm_artifacts:
                 if task_type == TaskType.PR_FEEDBACK:
                     raise ValueError("pr_feedback task requires SCM artifacts")
+                if task_type == TaskType.TRACKER_FEEDBACK:
+                    published_artifacts = self._publish_tracker_feedback_code_work(
+                        task=task,
+                        prepared_execution=prepared_execution,
+                        agent_payload=run_result.payload,
+                        pr_external_id=pr_external_id,
+                        pr_url=pr_url,
+                    )
+                    if published_artifacts is not None:
+                        branch_name = published_artifacts.branch_name
+                        commit_sha = published_artifacts.commit_sha
+                        branch_url = published_artifacts.branch_url
+                        pr_external_id = published_artifacts.pr_external_id
+                        pr_url = published_artifacts.pr_url
+                        pr_action = published_artifacts.pr_action
             else:
                 if branch_name is None:
                     raise ValueError("normal SCM execution requires branch_name")
@@ -309,6 +339,25 @@ class ExecuteWorker:
                     prepared_execution=prepared_execution,
                 )
                 if prepared_execution.skip_scm_artifacts:
+                    if task_type == TaskType.TRACKER_FEEDBACK and commit_sha is not None:
+                        if branch_name is None or pr_external_id is None or pr_url is None:
+                            raise ValueError(
+                                "tracker_feedback code work requires SCM artifacts"
+                            )
+                        self._complete_tracker_feedback_task_with_scm(
+                            repository=repository,
+                            task=persisted_task,
+                            task_context=prepared_execution.task_context,
+                            branch_name=branch_name,
+                            workspace=prepared_execution.workspace,
+                            commit_sha=commit_sha,
+                            branch_url=branch_url,
+                            pr_external_id=pr_external_id,
+                            pr_url=pr_url,
+                            pr_action=pr_action,
+                            agent_payload=run_result.payload,
+                        )
+                        return ExecuteWorkerReport(processed_tracker_feedback_tasks=1)
                     if task_type == TaskType.EXECUTE:
                         self._complete_execute_task_without_scm(
                             repository=repository,
@@ -622,12 +671,15 @@ class ExecuteWorker:
         workspace = self._ensure_workspace(task_context=task_context)
         branch_name = None
         pre_run_head_sha = None
+        pre_run_workspace_state = None
         try:
             if not skip_scm_artifacts:
                 branch_name = self._sync_branch(
                     task=task, task_context=task_context, workspace=workspace
                 )
                 pre_run_head_sha = self.scm.get_head_commit(workspace.workspace_key, branch_name)
+            elif task.task_type == TaskType.TRACKER_FEEDBACK:
+                pre_run_workspace_state = self.scm.inspect_workspace(workspace.workspace_key)
         except Exception as exc:
             failed_runtime_metadata: dict[str, object] = {
                 "task_id": task.id,
@@ -644,6 +696,7 @@ class ExecuteWorker:
                     workspace=workspace,
                     branch_name=branch_name,
                     pre_run_head_sha=None,
+                    pre_run_workspace_state=pre_run_workspace_state,
                     runtime_metadata=failed_runtime_metadata,
                     skip_scm_artifacts=skip_scm_artifacts,
                 ),
@@ -660,6 +713,16 @@ class ExecuteWorker:
         }
         if pre_run_head_sha is not None:
             runtime_metadata["pre_run_head_sha"] = pre_run_head_sha
+        if pre_run_workspace_state is not None:
+            runtime_metadata["pre_run_workspace_head_sha"] = (
+                pre_run_workspace_state.head_commit_sha
+            )
+            runtime_metadata["pre_run_workspace_dirty"] = (
+                pre_run_workspace_state.has_uncommitted_changes
+            )
+            runtime_metadata["pre_run_workspace_ahead_of_base"] = (
+                pre_run_workspace_state.has_commits_ahead_of_base
+            )
         _task_logger(
             task,
             workspace_key=workspace.workspace_key,
@@ -673,6 +736,7 @@ class ExecuteWorker:
             workspace=workspace,
             branch_name=branch_name,
             pre_run_head_sha=pre_run_head_sha,
+            pre_run_workspace_state=pre_run_workspace_state,
             runtime_metadata=runtime_metadata,
             skip_scm_artifacts=skip_scm_artifacts,
         )
@@ -835,8 +899,12 @@ class ExecuteWorker:
             raise ValueError("Worker 2 requires workspace_key for SCM workspace sync")
 
         checkout_branch_name = None
-        if task_context.flow_type == TaskType.PR_FEEDBACK:
+        if task_context.flow_type in {TaskType.PR_FEEDBACK, TaskType.TRACKER_FEEDBACK}:
             checkout_branch_name = task_context.branch_name
+        preserve_current_checkout = (
+            task_context.flow_type == TaskType.TRACKER_FEEDBACK
+            and not task_context.branch_name
+        )
 
         return self.scm.ensure_workspace(
             ScmWorkspaceEnsurePayload(
@@ -844,6 +912,7 @@ class ExecuteWorker:
                 workspace_key=workspace_key,
                 repo_ref=task_context.repo_ref,
                 branch_name=checkout_branch_name,
+                preserve_current_checkout=preserve_current_checkout,
                 metadata={
                     "flow_type": task_context.flow_type.value,
                     "root_task_id": task_context.root_task.task.id,
@@ -876,6 +945,114 @@ class ExecuteWorker:
             )
         )
         return branch_name
+
+    def _publish_tracker_feedback_code_work(
+        self,
+        *,
+        task: Task,
+        prepared_execution: PreparedExecution,
+        agent_payload: TaskResultPayload,
+        pr_external_id: str | None,
+        pr_url: str | None,
+    ) -> _PublishedScmArtifacts | None:
+        pre_run_state = prepared_execution.pre_run_workspace_state
+        post_run_state = self.scm.inspect_workspace(prepared_execution.workspace.workspace_key)
+        if not _has_tracker_feedback_code_work(
+            pre_run_state=pre_run_state,
+            post_run_state=post_run_state,
+            has_existing_scm_artifact=bool(pr_external_id or pr_url),
+        ):
+            return None
+
+        branch_name = self._resolve_branch_name(
+            task=task, task_context=prepared_execution.task_context
+        )
+        self.scm.create_branch_from_current_head(
+            ScmBranchCreatePayload(
+                workspace_key=prepared_execution.workspace.workspace_key,
+                branch_name=branch_name,
+                from_ref=post_run_state.head_commit_sha,
+                metadata={
+                    "task_id": task.id,
+                    "flow_type": task.task_type.value,
+                },
+            )
+        )
+        commit_message = self._resolve_commit_message(
+            task_context=prepared_execution.task_context
+        )
+        commit_metadata: dict[str, object] = {
+            "task_id": task.id,
+            "flow_type": task.task_type.value,
+        }
+        if post_run_state.has_uncommitted_changes:
+            pre_run_head_sha = (
+                pre_run_state.head_commit_sha if pre_run_state is not None else None
+            )
+            commit_reference = self.scm.commit_changes(
+                ScmCommitChangesPayload(
+                    workspace_key=prepared_execution.workspace.workspace_key,
+                    branch_name=branch_name,
+                    message=commit_message,
+                    pre_run_head_sha=pre_run_head_sha,
+                    metadata=commit_metadata,
+                )
+            )
+        else:
+            if post_run_state.head_commit_sha is None:
+                raise RuntimeError("tracker_feedback code work requires HEAD commit")
+            commit_reference = ScmCommitReference(
+                workspace_key=prepared_execution.workspace.workspace_key,
+                branch_name=branch_name,
+                commit_sha=post_run_state.head_commit_sha,
+                message=commit_message,
+                metadata={**commit_metadata, "reused_existing_commit": True},
+            )
+        push_reference = self.scm.push_branch(
+            ScmPushBranchPayload(
+                workspace_key=prepared_execution.workspace.workspace_key,
+                branch_name=branch_name,
+                metadata={
+                    "task_id": task.id,
+                    "flow_type": task.task_type.value,
+                },
+            )
+        )
+
+        pr_action = "reused"
+        if not pr_external_id or not pr_url:
+            pull_request = self.scm.create_pull_request(
+                ScmPullRequestCreatePayload(
+                    workspace_key=prepared_execution.workspace.workspace_key,
+                    branch_name=branch_name,
+                    base_branch=self._resolve_base_branch(prepared_execution.task_context),
+                    title=self._build_pr_title(prepared_execution.task_context),
+                    body=self._build_pr_body(
+                        task_context=prepared_execution.task_context,
+                        agent_payload=agent_payload,
+                    ),
+                    pr_metadata=self._build_pr_metadata(
+                        prepared_execution.task_context,
+                        workspace=prepared_execution.workspace,
+                    ),
+                    metadata={
+                        "task_id": task.id,
+                        "flow_type": task.task_type.value,
+                    },
+                )
+            )
+            pr_external_id = pull_request.external_id
+            pr_url = pull_request.url
+            pr_action = "created"
+
+        return _PublishedScmArtifacts(
+            branch_name=branch_name,
+            commit_sha=commit_reference.commit_sha,
+            branch_url=push_reference.branch_url,
+            pr_external_id=pr_external_id,
+            pr_url=pr_url,
+            pr_action=pr_action,
+        )
 
     def _complete_execute_task(
         self,
@@ -1061,6 +1238,95 @@ class ExecuteWorker:
             repository=repository, task=task, result_payload=result_payload
         )
 
+    def _complete_tracker_feedback_task_with_scm(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_context: EffectiveTaskContext,
+        branch_name: str,
+        workspace: ScmWorkspace,
+        commit_sha: str,
+        branch_url: str | None,
+        pr_external_id: str,
+        pr_url: str,
+        pr_action: str,
+        agent_payload: TaskResultPayload,
+    ) -> None:
+        current_feedback = task_context.current_feedback
+        if current_feedback is None:
+            raise ValueError("tracker_feedback task requires current feedback")
+
+        execute_task_entry = task_context.execute_task
+        if execute_task_entry is None:
+            raise ValueError("tracker_feedback task requires an execute ancestor")
+        execute_task = repository.get_task(execute_task_entry.task.id)
+        if execute_task is None:
+            raise ValueError(f"Task {execute_task_entry.task.id} does not exist")
+
+        result_payload = self._build_result_payload(
+            agent_payload=agent_payload,
+            flow_type=TaskType.TRACKER_FEEDBACK,
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            pr_url=pr_url,
+            branch_url=branch_url,
+            workspace=workspace,
+            pr_action=pr_action,
+        )
+        self._mark_task_done(
+            task=task,
+            result_payload=result_payload,
+            branch_name=branch_name,
+            pr_external_id=pr_external_id,
+            pr_url=pr_url,
+        )
+
+        execute_result = parse_task_result_payload(execute_task) or TaskResultPayload(
+            summary="Execution PR updated after tracker feedback."
+        )
+        execute_metadata = dict(execute_result.metadata)
+        execute_metadata.update(
+            {
+                "last_updated_flow": TaskType.TRACKER_FEEDBACK.value,
+                "last_feedback_task_id": task.id,
+                "last_feedback_comment_id": current_feedback.comment_id,
+            }
+        )
+        updated_execute_result = execute_result.model_copy(
+            update={
+                "branch_name": branch_name,
+                "commit_sha": commit_sha,
+                "pr_url": pr_url,
+                "metadata": execute_metadata,
+            }
+        )
+        execute_task.branch_name = branch_name
+        execute_task.pr_external_id = pr_external_id
+        execute_task.pr_url = pr_url
+        execute_task.result_payload = _dump_result_payload(updated_execute_result)
+        _task_logger(
+            task,
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            pr_external_id=pr_external_id,
+            pr_url=pr_url,
+            pr_action=pr_action,
+            tracker_comment_id=current_feedback.comment_id,
+        ).info("tracker_feedback_result_applied")
+
+        self._record_token_usage(
+            repository=repository, task_id=task.id, usage=result_payload.token_usage
+        )
+        self._record_agent_retro_feedback(
+            repository=repository, task=task, result_payload=result_payload
+        )
+        self._ensure_deliver_task(
+            repository=repository,
+            execute_task=task,
+            task_context=task_context,
+        )
+
     def _complete_tracker_feedback_task_without_scm(
         self,
         *,
@@ -1088,6 +1354,7 @@ class ExecuteWorker:
             agent_payload=self._build_delivery_only_payload(
                 agent_payload=agent_payload,
                 inherited_estimate=inherited_estimate,
+                require_estimate=False,
             ),
             flow_type=TaskType.TRACKER_FEEDBACK,
             branch_name=None,
@@ -1461,6 +1728,29 @@ def should_skip_scm_artifacts(*, task_context: EffectiveTaskContext) -> bool:
     if is_explicit_estimate_only_context(task_context):
         return True
     return _has_estimate_only_markers(task_context=task_context)
+
+
+def _has_tracker_feedback_code_work(
+    *,
+    pre_run_state: ScmWorkspaceState | None,
+    post_run_state: ScmWorkspaceState,
+    has_existing_scm_artifact: bool,
+) -> bool:
+    if post_run_state.has_uncommitted_changes:
+        return True
+
+    pre_run_head_sha = pre_run_state.head_commit_sha if pre_run_state is not None else None
+    post_run_head_sha = post_run_state.head_commit_sha
+    if not post_run_head_sha:
+        return False
+    if post_run_head_sha != pre_run_head_sha:
+        return True
+    if not post_run_state.has_commits_ahead_of_base:
+        return False
+    pre_run_was_ahead = (
+        pre_run_state.has_commits_ahead_of_base if pre_run_state is not None else False
+    )
+    return not (pre_run_was_ahead and has_existing_scm_artifact)
 
 
 def _has_estimate_only_markers(*, task_context: EffectiveTaskContext) -> bool:
