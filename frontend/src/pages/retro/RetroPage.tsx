@@ -18,13 +18,20 @@ function normalizeSeverity(severity: string): SeverityTone {
   return "info";
 }
 
-function dominantSeverity(counts: Record<string, number>): SeverityTone {
+function toSafeCount(value: number | string | null | undefined): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function dominantSeverity(
+  counts?: Record<string, number | string | null | undefined> | null
+): SeverityTone {
   const normalizedCounts = SEVERITY_ORDER.reduce<Record<SeverityTone, number>>(
     (acc, severity) => ({ ...acc, [severity]: 0 }),
     { error: 0, warning: 0, info: 0 }
   );
-  for (const [severity, count] of Object.entries(counts)) {
-    normalizedCounts[normalizeSeverity(severity)] += count;
+  for (const [severity, count] of Object.entries(counts ?? {})) {
+    normalizedCounts[normalizeSeverity(severity)] += toSafeCount(count);
   }
 
   return SEVERITY_ORDER.reduce<SeverityTone>((dominant, severity) => {
@@ -40,22 +47,29 @@ function severityColor(severity: string): string {
   return "var(--cyan)";
 }
 
-function tagFontSize(count: number, maxCount: number): number {
+function tagFontSize(count: number | string, maxCount: number): number {
+  const safeCount = toSafeCount(count);
   if (maxCount <= 1) return 1.2;
-  const ratio = Math.log(count + 1) / Math.log(maxCount + 1);
+  const ratio = Math.log(safeCount + 1) / Math.log(maxCount + 1);
   return 0.85 + ratio * 1.7;
 }
 
-function severityChips(counts: Record<string, number>): Array<[SeverityTone, number]> {
+function severityChips(
+  counts?: Record<string, number | string | null | undefined> | null
+): Array<[SeverityTone, number]> {
   const normalizedCounts: Record<SeverityTone, number> = {
     error: 0,
     warning: 0,
     info: 0,
   };
-  for (const [severity, count] of Object.entries(counts)) {
-    normalizedCounts[normalizeSeverity(severity)] += count;
+  for (const [severity, count] of Object.entries(counts ?? {})) {
+    normalizedCounts[normalizeSeverity(severity)] += toSafeCount(count);
   }
   return SEVERITY_ORDER.map(severity => [severity, normalizedCounts[severity]]);
+}
+
+function formatOptionalDate(value: string | null): string {
+  return value ? formatDateTime(value).split(",")[0] : "—";
 }
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
@@ -76,10 +90,10 @@ export function RetroPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const maxCount = tags.length > 0 ? Math.max(...tags.map(tag => tag.count)) : 1;
-  const totalEntries = tags.reduce((s, t) => s + t.count, 0);
+  const maxCount = tags.length > 0 ? Math.max(...tags.map(tag => toSafeCount(tag.count))) : 1;
+  const totalEntries = tags.reduce((s, t) => s + toSafeCount(t.count), 0);
   const errorCount = tags.reduce(
-    (s, t) => s + (t.severity_counts.error ?? 0) + (t.severity_counts.critical ?? 0),
+    (s, t) => s + toSafeCount(t.severity_counts?.error) + toSafeCount(t.severity_counts?.critical),
     0
   );
 
@@ -161,13 +175,14 @@ function PainCloud({
         {tags.map((tag, i) => {
           const severity = dominantSeverity(tag.severity_counts);
           const color = severityColor(severity);
-          const size = tagFontSize(tag.count, maxCount);
+          const count = toSafeCount(tag.count);
+          const size = tagFontSize(count, maxCount);
           const isSelected = selectedTag === tag.tag;
           const rotation = ((i * 7) % 11) - 5;
           return (
             <li key={tag.tag} className="rt-tag-item">
               <button
-                aria-label={`${tag.tag}: ${tag.count} entries, severity: ${severity}`}
+                aria-label={`${tag.tag}: ${count} entries, severity: ${severity}`}
                 aria-pressed={isSelected}
                 className={`rt-tag rt-sev-${severity}${isSelected ? " rt-tag-active" : ""}`}
                 style={{
@@ -179,7 +194,7 @@ function PainCloud({
                 onClick={() => onSelect(tag)}
               >
                 {tag.tag}
-                <span aria-hidden className="rt-tag-count">{tag.count}</span>
+                <span aria-hidden className="rt-tag-count">{count}</span>
               </button>
             </li>
           );
@@ -248,8 +263,8 @@ function TagDetailPanel({ tag, onClose }: { tag: RetroTag; onClose: () => void }
 
       <div className="rt-panel-body">
         <div className="rt-panel-stats">
-          <StatChip label="Всего" value={tag.count} />
-          <StatChip label="Задач" value={tag.affected_tasks_count} />
+          <StatChip label="Всего" value={toSafeCount(tag.count)} />
+          <StatChip label="Задач" value={toSafeCount(tag.affected_tasks_count)} />
           {severityChips(tag.severity_counts)
             .filter(([, cnt]) => cnt > 0)
             .map(([sev, cnt]) => (
@@ -260,8 +275,8 @@ function TagDetailPanel({ tag, onClose }: { tag: RetroTag; onClose: () => void }
                 value={cnt}
               />
             ))}
-          <StatChip label="Первый раз" value={formatDateTime(tag.first_seen).split(",")[0]} />
-          <StatChip label="Последний" value={formatDateTime(tag.last_seen).split(",")[0]} />
+          <StatChip label="Первый раз" value={formatOptionalDate(tag.first_seen)} />
+          <StatChip label="Последний" value={formatOptionalDate(tag.last_seen)} />
         </div>
 
         <div className="rt-panel-cols">

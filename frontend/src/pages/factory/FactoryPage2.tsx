@@ -1,31 +1,53 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { FactorySnapshot, FactoryStation, RuntimeSetting } from "../../api";
+import type { FactorySnapshot, FactoryStation, KnownFactoryStationName, RuntimeSetting } from "../../api";
 import { getFactorySnapshot, listRuntimeSettings, updateRuntimeSetting } from "../../api";
 import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
 import { formatAge, formatDateTime } from "../../lib/formatters";
 import "./factory2.css";
 
-type StationName = FactoryStation["name"];
+type StationName = string;
 
 /* ─── Meta per station ───────────────────────────────────────────────────── */
 
-const META: Record<
-  StationName,
-  { label: string; role: string; color: string; cls: string }
-> = {
+type FactoryPageStationMeta = { label: string; role: string; color: string; cls: string };
+
+const META: Record<KnownFactoryStationName, FactoryPageStationMeta> = {
   fetch:       { label: "FETCH",     role: "Загрузчик",        color: "var(--orange)", cls: "fetch"      },
   execute:     { label: "EXECUTE",   role: "Пресс",            color: "var(--yellow)", cls: "execute"    },
   pr_feedback: { label: "REVIEW",    role: "Контроль качества", color: "var(--cyan)",   cls: "review"     },
+  tracker_feedback: { label: "TRACKER", role: "Разбор трекера", color: "var(--green)",  cls: "tracker"    },
   deliver:     { label: "DELIVER",   role: "Отгрузка",          color: "var(--violet)", cls: "deliver"    },
 };
 
-const STATION_SETTING_KEYS: Record<StationName, string[]> = {
+const STATION_SETTING_KEYS: Record<KnownFactoryStationName, string[]> = {
   fetch:       ["tracker_fetch_limit"],
   execute:     ["execute_worker_batch_size", "cli_agent_preview_chars"],
   pr_feedback: ["pr_feedback_fetch_limit"],
+  tracker_feedback: [],
   deliver:     [],
 };
+
+function getFactoryPageMeta(name: string): FactoryPageStationMeta {
+  if (name in META) {
+    return META[name as KnownFactoryStationName];
+  }
+
+  return {
+    label: name.replaceAll("_", " ").toUpperCase(),
+    role: "Дополнительная станция",
+    color: "var(--muted-strong)",
+    cls: "unknown",
+  };
+}
+
+function getStationSettingKeys(name: string): string[] {
+  if (name in STATION_SETTING_KEYS) {
+    return STATION_SETTING_KEYS[name as KnownFactoryStationName];
+  }
+
+  return [];
+}
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
@@ -109,7 +131,7 @@ export function FactoryPage2() {
         <div className="hud-panel hud-card">
           <span className="mono-label">Bottleneck</span>
           <strong style={{ color: "var(--orange-2)", fontFamily: "var(--mono)", fontSize: "1.7rem" }}>
-            {bn ? META[bn].label : "none"}
+            {bn ? getFactoryPageMeta(bn).label : "none"}
           </strong>
           <span className="muted">{snapshot?.bottleneck ? `WIP ${snapshot.bottleneck.wip_count}` : "No WIP"}</span>
         </div>
@@ -126,7 +148,7 @@ export function FactoryPage2() {
             <span>{formatDateTime(snapshot.generated_at)}</span>
             {snapshot.stations.map(s => (
               <span key={s.name}>
-                {META[s.name].label.toLowerCase()} wip={s.wip_count} q={s.queue_count}
+                {getFactoryPageMeta(s.name).label.toLowerCase()} wip={s.wip_count} q={s.queue_count}
               </span>
             ))}
           </section>
@@ -286,7 +308,7 @@ function FactoryScene({
           {snapshot.stations.map((station, i) => {
             const isLast = i === snapshot.stations.length - 1;
             const isBottleneck = station.name === bottleneck;
-            const meta = META[station.name];
+            const meta = getFactoryPageMeta(station.name);
             const batchSize = station.name === "execute"
               ? Math.max(1, Math.min(
                   parseInt(settings.find(s => s.setting_key === "execute_worker_batch_size")?.value ?? "1") || 1,
@@ -331,7 +353,7 @@ function FactoryScene({
       <div className="f2-stats-row">
         {snapshot.stations.map(station => {
           const stationSettings = settings.filter(
-            s => STATION_SETTING_KEYS[station.name].includes(s.setting_key)
+            s => getStationSettingKeys(station.name).includes(s.setting_key)
           );
           return (
             <StationStats
@@ -389,8 +411,17 @@ const STATION_NEXT: Record<StationName, string> = {
   fetch:       "→ execute",
   execute:     "→ review / deliver",
   pr_feedback: "↩ execute · → deliver",
+  tracker_feedback: "↩ fetch · → deliver",
   deliver:     "→ done",
 };
+
+function stationNextLabel(name: string): string {
+  if (name in STATION_NEXT) {
+    return STATION_NEXT[name as KnownFactoryStationName];
+  }
+
+  return "-> pipeline";
+}
 
 function Machine({
   station,
@@ -409,7 +440,7 @@ function Machine({
   batchSize?: number;
   feedbackWip?: number;
 }) {
-  const meta = META[station.name];
+  const meta = getFactoryPageMeta(station.name);
   const active = station.active_count > 0 || station.wip_count > 0;
   const lightCls =
     isBottleneck ? "warn" : station.failed_count > 0 ? "bad" : active ? "ok" : "idle";
@@ -461,7 +492,7 @@ function Machine({
         <span
           className={`f2-nameplate-path${feedbackHighlight ? " f2-nameplate-path-active" : ""}`}
         >
-          {STATION_NEXT[station.name]}
+          {stationNextLabel(station.name)}
           {station.name === "pr_feedback" && feedbackWip > 0 ? ` ×${feedbackWip}` : ""}
         </span>
       </div>
@@ -540,7 +571,7 @@ function MachineInterior({
     );
   }
 
-  if (variant === "review") {
+  if (variant === "review" || variant === "tracker") {
     return (
       <>
         {/* Scanning arm */}
@@ -634,7 +665,7 @@ function StationStats({
   onValueChange: (key: string, value: string) => void;
   onSave: (key: string) => Promise<void>;
 }) {
-  const meta = META[station.name];
+  const meta = getFactoryPageMeta(station.name);
   const hasTunableSettings = stationSettings.length > 0;
 
   return (

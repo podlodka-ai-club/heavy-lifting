@@ -78,7 +78,7 @@ The read-only retro API exposes the collected data:
 - `GET /retro/entries` returns raw persisted feedback with optional `task_type`, `tag`, `severity`, `source`, and `limit` filters.
 - `GET /retro/tags` aggregates entries by tag and returns total count, severity counts, first and last seen timestamps, and affected task count.
 
-This v1 slice does not run a separate analyzer agent, infer embeddings, merge or split tags, create actions from tags, or provide a frontend visualization.
+This v1 slice does not run a separate analyzer agent, infer embeddings, merge or split tags, or create backend actions from tags. The frontend exposes the read-only retro aggregates as an operator visualization.
 
 ### Delivery
 
@@ -112,7 +112,7 @@ The read-only factory API exposes the current pipeline view through `GET /factor
 
 The operator API also exposes `POST /tasks/{task_id}/restart` for best-effort local retries of failed worker-owned tasks. It accepts only `failed` tasks of type `execute`, `pr_feedback`, `tracker_feedback`, or `deliver`, clears the task's stored failure/result state, and requeues the same row back to `new` without changing its `attempt` counter until a worker picks it up again. Workspace, branch, and PR context stay on the task so the next run can reuse the same execution thread. Because the original failure may have happened after a partial external side effect, a restart may repeat tracker, git, or PR actions and should be used as an operator-controlled retry rather than as an exactly-once guarantee.
 
-The economics API exposes the current money view through `GET /economics`, `POST /economics/mock-revenue`, and `PUT /economics/revenue/{root_task_id}`. It treats a root chain as closed when the chain has a successful `deliver` task and uses the first such `deliver.updated_at` as `closed_at`. Revenue is stored once per root in `task_revenue`, token cost is summed from `token_usage` across all tasks in the closed root chain, and aggregate profit is reported as displayed revenue minus displayed token cost. `GET /economics` defaults to the last 30 days when no period is supplied. Known gaps such as infra cost, runner hours, external accounting import, and retry waste remain explicit rather than being estimated silently.
+The economics API exposes the current money view through `GET /economics`, `POST /economics/mock-revenue`, and `PUT /economics/revenue/{root_task_id}`. It treats a root chain as closed when the chain has a successful `deliver` task and uses the first such `deliver.updated_at` as `closed_at`. Revenue is stored once per root in `task_revenue`, token cost is summed from `token_usage` across all tasks in the closed root chain, and aggregate profit is reported as displayed revenue minus displayed token cost. `GET /economics` defaults to the last 30 days when no period is supplied; the frontend "all" preset passes an explicit wide `from` date so it includes all available closed roots through the existing period contract. Known gaps such as infra cost, runner hours, external accounting import, and retry waste remain explicit rather than being estimated silently.
 
 ## MVP Scope
 

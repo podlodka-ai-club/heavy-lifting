@@ -132,6 +132,7 @@
 .f2-queue-fetch    { --q-color: var(--orange); }
 .f2-queue-execute  { --q-color: var(--yellow); }
 .f2-queue-review   { --q-color: var(--cyan);   }
+.f2-queue-tracker  { --q-color: var(--green);  }
 .f2-queue-deliver  { --q-color: var(--violet); }
 
 /* ─── Machine base styles ────────────────────────────────────────────────── */
@@ -211,6 +212,9 @@
 
 /* REVIEW — scanner, wider */
 .f2-machine-review  { width: 125px; height: 110px; }
+
+/* TRACKER — tracker feedback parser */
+.f2-machine-tracker { width: 125px; height: 110px; }
 
 /* DELIVER — dispatch station, medium */
 .f2-machine-deliver { width: 100px; height: 140px; }
@@ -676,7 +680,7 @@
   border-top: 1px solid var(--edge-soft);
   display: grid;
   gap: 0;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .f2-station-stats {
@@ -917,6 +921,7 @@
   .f2-machine-execute { height: 140px; }
   .f2-machine-deliver { height: 122px; }
   .f2-machine-review  { width: 105px; height: 92px; }
+  .f2-machine-tracker { width: 105px; height: 92px; }
   .f2-machine-fetch   { width: 78px;  height: 78px; }
 }
 

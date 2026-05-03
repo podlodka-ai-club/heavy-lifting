@@ -10,9 +10,18 @@ type LoadState = "idle" | "loading" | "loaded" | "error";
 type ActionState = "idle" | "running" | "done" | "error";
 
 type PeriodPreset = "7d" | "30d" | "90d" | "all";
+const ALL_PERIOD_FROM = "1970-01-01";
 
-function presetToPeriod(preset: PeriodPreset, bucket: "day" | "week" | "month"): EconomicsPeriodParams {
-  if (preset === "all") return { bucket };
+function presetToPeriod(
+  preset: PeriodPreset,
+  bucket: "day" | "week" | "month"
+): EconomicsPeriodParams | undefined {
+  if (preset === "all") {
+    return {
+      from: ALL_PERIOD_FROM,
+      bucket,
+    };
+  }
   const days = preset === "7d" ? 7 : preset === "30d" ? 30 : 90;
   const to = new Date();
   const from = new Date(to.getTime() - days * 86_400_000);
@@ -44,7 +53,7 @@ export function EconomicsPage2() {
   const [actionState, setActionState] = useState<ActionState>("idle");
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
-  const [preset, setPreset] = useState<PeriodPreset>("30d");
+  const [preset, setPreset] = useState<PeriodPreset>("all");
   const [bucket, setBucket] = useState<"day" | "week" | "month">("day");
   const reducedMotion = usePrefersReducedMotion();
 
@@ -161,7 +170,11 @@ export function EconomicsPage2() {
             </span>
             <span>{formatDateTime(snapshot.generated_at)}</span>
             <span>
-              {snapshot.period.from?.slice(0, 10)} → {snapshot.period.to?.slice(0, 10)}
+              {preset === "all"
+                ? "all available data"
+                : snapshot.period.from && snapshot.period.to
+                ? `${snapshot.period.from.slice(0, 10)} → ${snapshot.period.to.slice(0, 10)}`
+                : "all available data"}
             </span>
             <span className={snapshot.totals.missing_revenue_count > 0 ? "e2-warn" : ""}>
               missing: {snapshot.totals.missing_revenue_count}

@@ -21,8 +21,10 @@ export type RuntimeSetting = {
   updated_at: string;
 };
 
+export type KnownFactoryStationName = "fetch" | "execute" | "pr_feedback" | "tracker_feedback" | "deliver";
+
 export type FactoryStation = {
-  name: "fetch" | "execute" | "pr_feedback" | "deliver";
+  name: string;
   counts_by_status: {
     new: number;
     processing: number;
@@ -42,7 +44,7 @@ export type FactorySnapshot = {
   generated_at: string;
   stations: FactoryStation[];
   bottleneck: {
-    station: FactoryStation["name"];
+    station: string;
     wip_count: number;
   } | null;
   data_gaps: string[];
@@ -240,11 +242,11 @@ export async function generateMockRevenue(): Promise<MockRevenueResult> {
 
 export type RetroTag = {
   tag: string;
-  count: number;
-  severity_counts: Record<string, number>;
-  first_seen: string;
-  last_seen: string;
-  affected_tasks_count: number;
+  count: number | string;
+  severity_counts?: Record<string, number | string | null | undefined> | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  affected_tasks_count: number | string;
 };
 
 export type RetroEntry = {

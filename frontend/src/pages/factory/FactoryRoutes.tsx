@@ -20,6 +20,7 @@ export function FactoryRoutes({ stations, prefersReducedMotion }: FactoryRoutesP
       <path className="handoff-route route-fetch" d="M500 108 C410 168 285 238 178 334" />
       <path className="handoff-route route-execute" d="M500 108 C470 222 426 316 358 410" />
       <path className="handoff-route route-pr_feedback" d="M500 108 C574 224 642 316 730 408" />
+      <path className="handoff-route route-tracker_feedback" d="M500 108 C604 252 700 342 790 388" />
       <path className="handoff-route route-deliver" d="M500 108 C626 170 746 248 852 342" />
 
       {stationsWithWip.has("fetch") ? (
@@ -58,6 +59,19 @@ export function FactoryRoutes({ stations, prefersReducedMotion }: FactoryRoutesP
         >
           {prefersReducedMotion ? null : (
             <animateMotion dur="8s" repeatCount="indefinite" path="M500 108 C574 224 642 316 730 408" />
+          )}
+        </circle>
+      ) : null}
+      {stationsWithWip.has("tracker_feedback") ? (
+        <circle
+          className="payload-marker payload-tracker_feedback"
+          cx={prefersReducedMotion ? 790 : undefined}
+          cy={prefersReducedMotion ? 388 : undefined}
+          r="8"
+          aria-label="tracker feedback payload marker"
+        >
+          {prefersReducedMotion ? null : (
+            <animateMotion dur="8s" repeatCount="indefinite" path="M500 108 C604 252 700 342 790 388" />
           )}
         </circle>
       ) : null}

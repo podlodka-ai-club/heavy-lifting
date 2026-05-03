@@ -1,6 +1,6 @@
 import type { FactoryStation } from "../../api";
 import { formatAge } from "../../lib/formatters";
-import { stationMeta } from "./factoryMeta";
+import { getStationMeta } from "./factoryMeta";
 
 type StationCardProps = {
   station: FactoryStation;
@@ -8,7 +8,7 @@ type StationCardProps = {
 };
 
 export function StationCard({ station, isBottleneck }: StationCardProps) {
-  const meta = stationMeta[station.name];
+  const meta = getStationMeta(station.name);
 
   return (
     <article

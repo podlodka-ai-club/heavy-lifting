@@ -93,6 +93,20 @@ const factorySnapshot = {
       total_count: 0,
       counts_by_status: { new: 0, processing: 0, done: 0, failed: 0 }
     }),
+    factoryStation("tracker_feedback", {
+      total_count: 4,
+      wip_count: 2,
+      queue_count: 1,
+      active_count: 1,
+      counts_by_status: { new: 1, processing: 1, done: 2, failed: 0 }
+    }),
+    factoryStation("quality_gate", {
+      total_count: 1,
+      wip_count: 1,
+      queue_count: 0,
+      active_count: 1,
+      counts_by_status: { new: 0, processing: 1, done: 0, failed: 0 }
+    }),
     factoryStation("deliver", {
       total_count: 2,
       counts_by_status: { new: 0, processing: 0, done: 2, failed: 0 }
@@ -114,8 +128,8 @@ const factorySnapshot = {
 const economicsSnapshot = {
   generated_at: "2026-04-30T12:00:00+00:00",
   period: {
-    from: "2026-03-31T12:00:00+00:00",
-    to: "2026-04-30T12:00:00+00:00",
+    from: null,
+    to: null,
     bucket: "day"
   },
   totals: {
@@ -176,26 +190,26 @@ const economicsSnapshot = {
 const retroTags = [
   {
     tag: "acceptance-missing",
-    count: 8,
-    severity_counts: { error: 5, warning: 2, info: 1 },
+    count: "8",
+    severity_counts: { error: "5", critical: "1", warning: "2", info: "1" },
     first_seen: "2026-04-28T10:00:00+00:00",
     last_seen: "2026-04-30T12:00:00+00:00",
-    affected_tasks_count: 4
+    affected_tasks_count: "4"
   },
   {
     tag: "slow-ci",
-    count: 3,
-    severity_counts: { warning: 3 },
+    count: "3",
+    severity_counts: { warning: "3" },
     first_seen: "2026-04-29T10:00:00+00:00",
     last_seen: "2026-04-30T11:00:00+00:00",
     affected_tasks_count: 2
   },
   {
     tag: "trace-note",
-    count: 1,
-    severity_counts: { info: 1 },
-    first_seen: "2026-04-30T09:00:00+00:00",
-    last_seen: "2026-04-30T09:00:00+00:00",
+    count: "1",
+    severity_counts: null,
+    first_seen: null,
+    last_seen: null,
     affected_tasks_count: 1
   }
 ];
@@ -285,6 +299,10 @@ describe("App", () => {
     expect(await screen.findByText("GET /factory")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Factory Floor" })).toBeInTheDocument();
     expect(screen.getByText("execute wip=3 q=2")).toBeInTheDocument();
+    expect(screen.getByText("tracker wip=2 q=1")).toBeInTheDocument();
+    expect(screen.getByText("quality gate wip=1 q=0")).toBeInTheDocument();
+    expect(screen.getAllByText("TRACKER").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("QUALITY GATE").length).toBeGreaterThan(0);
     expect(screen.getByText("transition_history")).toBeInTheDocument();
     expect(screen.getByText("worker_capacity")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/factory");
@@ -363,12 +381,36 @@ describe("App", () => {
     expect(await screen.findByText("GET /economics")).toBeInTheDocument();
     expect(screen.getByText("$1,495.00")).toBeInTheDocument();
     expect(screen.getByText("TASK-10")).toBeInTheDocument();
+    expect(screen.getByText("all available data")).toBeInTheDocument();
     expect(screen.getByText("04-28")).toBeInTheDocument();
     expect(screen.getByText((content) => content.includes("infra") && content.includes("cost")))
       .toBeInTheDocument();
     expect(screen.getByText((content) => content.includes("retry") && content.includes("waste")))
       .toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/economics"));
+    expect(fetchMock).toHaveBeenCalledWith("/api/economics?from=1970-01-01&bucket=day");
+  });
+
+  it("loads all available economics data through an explicit wide period, then lets users choose another period", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (input.toString().startsWith("/api/economics")) {
+        return jsonResponse(economicsSnapshot);
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.pushState({}, "", "/economics");
+
+    render(<App />);
+
+    expect(await screen.findByText("GET /economics")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/economics?from=1970-01-01&bucket=day");
+
+    await userEvent.click(screen.getByRole("button", { name: "7d" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/economics\?.*bucket=day/))
+    );
   });
 
   it("generates mock revenue through the frontend api path and reloads economics", async () => {
@@ -467,9 +509,13 @@ describe("App", () => {
     const tagButton = await screen.findByRole("button", {
       name: "acceptance-missing: 8 entries, severity: error"
     });
+    expect(screen.getByText("12")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Retro overview")).getByText("6")).toBeInTheDocument();
     expect(tagButton).toHaveClass("rt-sev-error");
     expect(screen.getByRole("button", { name: "slow-ci: 3 entries, severity: warning" }))
       .toHaveClass("rt-sev-warning");
+    expect(screen.getByRole("button", { name: "trace-note: 1 entries, severity: info" }))
+      .toHaveClass("rt-sev-info");
     expect(within(screen.getByLabelText("Pain tag cloud")).getByRole("list"))
       .toBeInTheDocument();
 
