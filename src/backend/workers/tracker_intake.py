@@ -789,9 +789,7 @@ class TrackerIntakeWorker:
         report: TrackerIntakeReport,
     ) -> TrackerIntakeReport:
         task_context = self._build_task_context(repository=repository, task=execute_task)
-        if task_context is None or not self._should_poll_tracker_feedback(
-            execute_task, task_context
-        ):
+        if not self._should_poll_tracker_feedback(execute_task, task_context):
             return report
 
         logger = _task_logger(execute_task)
@@ -886,9 +884,20 @@ class TrackerIntakeWorker:
         return source == self._SYSTEM_COMMENT_SOURCE_VALUE
 
     def _should_poll_tracker_feedback(self, execute_task, task_context) -> bool:
-        return execute_task.pr_external_id is None and should_skip_scm_artifacts(
-            task_context=task_context
-        )
+        if execute_task.task_type != TaskType.EXECUTE:
+            return False
+        if execute_task.pr_external_id is not None:
+            return False
+
+        if _is_done_triage_tracker_thread_task(execute_task):
+            return True
+
+        if task_context is None:
+            return False
+
+        if should_skip_scm_artifacts(task_context=task_context):
+            return True
+        return False
 
     def _build_task_context(self, *, repository: TaskRepository, task):
         try:
@@ -941,6 +950,35 @@ def _read_escalation_kind(task: Task) -> str | None:
     if isinstance(kind, str):
         return kind
     return None
+
+
+def _is_done_triage_tracker_thread_task(task: Task) -> bool:
+    if task.status != TaskStatus.DONE:
+        return False
+
+    input_payload = task.input_payload
+    if not isinstance(input_payload, dict):
+        return False
+    if input_payload.get("action") != "triage":
+        return False
+
+    result_payload = task.result_payload
+    if not isinstance(result_payload, dict):
+        return False
+    delivery = result_payload.get("delivery")
+    if not isinstance(delivery, dict):
+        return False
+
+    escalation_kind = delivery.get("escalation_kind")
+    has_escalation_kind = isinstance(escalation_kind, str) and bool(escalation_kind.strip())
+
+    comment_body = delivery.get("comment_body")
+    has_comment_body = isinstance(comment_body, str) and bool(comment_body.strip())
+
+    tracker_comment = delivery.get("tracker_comment")
+    has_tracker_comment = isinstance(tracker_comment, str) and bool(tracker_comment.strip())
+
+    return has_escalation_kind or has_comment_body or has_tracker_comment
 
 
 def _worker_logger(**fields: object):
