@@ -1659,6 +1659,199 @@ def test_read_comments_returns_empty_when_issue_assigned_to_another_user(
     assert result.latest_cursor is None
 
 
+def test_read_comments_returns_newer_items_before_since_cursor_on_reverse_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {
+            "data": {
+                "issue": {
+                    "assignee": {"id": "viewer-1"},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "new-user-comment",
+                                "body": "new feedback",
+                                "url": "https://linear.app/comment/new",
+                                "user": {
+                                    "id": "user-1",
+                                    "name": "reporter",
+                                    "displayName": "Reporter",
+                                },
+                            },
+                            {
+                                "id": "old-cursor-system",
+                                "body": "old system comment",
+                                "url": "https://linear.app/comment/old",
+                                "user": {
+                                    "id": "user-bot",
+                                    "name": "hl-bot",
+                                    "displayName": "Heavy Lifting",
+                                },
+                            },
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }
+            }
+        }
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.read_comments(
+        TrackerReadCommentsQuery(
+            external_task_id="ISS-7",
+            since_cursor="old-cursor-system",
+            limit=10,
+        )
+    )
+
+    assert [item.comment_id for item in result.items] == ["new-user-comment"]
+    assert result.latest_cursor == "new-user-comment"
+    assert result.next_page_cursor is None
+
+
+def test_read_comments_stops_pagination_when_since_cursor_found_on_first_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {
+            "data": {
+                "issue": {
+                    "assignee": {"id": "viewer-1"},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "new-1",
+                                "body": "latest feedback",
+                                "url": "https://linear.app/comment/new-1",
+                                "user": {
+                                    "id": "user-1",
+                                    "name": "reporter",
+                                    "displayName": "Reporter",
+                                },
+                            },
+                            {
+                                "id": "seen-cursor",
+                                "body": "already processed",
+                                "url": "https://linear.app/comment/seen-cursor",
+                                "user": {
+                                    "id": "user-bot",
+                                    "name": "hl-bot",
+                                    "displayName": "Heavy Lifting",
+                                },
+                            },
+                        ],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "older-page-cursor"},
+                    },
+                }
+            }
+        }
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.read_comments(
+        TrackerReadCommentsQuery(external_task_id="ISS-7", since_cursor="seen-cursor", limit=10)
+    )
+
+    assert [item.comment_id for item in result.items] == ["new-1"]
+    assert result.latest_cursor == "new-1"
+    assert result.next_page_cursor is None
+
+
+def test_read_comments_keeps_since_cursor_when_no_new_items_before_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {
+            "data": {
+                "issue": {
+                    "assignee": {"id": "viewer-1"},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "seen-cursor",
+                                "body": "already processed",
+                                "url": "https://linear.app/comment/seen-cursor",
+                                "user": {
+                                    "id": "user-bot",
+                                    "name": "hl-bot",
+                                    "displayName": "Heavy Lifting",
+                                },
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "older-page-cursor"},
+                    },
+                }
+            }
+        }
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.read_comments(
+        TrackerReadCommentsQuery(external_task_id="ISS-7", since_cursor="seen-cursor", limit=10)
+    )
+
+    assert result.items == []
+    assert result.latest_cursor == "seen-cursor"
+    assert result.next_page_cursor is None
+
+
+def test_read_comments_when_since_cursor_not_found_returns_page_and_advances_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY_TEST", "lin_api_irrelevant")
+    body = json.dumps(
+        {
+            "data": {
+                "issue": {
+                    "assignee": {"id": "viewer-1"},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "new-2",
+                                "body": "latest",
+                                "url": "https://linear.app/comment/new-2",
+                                "user": {
+                                    "id": "user-1",
+                                    "name": "reporter",
+                                    "displayName": "Reporter",
+                                },
+                            },
+                            {
+                                "id": "new-1",
+                                "body": "older latest",
+                                "url": "https://linear.app/comment/new-1",
+                                "user": {
+                                    "id": "user-2",
+                                    "name": "author2",
+                                    "displayName": "Author 2",
+                                },
+                            },
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }
+            }
+        }
+    ).encode("utf-8")
+    fake, _ = _scripted_http_requester([body])
+    tracker = LinearTracker(_make_config(), http_requester=fake)
+
+    result = tracker.read_comments(
+        TrackerReadCommentsQuery(external_task_id="ISS-7", since_cursor="missing-cursor", limit=10)
+    )
+
+    assert [item.comment_id for item in result.items] == ["new-2", "new-1"]
+    assert result.latest_cursor == "new-2"
+
+
 def test_add_comment_raises_when_response_success_is_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

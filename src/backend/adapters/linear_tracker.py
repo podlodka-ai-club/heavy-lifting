@@ -969,24 +969,48 @@ class LinearTracker:
         if not isinstance(nodes, list):
             raise RuntimeError("Linear issue comments.nodes is not a list")
 
-        items: list[TrackerCommentPayload] = []
-        latest_cursor = query.since_cursor
-        skip_until_since = query.page_cursor is None and query.since_cursor is not None
-
+        parsed_items: list[TrackerCommentPayload] = []
         for raw_comment in nodes:
             item = self._to_tracker_comment(raw_comment, external_task_id=query.external_task_id)
-            if item is None:
-                continue
-            latest_cursor = item.comment_id
-            if skip_until_since:
-                if item.comment_id == query.since_cursor:
-                    skip_until_since = False
-                continue
-            items.append(item)
+            if item is not None:
+                parsed_items.append(item)
+
+        items: list[TrackerCommentPayload] = []
+        latest_cursor = query.since_cursor
+        first_page_with_since = query.page_cursor is None and query.since_cursor is not None
+
+        stop_pagination_on_first_page = False
+        if first_page_with_since:
+            since_index = next(
+                (
+                    index
+                    for index, item in enumerate(parsed_items)
+                    if item.comment_id == query.since_cursor
+                ),
+                None,
+            )
+            if since_index is not None:
+                items = parsed_items[:since_index]
+                stop_pagination_on_first_page = True
+            else:
+                items = parsed_items
+
+            if items:
+                latest_cursor = items[0].comment_id
+            elif since_index is None and parsed_items:
+                latest_cursor = parsed_items[0].comment_id
+        else:
+            items = parsed_items
+            if parsed_items:
+                latest_cursor = parsed_items[-1].comment_id
 
         page_info = comments_block.get("pageInfo")
         next_page_cursor = None
-        if isinstance(page_info, dict) and page_info.get("hasNextPage"):
+        if (
+            not stop_pagination_on_first_page
+            and isinstance(page_info, dict)
+            and page_info.get("hasNextPage")
+        ):
             end_cursor = page_info.get("endCursor")
             if isinstance(end_cursor, str) and end_cursor:
                 next_page_cursor = end_cursor
