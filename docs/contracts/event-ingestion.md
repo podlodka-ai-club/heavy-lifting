@@ -79,7 +79,7 @@ Normalization removes source-specific naming differences before deduplication an
 - The tracker read contract is `TrackerReadCommentsQuery(external_task_id, since_cursor, page_cursor, limit) -> TrackerReadCommentsResult(items, next_page_cursor, latest_cursor)`.
 - `latest_cursor` is persisted on the owning execute task as `context.metadata.tracker_comment_cursor` so repeated polls stay idempotent.
 - System-authored tracker comments created by the orchestrator carry `metadata.source = heavy_lifting` and must be ignored during polling.
-- For done triage tracker threads, `worker1` applies a deterministic confirmation rule: explicit markers like `бери в работу`, `приступай`, `go ahead`, `approved` create a sibling `execute(action=implementation)` under the same fetch parent (idempotent by root). Non-confirmation comments stay in the normal `tracker_feedback` path.
+- For done triage tracker threads, `worker1` does not start implementation directly from comment keywords anymore. Any non-system user comment becomes a `tracker_feedback` child task (with the same dedup and cursor semantics), and intent routing is deferred to `worker2`.
 - A tracker status update becomes `tracker_status_change` only if the change matters to orchestration decisions.
 - Tracker attachments or formatting-only edits may be stored as metadata and ignored for routing in the MVP.
 

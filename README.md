@@ -13,8 +13,8 @@
 
 ### Роли воркеров
 
-- `worker1` забирает задачи из tracker intake, создает `fetch` и дочерние `execute`, подхватывает PR/tracker feedback и может стартовать `implementation` из подтверждающего комментария после triage;
-- `worker2` обрабатывает `execute` и `pr_feedback`, готовит workspace, запускает `CliAgentRunner` или локальный runner, считает токены и работает с SCM;
+- `worker1` забирает задачи из tracker intake, создает `fetch` и дочерние `execute`, подхватывает PR/tracker feedback и переводит user tracker comments в `tracker_feedback` задачи (system comments игнорируются);
+- `worker2` обрабатывает `execute`, `pr_feedback` и `tracker_feedback`, готовит workspace, запускает `CliAgentRunner` или локальный runner, считает токены и работает с SCM;
 - `worker3` обрабатывает `deliver` и отправляет результат обратно в трекер.
 
 ## Runtime Flow
@@ -293,7 +293,7 @@ export POSTGRES_PASSWORD=heavy_lifting
   - `AGENT_RUNNER_ADAPTER=local|cli`
   - `SCM_ADAPTER=mock|github` (зависит от того, какой следующий сценарий выбран после классификации intent)
 - Что должно прийти из tracker comment: стабильный `comment_id`, `author`, `body`, ссылка на родительскую tracker task/thread, опционально `url` и дополнительная metadata.
-- Как работает маршрутизация: `worker1` нормализует комментарий и делает dedup. Дальше поддержаны безопасные ветки: (1) clarification/re-triage, (2) estimate-only -> `tracker_feedback`, (3) confirmation-after-ready-triage -> запуск sibling `execute(action=implementation)`.
+- Как работает маршрутизация: `worker1` нормализует комментарий, делает dedup/cursor и создает `tracker_feedback` для user comments в eligible triage thread. Дальше `worker2` извлекает structured intent (`COMMENT_INTENT_JSON`) и в MVP поддерживает: (1) `reply_comment`/`default` -> обычный deliver reply, (2) `start_implementation` -> создание sibling `execute(action=implementation)` только при latest ready triage + handover/routing guardrails, без auto-deliver по умолчанию.
 - Текущий лимит MVP: для активных implementation/research thread произвольные комментарии не должны автоматически запускать код, если нет явного правила; неподтверждающие комментарии остаются в `tracker_feedback` или `metadata_only` по контракту.
 - Подробности: `docs/contracts/event-ingestion.md`, `docs/contracts/task-handoff.md`.
 

@@ -179,9 +179,9 @@ The contract is materialised in `backend.schemas.TaskResultPayload`. Existing to
 Triage is the first execute step for a new tracker intake. Its `result_payload` shape is fixed by `docs/contracts/triage-routing.md`:
 
 - `outcome` is `routed` for SP `1/2/3`, `needs_clarification` for SP `5`, and `blocked` for SP `8/13`.
-- `routing.create_followup_task` is `true` only for SP `1/2/3`; this marks the triage outcome as ready-for-implementation, but the sibling implementation execute is created only after an explicit tracker confirmation comment.
+- `routing.create_followup_task` is `true` only for SP `1/2/3`; this marks the triage outcome as ready-for-implementation and allows a later tracker-feedback intent to start implementation.
 - `delivery.tracker_status` is always `null`. The triage `deliver` task only writes labels and a comment; closing the tracker issue is the responsibility of a later step.
-- `metadata.handover_brief` carries the full Handover Brief markdown for SP `1/2/3`. After explicit confirmation, `worker1` creates the sibling implementation execute and copies this text into `input_payload.handoff.brief_markdown`, so the implementation worker can read it through `EffectiveTaskContext.handover_brief` without a separate repository lookup.
+- `metadata.handover_brief` carries the full Handover Brief markdown for SP `1/2/3`. When `worker2` receives `tracker_feedback` intent `start_implementation` and latest triage is still ready, it creates the sibling implementation execute and copies this text into `input_payload.handoff.brief_markdown`.
 
 Example for a SP=2 triage outcome (abbreviated):
 
@@ -237,7 +237,7 @@ That rule applies to:
 
 - A new tracker task enters the system with `input_payload.action = triage`. `worker1` (`tracker_intake`) sets this default on the first execute task it creates.
 - Triage classifies the business task, estimates Story Points (one of `1/2/3/5/8/13`), and decides the next executable path.
-- Triage runs as an `execute` task. For SP `1/2/3` it stores the Handover Brief in `result_payload.metadata.handover_brief`, creates triage `deliver`, and waits for explicit tracker confirmation before starting implementation. After confirmation, `worker1` creates a sibling implementation execute under the same `fetch` parent with `input_payload.action = "implementation"` and `input_payload.handoff.brief_markdown` copied from triage result metadata. For SP `5/8/13` it stops at the triage `deliver` task and waits for a tracker user edit to start a new triage cycle.
+- Triage runs as an `execute` task. For SP `1/2/3` it stores the Handover Brief in `result_payload.metadata.handover_brief`, creates triage `deliver`, and waits for tracker feedback intent routing. `worker1` always creates `tracker_feedback` for user comments; `worker2` parses `COMMENT_INTENT_JSON` and only then may create a sibling implementation execute under the same `fetch` parent (guarded by latest-ready-triage and idempotency checks). For SP `5/8/13` it stops at triage `deliver` and waits for a tracker user edit to start a new triage cycle.
 - Triage never sets `delivery.tracker_status`; the tracker issue keeps its incoming status until a later step explicitly closes it.
 
 For the backlog-selection branch, the system may first choose one already estimated parent task and create a tracker subtask that carries the original context, repository coordinates, executable `input_payload`, and selection metadata. That subtask then enters the same `fetch -> execute -> deliver` pipeline as any other tracker intake.
@@ -285,7 +285,8 @@ If the tracker follow-up produces code work, `worker2` publishes the current pos
 - A tracker follow-up step uses `input_payload.action = reply_tracker` when an explicit business action is modeled.
 - It runs as a `tracker_feedback` task.
 - Feedback-specific data belongs in `input_payload.tracker_feedback`.
-- The task reuses the same tracker thread. Text-only replies skip SCM side effects; code-work replies follow the SCM publish/update path from the current post-run workspace state. In both cases the worker creates a downstream `deliver` task under the feedback child so the reply is posted back to the same external task.
+- The task reuses the same tracker thread. `worker2` reads structured comment intent (`COMMENT_INTENT_JSON`) with MVP decisions `reply_comment` and `start_implementation` (while preserving structured shape for future `rerun_triage`, `metadata_only`, `ask_clarification`). Text-only replies skip SCM side effects; code-work replies follow the SCM publish/update path from the current post-run workspace state.
+- For `start_implementation`, `worker2` closes the `tracker_feedback` task as `done`, records decision metadata, creates sibling implementation execute only when latest triage is ready and handover/routing allow it, and does not auto-create a `deliver` task by default.
 
 ### Delivery
 

@@ -339,6 +339,18 @@ class ExecuteWorker:
                     prepared_execution=prepared_execution,
                 )
                 if prepared_execution.skip_scm_artifacts:
+                    if task_type == TaskType.TRACKER_FEEDBACK:
+                        decision = self._resolve_tracker_feedback_intent(
+                            payload=run_result.payload
+                        )
+                        if decision == "start_implementation":
+                            if self._start_implementation_from_tracker_feedback(
+                                repository=repository,
+                                task=persisted_task,
+                                task_context=prepared_execution.task_context,
+                                agent_payload=run_result.payload,
+                            ):
+                                return ExecuteWorkerReport(processed_tracker_feedback_tasks=1)
                     if task_type == TaskType.TRACKER_FEEDBACK and commit_sha is not None:
                         if branch_name is None or pr_external_id is None or pr_url is None:
                             raise ValueError(
@@ -549,6 +561,192 @@ class ExecuteWorker:
             execute_task=task,
             task_context=task_context,
         )
+
+    def _start_implementation_from_tracker_feedback(
+        self,
+        *,
+        repository: TaskRepository,
+        task: Task,
+        task_context: EffectiveTaskContext,
+        agent_payload: TaskResultPayload,
+    ) -> bool:
+        triage_task = self._resolve_latest_ready_triage_for_feedback(
+            repository=repository,
+            task_context=task_context,
+        )
+        result_payload = self._build_result_payload(
+            agent_payload=self._build_delivery_only_payload(
+                agent_payload=agent_payload,
+                require_estimate=False,
+                strip_comment_intent_control_lines=True,
+            ),
+            flow_type=TaskType.TRACKER_FEEDBACK,
+            branch_name=None,
+            commit_sha=None,
+            pr_url=None,
+            branch_url=None,
+            workspace=None,
+            pr_action="skipped",
+        )
+        metadata = dict(result_payload.metadata)
+        metadata["comment_intent_decision"] = "start_implementation"
+
+        if triage_task is None:
+            metadata["comment_intent_status"] = "blocked"
+            metadata["comment_intent_reason"] = "latest_ready_triage_not_found"
+            result_payload = result_payload.model_copy(update={"metadata": metadata})
+            self._complete_tracker_feedback_task_without_scm(
+                repository=repository,
+                task=task,
+                task_context=task_context,
+                agent_payload=result_payload,
+            )
+            persisted_payload = task.result_payload if isinstance(task.result_payload, dict) else {}
+            raw_metadata = persisted_payload.get("metadata")
+            persisted_metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+            persisted_metadata.update(
+                {
+                    "comment_intent_decision": "start_implementation",
+                    "comment_intent_status": "blocked",
+                    "comment_intent_reason": "latest_ready_triage_not_found",
+                }
+            )
+            task.result_payload = {**persisted_payload, "metadata": persisted_metadata}
+            return True
+
+        created = self._create_implementation_followup_from_triage(
+            repository=repository,
+            triage_task=triage_task,
+        )
+        metadata["comment_intent_status"] = "started" if created else "idempotent"
+        metadata["comment_intent_source_triage_task_id"] = triage_task.id
+        result_payload = result_payload.model_copy(update={"metadata": metadata})
+        self._mark_task_done(
+            task=task,
+            result_payload=result_payload,
+            branch_name=None,
+            pr_external_id=None,
+            pr_url=None,
+        )
+        self._record_token_usage(
+            repository=repository, task_id=task.id, usage=result_payload.token_usage
+        )
+        self._record_agent_retro_feedback(
+            repository=repository, task=task, result_payload=result_payload
+        )
+        return True
+
+    def _resolve_latest_ready_triage_for_feedback(
+        self,
+        *,
+        repository: TaskRepository,
+        task_context: EffectiveTaskContext,
+    ) -> Task | None:
+        execute_task = task_context.execute_task.task if task_context.execute_task else None
+        if execute_task is None or execute_task.parent_id is None:
+            return None
+        latest_triage = repository.find_last_completed_triage_execute(
+            parent_id=execute_task.parent_id
+        )
+        if latest_triage is None:
+            return None
+        if not _is_ready_triage_for_implementation_start(latest_triage):
+            return None
+        return latest_triage
+
+    def _create_implementation_followup_from_triage(
+        self,
+        *,
+        repository: TaskRepository,
+        triage_task: Task,
+    ) -> bool:
+        root_id = triage_task.root_id or triage_task.id
+        existing = repository.find_implementation_execute_for_root(root_id)
+        if existing is not None:
+            return False
+        if triage_task.parent_id is None:
+            return False
+        payload = TaskInputPayload(
+            schema_version=1,
+            action="implementation",
+            handoff=TaskHandoffPayload(
+                from_task_id=triage_task.id,
+                from_role="triage",
+                brief_markdown=self._extract_handover_brief_from_task(triage_task),
+            ),
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                status=TaskStatus.NEW,
+                parent_id=triage_task.parent_id,
+                tracker_name=triage_task.tracker_name,
+                external_parent_id=triage_task.external_parent_id,
+                repo_url=triage_task.repo_url,
+                repo_ref=triage_task.repo_ref,
+                workspace_key=triage_task.workspace_key,
+                context=triage_task.context,
+                input_payload=payload.model_dump(mode="python"),
+            )
+        )
+        return True
+
+    def _resolve_tracker_feedback_intent(self, *, payload: TaskResultPayload) -> str:
+        for candidate in (
+            self._extract_intent_candidate(payload.metadata),
+            self._extract_intent_candidate(payload.details),
+            self._extract_intent_candidate(payload.summary),
+        ):
+            if candidate is not None:
+                return candidate
+        return "reply_comment"
+
+    def _extract_intent_candidate(self, source: object) -> str | None:
+        if isinstance(source, dict):
+            if "decision" not in source:
+                return None
+            return self._normalize_comment_intent(source)
+        if not isinstance(source, str):
+            return None
+        matched = re.search(r"COMMENT_INTENT_JSON:\s*(\{.*\})", source)
+        if matched is None:
+            return None
+        try:
+            payload = json.loads(matched.group(1))
+        except json.JSONDecodeError:
+            return "reply_comment"
+        return self._normalize_comment_intent(payload)
+
+    def _normalize_comment_intent(self, value: object) -> str:
+        if not isinstance(value, dict):
+            return "reply_comment"
+        decision = value.get("decision")
+        if not isinstance(decision, str) or not decision.strip():
+            return "reply_comment"
+        normalized = decision.strip().lower()
+        if normalized == "start_implementation":
+            return "start_implementation"
+        if normalized in {
+            "reply_comment",
+            "default",
+            "rerun_triage",
+            "metadata_only",
+            "ask_clarification",
+        }:
+            return "reply_comment"
+        return "reply_comment"
+
+    def _extract_handover_brief_from_task(self, task: Task) -> str | None:
+        payload = task.result_payload
+        if not isinstance(payload, dict):
+            return None
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        brief = metadata.get("handover_brief")
+        if isinstance(brief, str) and brief.strip():
+            return brief
+        return None
 
     def _ensure_followup_implementation_execute(
         self,
@@ -1350,6 +1548,7 @@ class ExecuteWorker:
                 agent_payload=agent_payload,
                 inherited_estimate=inherited_estimate,
                 require_estimate=False,
+                strip_comment_intent_control_lines=True,
             ),
             flow_type=TaskType.TRACKER_FEEDBACK,
             branch_name=None,
@@ -1549,10 +1748,14 @@ class ExecuteWorker:
         agent_payload: TaskResultPayload,
         inherited_estimate: dict[str, object] | None = None,
         require_estimate: bool = True,
+        strip_comment_intent_control_lines: bool = False,
     ) -> TaskResultPayload:
         metadata = dict(agent_payload.metadata)
         metadata["delivery_mode"] = "estimate_only"
-        tracker_comment = self._build_delivery_only_comment(agent_payload=agent_payload)
+        tracker_comment = self._build_delivery_only_comment(
+            agent_payload=agent_payload,
+            strip_comment_intent_control_lines=strip_comment_intent_control_lines,
+        )
         if inherited_estimate is not None:
             metadata["estimate"] = inherited_estimate
         else:
@@ -1576,14 +1779,23 @@ class ExecuteWorker:
             }
         )
 
-    def _build_delivery_only_comment(self, *, agent_payload: TaskResultPayload) -> str:
+    def _build_delivery_only_comment(
+        self,
+        *,
+        agent_payload: TaskResultPayload,
+        strip_comment_intent_control_lines: bool = False,
+    ) -> str:
         comment = ""
         for candidate in self._delivery_only_comment_sources(agent_payload=agent_payload):
             if not comment:
                 comment = candidate
                 continue
             comment = _merge_delivery_comment_text(comment, candidate)
-        return comment or agent_payload.summary
+        rendered = comment or agent_payload.summary
+        if not strip_comment_intent_control_lines:
+            return rendered
+        stripped = _strip_comment_intent_control_lines(rendered)
+        return stripped or "Комментарий обработан."
 
     def _delivery_only_comment_sources(self, *, agent_payload: TaskResultPayload) -> list[str]:
         sources: list[str | None] = []
@@ -1723,6 +1935,31 @@ def should_skip_scm_artifacts(*, task_context: EffectiveTaskContext) -> bool:
     if is_explicit_estimate_only_context(task_context):
         return True
     return _has_estimate_only_markers(task_context=task_context)
+
+
+def _is_ready_triage_for_implementation_start(task: Task) -> bool:
+    if task.status != TaskStatus.DONE:
+        return False
+    payload = task.input_payload
+    if not isinstance(payload, dict) or payload.get("action") != "triage":
+        return False
+    result_payload = task.result_payload
+    if not isinstance(result_payload, dict):
+        return False
+    metadata = result_payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    handover_brief = metadata.get("handover_brief")
+    if not isinstance(handover_brief, str) or not handover_brief.strip():
+        return False
+    routing = result_payload.get("routing")
+    if not isinstance(routing, dict):
+        return False
+    return (
+        routing.get("create_followup_task") is True
+        and routing.get("next_task_type") == "execute"
+        and routing.get("next_role") == "implementation"
+    )
 
 
 def _has_tracker_feedback_code_work(
@@ -1878,6 +2115,15 @@ def _merge_delivery_comment_text(current: str, candidate: str) -> str:
         merged_lines.append(normalized_line)
         existing_lines.add(canonical_line)
     return "\n".join(line for line in merged_lines if line.strip())
+
+
+def _strip_comment_intent_control_lines(text: str) -> str:
+    kept_lines = [
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith("COMMENT_INTENT_JSON:")
+    ]
+    return "\n".join(kept_lines).strip()
 
 
 def _derive_estimate_metadata(

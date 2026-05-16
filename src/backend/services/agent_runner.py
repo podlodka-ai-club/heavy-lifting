@@ -397,6 +397,18 @@ class CliAgentRunner:
                 "- Do not modify code or create SCM artifacts.",
                 "- Answer the latest tracker comment directly and concisely.",
             ]
+        if context.flow_type == TaskType.TRACKER_FEEDBACK:
+            return [
+                "- Reply in the existing tracker thread unless the comment explicitly "
+                "asks to start implementation.",
+                "- Do not modify code or create SCM artifacts.",
+                "- Return exactly one machine-readable line:",
+                "  COMMENT_INTENT_JSON: {\"decision\": \"reply_comment\" | "
+                "\"start_implementation\" | \"rerun_triage\" | \"metadata_only\" "
+                "| \"ask_clarification\", \"reason\": \"<short text>\"}.",
+                "- For MVP behavior, use only reply_comment or start_implementation decisions.",
+                "- Optionally add a short human explanation after that line.",
+            ]
         if context.flow_type == TaskType.PR_FEEDBACK:
             return [
                 "- Apply follow-up code changes on the existing branch for the PR.",

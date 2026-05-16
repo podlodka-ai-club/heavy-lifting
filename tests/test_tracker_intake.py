@@ -1112,7 +1112,7 @@ def test_tracker_intake_skips_non_estimate_only_execute_threads(session_factory)
     assert report.created_tracker_feedback_tasks == 0
 
 
-def test_tracker_intake_done_triage_confirmation_comment_creates_implementation_execute(
+def test_tracker_intake_done_triage_confirmation_comment_creates_tracker_feedback(
     session_factory,
 ) -> None:
     tracker = MockTracker()
@@ -1171,7 +1171,7 @@ def test_tracker_intake_done_triage_confirmation_comment_creates_implementation_
     ).poll_tracker_feedback_once()
 
     assert report.fetched_feedback_items == 1
-    assert report.created_tracker_feedback_tasks == 0
+    assert report.created_tracker_feedback_tasks == 1
 
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)
@@ -1180,15 +1180,10 @@ def test_tracker_intake_done_triage_confirmation_comment_creates_implementation_
             task_type=TaskType.TRACKER_FEEDBACK,
             external_task_id="comment-1",
         )
-        assert feedback_task is None
+        assert feedback_task is not None
 
         implementation_task = repository.find_implementation_execute_for_root(fetch_task.id)
-        assert implementation_task is not None
-        assert implementation_task.parent_id == fetch_task.id
-        assert implementation_task.status == TaskStatus.NEW
-        assert implementation_task.input_payload["action"] == "implementation"
-        assert implementation_task.input_payload["handoff"]["from_task_id"] == execute_task.id
-        assert implementation_task.input_payload["handoff"]["from_role"] == "triage"
+        assert implementation_task is None
 
 
 def test_tracker_intake_done_triage_non_confirmation_comment_creates_tracker_feedback(
@@ -1351,7 +1346,9 @@ def test_tracker_intake_done_triage_system_comment_skipped_without_children(
     assert report.skipped_feedback_items == 1
 
 
-def test_confirmation_uses_latest_ready_triage_handover(session_factory) -> None:
+def test_tracker_feedback_uses_latest_done_triage_and_keeps_cursor_semantics(
+    session_factory,
+) -> None:
     tracker = MockTracker()
     tracker_task = tracker.create_task(
         TrackerTaskCreatePayload(context=TaskContext(title="Re-triage"))
@@ -1422,7 +1419,7 @@ def test_confirmation_uses_latest_ready_triage_handover(session_factory) -> None
         session_factory=session_factory,
     ).poll_tracker_feedback_once()
 
-    assert report.created_tracker_feedback_tasks == 0
+    assert report.created_tracker_feedback_tasks == 1
 
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)
@@ -1432,12 +1429,16 @@ def test_confirmation_uses_latest_ready_triage_handover(session_factory) -> None
         )
         assert fetch_task is not None
         implementation_task = repository.find_implementation_execute_for_root(fetch_task.id)
-        assert implementation_task is not None
-        assert implementation_task.input_payload["handoff"]["from_task_id"] == triage_b_id
-        assert implementation_task.input_payload["handoff"]["brief_markdown"] == "brief-B"
+        assert implementation_task is None
+        feedback_task = repository.find_child_task_by_external_id(
+            parent_id=triage_b_id,
+            task_type=TaskType.TRACKER_FEEDBACK,
+            external_task_id="comment-1",
+        )
+        assert feedback_task is not None
 
 
-def test_confirmation_comment_advances_cursor_and_second_poll_is_noop(session_factory) -> None:
+def test_tracker_feedback_comment_advances_cursor_and_second_poll_is_noop(session_factory) -> None:
     tracker = MockTracker()
     tracker_task = tracker.create_task(TrackerTaskCreatePayload(context=TaskContext(title="Ready")))
     tracker.add_comment(
@@ -1489,7 +1490,7 @@ def test_confirmation_comment_advances_cursor_and_second_poll_is_noop(session_fa
 
     first = worker.poll_tracker_feedback_once()
     second = worker.poll_tracker_feedback_once()
-    assert first.created_tracker_feedback_tasks == 0
+    assert first.created_tracker_feedback_tasks == 1
     assert second.created_tracker_feedback_tasks == 0
     assert second.fetched_feedback_items == 0
 
@@ -1503,10 +1504,10 @@ def test_confirmation_comment_advances_cursor_and_second_poll_is_noop(session_fa
             task_type=TaskType.TRACKER_FEEDBACK,
             external_task_id="comment-1",
         )
-        assert feedback_task is None
+        assert feedback_task is not None
 
 
-def test_new_triage_does_not_consume_historical_confirmation_comment(session_factory) -> None:
+def test_new_triage_does_not_consume_historical_comment(session_factory) -> None:
     tracker = MockTracker()
     tracker_task = tracker.create_task(
         TrackerTaskCreatePayload(context=TaskContext(title="Historical"))
@@ -1563,7 +1564,7 @@ def test_new_triage_does_not_consume_historical_confirmation_comment(session_fac
         assert fetch_task is not None
         assert repository.find_implementation_execute_for_root(fetch_task.id) is None
 
-    # New confirmation after triage creation should start implementation.
+    # New user comment after triage creation should create tracker_feedback.
     tracker.add_comment(
         TrackerCommentCreatePayload(
             external_task_id=tracker_task.external_id,
@@ -1575,14 +1576,12 @@ def test_new_triage_does_not_consume_historical_confirmation_comment(session_fac
 
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)
-        fetch_task = repository.find_fetch_task_by_tracker_task(
-            tracker_name="mock",
-            external_task_id=tracker_task.external_id,
+        feedback_task = repository.find_child_task_by_external_id(
+            parent_id=triage_b_id,
+            task_type=TaskType.TRACKER_FEEDBACK,
+            external_task_id="comment-2",
         )
-        assert fetch_task is not None
-        impl = repository.find_implementation_execute_for_root(fetch_task.id)
-        assert impl is not None
-        assert impl.input_payload["handoff"]["from_task_id"] == triage_b_id
+        assert feedback_task is not None
 
 
 def test_build_tracker_intake_worker_uses_runtime_settings(session_factory) -> None:

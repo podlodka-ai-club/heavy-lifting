@@ -10,7 +10,7 @@ from backend.repositories.task_repository import TaskCreateParams, TaskRepositor
 from backend.schemas import TaskResultPayload
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
 from backend.services.context_builder import ContextBuilder
-from backend.task_constants import TaskType
+from backend.task_constants import TaskStatus, TaskType
 
 
 def test_local_agent_runner_returns_normalized_execute_result(tmp_path) -> None:
@@ -426,6 +426,23 @@ def test_cli_agent_runner_prompt_keeps_tracker_feedback_estimate_thread_comment_
     assert "- Reply in the existing tracker thread." in prompt
     assert "- Do not modify code or create SCM artifacts." in prompt
     assert "- Apply concrete file changes directly in the workspace." not in prompt
+
+
+def test_cli_agent_runner_prompt_requests_comment_intent_json_for_tracker_feedback(
+    tmp_path,
+) -> None:
+    task_context = _build_tracker_feedback_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=120)
+    )
+
+    prompt = runner._build_prompt(
+        AgentRunRequest(task_context=task_context, workspace_path=str(tmp_path / "workspace"))
+    )
+
+    assert "COMMENT_INTENT_JSON:" in prompt
+    assert "start_implementation" in prompt
+    assert "rerun_triage" in prompt
 
 
 def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
@@ -1094,6 +1111,45 @@ def _build_task_context(tmp_path):
 
         return ContextBuilder().build_for_task(
             task=execute_task,
+            task_chain=repository.load_task_chain(fetch_task.root_id),
+        )
+
+
+def _build_tracker_feedback_context(tmp_path):
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'feedback.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = build_session_factory(engine)
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(task_type=TaskType.FETCH, context={"title": "Tracker task"})
+        )
+        execute_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                input_payload={"action": "triage"},
+                result_payload={"summary": "Triage done."},
+                context={"title": "Tracker task"},
+            )
+        )
+        feedback_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.TRACKER_FEEDBACK,
+                parent_id=execute_task.id,
+                input_payload={
+                    "tracker_feedback": {
+                        "external_task_id": "TASK-1",
+                        "comment_id": "comment-1",
+                        "body": "Please start implementation.",
+                    }
+                },
+            )
+        )
+        return ContextBuilder().build_for_task(
+            task=feedback_task,
             task_chain=repository.load_task_chain(fetch_task.root_id),
         )
 

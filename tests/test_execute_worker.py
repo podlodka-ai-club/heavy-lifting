@@ -261,6 +261,29 @@ class TrackerFeedbackTextAgentRunner:
         )
 
 
+class TrackerFeedbackIntentAgentRunner:
+    def __init__(self, details: str | None = None) -> None:
+        self.details = details
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary="Tracker feedback intent processed.",
+                details=self.details,
+                tracker_comment="Reply in tracker.",
+            )
+        )
+
+
+class TrackerFeedbackControlLineOnlyAgentRunner:
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        return AgentRunResult(
+            payload=TaskResultPayload(
+                summary='COMMENT_INTENT_JSON: {"decision":"reply_comment","reason":"only"}',
+            )
+        )
+
+
 class RetroAgentRunner:
     def __init__(self, metadata):
         self.metadata = metadata
@@ -1360,6 +1383,159 @@ def test_tracker_feedback_text_only_does_not_create_scm_artifacts_or_require_est
         assert feedback_task.result_payload is not None
         assert feedback_task.result_payload["metadata"]["pr_action"] == "skipped"
         assert "estimate" not in feedback_task.result_payload["metadata"]
+        deliver_task = TaskRepository(session).find_child_task(
+            parent_id=feedback_task.id,
+            task_type=TaskType.DELIVER,
+        )
+        assert deliver_task is not None
+
+
+def test_tracker_feedback_start_implementation_intent_creates_followup_without_deliver(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=TrackerFeedbackCodeWorkMockScm(),
+        agent_runner=TrackerFeedbackIntentAgentRunner(
+            details='COMMENT_INTENT_JSON: {"decision":"start_implementation","reason":"confirmed"}'
+        ),
+        session_factory=session_factory,
+    )
+    triage_task_id = _seed_tracker_feedback_triage_chain(
+        session_factory=session_factory,
+        ready=True,
+    )
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.status == TaskStatus.DONE
+        assert (
+            feedback_task.result_payload["metadata"]["comment_intent_decision"]
+            == "start_implementation"
+        )
+        impl = repository.find_implementation_execute_for_root(1)
+        assert impl is not None
+        assert impl.input_payload["action"] == "implementation"
+        assert impl.input_payload["handoff"]["from_task_id"] == triage_task_id
+        deliver_task = repository.find_child_task(
+            parent_id=feedback_task.id,
+            task_type=TaskType.DELIVER,
+        )
+        assert deliver_task is None
+
+
+def test_tracker_feedback_invalid_or_missing_intent_defaults_to_reply_comment(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=TrackerFeedbackCodeWorkMockScm(),
+        agent_runner=TrackerFeedbackIntentAgentRunner(
+            details="COMMENT_INTENT_JSON: {broken-json}\nHuman fallback answer."
+        ),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_triage_chain(session_factory=session_factory, ready=True)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        assert repository.find_implementation_execute_for_root(1) is None
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert "COMMENT_INTENT_JSON:" not in feedback_task.result_payload["tracker_comment"]
+        assert "Human fallback answer." in feedback_task.result_payload["tracker_comment"]
+        deliver_task = repository.find_child_task(
+            parent_id=feedback_task.id,
+            task_type=TaskType.DELIVER,
+        )
+        assert deliver_task is not None
+
+
+def test_tracker_feedback_non_ready_start_implementation_does_not_create_followup(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=TrackerFeedbackCodeWorkMockScm(),
+        agent_runner=TrackerFeedbackIntentAgentRunner(
+            details=(
+                'COMMENT_INTENT_JSON: '
+                '{"decision":"start_implementation","reason":"confirmed"}'
+                "\nBlocked fallback answer."
+            )
+        ),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_triage_chain(session_factory=session_factory, ready=False)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        assert repository.find_implementation_execute_for_root(1) is None
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        assert feedback_task.result_payload["metadata"]["comment_intent_status"] == "blocked"
+        assert "COMMENT_INTENT_JSON:" not in feedback_task.result_payload["tracker_comment"]
+        assert "Blocked fallback answer." in feedback_task.result_payload["tracker_comment"]
+        deliver_task = repository.find_child_task(
+            parent_id=feedback_task.id,
+            task_type=TaskType.DELIVER,
+        )
+        assert deliver_task is not None
+
+
+def test_tracker_feedback_reply_comment_strips_control_line_from_delivery_text(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=TrackerFeedbackCodeWorkMockScm(),
+        agent_runner=TrackerFeedbackIntentAgentRunner(
+            details=(
+                'COMMENT_INTENT_JSON: {"decision":"reply_comment","reason":"qa"}'
+                "\nHuman answer only."
+            )
+        ),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_triage_chain(session_factory=session_factory, ready=True)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        tracker_comment = feedback_task.result_payload["tracker_comment"]
+        assert "COMMENT_INTENT_JSON:" not in tracker_comment
+        assert "Human answer only." in tracker_comment
+
+
+def test_tracker_feedback_reply_comment_uses_safe_fallback_when_only_control_line_present(
+    tmp_path,
+) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    worker = ExecuteWorker(
+        scm=TrackerFeedbackCodeWorkMockScm(),
+        agent_runner=TrackerFeedbackControlLineOnlyAgentRunner(),
+        session_factory=session_factory,
+    )
+    _seed_tracker_feedback_triage_chain(session_factory=session_factory, ready=True)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    with session_scope(session_factory=session_factory) as session:
+        feedback_task = session.get(Task, 3)
+        assert feedback_task is not None
+        tracker_comment = feedback_task.result_payload["tracker_comment"]
+        assert "COMMENT_INTENT_JSON:" not in tracker_comment
+        assert tracker_comment
+        assert tracker_comment == "Комментарий обработан."
 
 
 def test_tracker_feedback_committed_head_advance_publishes_current_head_without_reset(
@@ -2296,3 +2472,65 @@ def _seed_tracker_feedback_chain(
                 },
             )
         )
+
+
+def _seed_tracker_feedback_triage_chain(*, session_factory, ready: bool) -> int:
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id="TASK-TF-TRIAGE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-tf-triage",
+                context={"title": "Tracker triage feedback"},
+            )
+        )
+        triage_result = {
+            "summary": "Triage done.",
+            "routing": {
+                "next_task_type": "execute",
+                "next_role": "implementation" if ready else None,
+                "create_followup_task": ready,
+                "requires_human_approval": False,
+            },
+            "metadata": {"handover_brief": "brief" if ready else ""},
+            "delivery": {"comment_body": "Waiting for decision."},
+        }
+        triage_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                status=TaskStatus.DONE,
+                tracker_name="mock",
+                external_parent_id="TASK-TF-TRIAGE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-tf-triage",
+                context={"title": "Tracker triage feedback"},
+                input_payload={"action": "triage"},
+                result_payload=triage_result,
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.TRACKER_FEEDBACK,
+                parent_id=triage_task.id,
+                tracker_name="mock",
+                external_task_id="comment-triage-1",
+                external_parent_id="TASK-TF-TRIAGE",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                workspace_key="repo-tf-triage",
+                input_payload={
+                    "tracker_feedback": {
+                        "external_task_id": "TASK-TF-TRIAGE",
+                        "comment_id": "comment-triage-1",
+                        "body": "Please continue.",
+                    }
+                },
+            )
+        )
+        return triage_task.id
