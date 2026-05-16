@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Final
 
 from backend.protocols.agent_runner import (
+    AgentRunConfig,
     AgentRunnerProtocol,
     AgentRunRequest,
     AgentRunResult,
@@ -142,6 +143,7 @@ class TriageStep:
         task_context: EffectiveTaskContext,
         workspace_path: str,
         runtime_metadata: dict[str, object] | None = None,
+        run_config: AgentRunConfig | None = None,
     ) -> TriageStepResult:
         """Run the triage agent and materialise the structured payload.
 
@@ -158,6 +160,7 @@ class TriageStep:
             workspace_path=workspace_path,
             metadata=dict(runtime_metadata or {}),
             prompt_override=prompt,
+            run_config=run_config,
         )
         agent_result = self.agent_runner.run(request)
         triage_raw_output = agent_result.parsed_stdout or agent_result.raw_stdout

@@ -426,6 +426,45 @@ def test_execute_worker_processes_execute_task_and_creates_deliver(tmp_path) -> 
         assert token_usage_entries[0].task_id == execute_task.id
 
 
+def test_execute_worker_passes_implementation_run_config(tmp_path) -> None:
+    engine = build_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = build_session_factory(engine)
+    scm = MockScm()
+    agent_runner = RecordingAgentRunner()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=agent_runner,
+        session_factory=session_factory,
+        settings=replace(get_settings(), implementation_agent_model_hint="gpt-5.4-mini"),
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                workspace_key="repo-27",
+                repo_url="https://example.test/repo.git",
+                repo_ref="main",
+                context={"title": "x"},
+            )
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                workspace_key="repo-27",
+                context={"title": "Implement"},
+                input_payload={"instructions": "Do it"},
+            )
+        )
+
+    worker.poll_once()
+    assert agent_runner.requests[0].run_config is not None
+    assert agent_runner.requests[0].run_config.model_hint == "gpt-5.4-mini"
+
+
 def test_execute_worker_persists_valid_agent_retro_feedback(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     worker = ExecuteWorker(
@@ -1455,6 +1494,26 @@ def test_tracker_feedback_invalid_or_missing_intent_defaults_to_reply_comment(tm
             task_type=TaskType.DELIVER,
         )
         assert deliver_task is not None
+
+
+def test_tracker_feedback_passes_run_config_to_agent_runner(tmp_path) -> None:
+    session_factory = _build_session_factory(tmp_path)
+    scm = TrackerFeedbackCodeWorkMockScm()
+    runner = TrackerFeedbackTextAgentRunner()
+    worker = ExecuteWorker(
+        scm=scm,
+        agent_runner=runner,
+        session_factory=session_factory,
+        settings=replace(get_settings(), tracker_feedback_agent_model_hint="gpt-5.4-mini"),
+    )
+    _seed_tracker_feedback_chain(session_factory=session_factory)
+
+    report = worker.poll_once()
+
+    assert report.processed_tracker_feedback_tasks == 1
+    assert len(runner.requests) == 1
+    assert runner.requests[0].run_config is not None
+    assert runner.requests[0].run_config.model_hint == "gpt-5.4-mini"
 
 
 def test_tracker_feedback_non_ready_start_implementation_does_not_create_followup(tmp_path) -> None:

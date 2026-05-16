@@ -14,6 +14,19 @@ def _get_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _get_optional_int(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return parsed
+
+
 def _get_tuple(name: str, default: str) -> tuple[str, ...]:
     val = os.getenv(name, default)
     if not val.strip():
@@ -83,6 +96,22 @@ class Settings:
     cli_agent_api_key_env_var: str | None
     cli_agent_base_url_env_var: str | None
     cli_agent_preview_chars: int
+    triage_agent_provider_hint: str | None
+    triage_agent_model_hint: str | None
+    triage_agent_profile: str | None
+    triage_agent_timeout_seconds: int | None
+    implementation_agent_provider_hint: str | None
+    implementation_agent_model_hint: str | None
+    implementation_agent_profile: str | None
+    implementation_agent_timeout_seconds: int | None
+    pr_feedback_agent_provider_hint: str | None
+    pr_feedback_agent_model_hint: str | None
+    pr_feedback_agent_profile: str | None
+    pr_feedback_agent_timeout_seconds: int | None
+    tracker_feedback_agent_provider_hint: str | None
+    tracker_feedback_agent_model_hint: str | None
+    tracker_feedback_agent_profile: str | None
+    tracker_feedback_agent_timeout_seconds: int | None
     local_agent_provider: str
     local_agent_model: str
     local_agent_name: str
@@ -164,6 +193,22 @@ def get_settings() -> Settings:
         cli_agent_base_url_env_var=os.getenv("CLI_AGENT_BASE_URL_ENV_VAR", "OPENAI_BASE_URL")
         or None,
         cli_agent_preview_chars=_get_int("CLI_AGENT_PREVIEW_CHARS", 1000),
+        triage_agent_provider_hint=os.getenv("TRIAGE_AGENT_PROVIDER") or None,
+        triage_agent_model_hint=os.getenv("TRIAGE_AGENT_MODEL") or None,
+        triage_agent_profile=os.getenv("TRIAGE_AGENT_PROFILE") or None,
+        triage_agent_timeout_seconds=_get_optional_int("TRIAGE_AGENT_TIMEOUT_SECONDS"),
+        implementation_agent_provider_hint=os.getenv("IMPLEMENTATION_AGENT_PROVIDER") or None,
+        implementation_agent_model_hint=os.getenv("IMPLEMENTATION_AGENT_MODEL") or None,
+        implementation_agent_profile=os.getenv("IMPLEMENTATION_AGENT_PROFILE") or None,
+        implementation_agent_timeout_seconds=_get_optional_int("IMPLEMENTATION_AGENT_TIMEOUT_SECONDS"),
+        pr_feedback_agent_provider_hint=os.getenv("PR_FEEDBACK_AGENT_PROVIDER") or None,
+        pr_feedback_agent_model_hint=os.getenv("PR_FEEDBACK_AGENT_MODEL") or None,
+        pr_feedback_agent_profile=os.getenv("PR_FEEDBACK_AGENT_PROFILE") or None,
+        pr_feedback_agent_timeout_seconds=_get_optional_int("PR_FEEDBACK_AGENT_TIMEOUT_SECONDS"),
+        tracker_feedback_agent_provider_hint=os.getenv("TRACKER_FEEDBACK_AGENT_PROVIDER") or None,
+        tracker_feedback_agent_model_hint=os.getenv("TRACKER_FEEDBACK_AGENT_MODEL") or None,
+        tracker_feedback_agent_profile=os.getenv("TRACKER_FEEDBACK_AGENT_PROFILE") or None,
+        tracker_feedback_agent_timeout_seconds=_get_optional_int("TRACKER_FEEDBACK_AGENT_TIMEOUT_SECONDS"),
         local_agent_provider=os.getenv("LOCAL_AGENT_PROVIDER", "openai"),
         local_agent_model=os.getenv("LOCAL_AGENT_MODEL", "gpt-5.4"),
         local_agent_name=os.getenv("LOCAL_AGENT_NAME", "local-placeholder-runner"),

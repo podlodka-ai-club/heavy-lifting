@@ -6,11 +6,20 @@ from backend.task_context import EffectiveTaskContext
 
 
 @dataclass(frozen=True, slots=True)
+class AgentRunConfig:
+    provider_hint: str | None = None
+    model_hint: str | None = None
+    profile: str | None = None
+    timeout_seconds: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AgentRunRequest:
     task_context: EffectiveTaskContext
     workspace_path: str
     metadata: dict[str, object] = field(default_factory=dict)
     prompt_override: str | None = None
+    run_config: AgentRunConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,4 +58,4 @@ class AgentRunnerProtocol(Protocol):
     def run(self, request: AgentRunRequest) -> AgentRunResult: ...
 
 
-__all__ = ["AgentRunRequest", "AgentRunResult", "AgentRunnerProtocol"]
+__all__ = ["AgentRunConfig", "AgentRunRequest", "AgentRunResult", "AgentRunnerProtocol"]

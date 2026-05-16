@@ -1,8 +1,16 @@
+import pytest
 from sqlalchemy.orm import Session
 
 from backend.db import build_engine
 from backend.models import ApplicationSetting, Base
 from backend.settings import get_settings
+
+_PER_RUN_TIMEOUT_ENV_NAMES = (
+    "TRIAGE_AGENT_TIMEOUT_SECONDS",
+    "IMPLEMENTATION_AGENT_TIMEOUT_SECONDS",
+    "PR_FEEDBACK_AGENT_TIMEOUT_SECONDS",
+    "TRACKER_FEEDBACK_AGENT_TIMEOUT_SECONDS",
+)
 
 
 def test_get_settings_uses_defaults(monkeypatch) -> None:
@@ -31,6 +39,22 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
         "CLI_AGENT_API_KEY_ENV_VAR",
         "CLI_AGENT_BASE_URL_ENV_VAR",
         "CLI_AGENT_PREVIEW_CHARS",
+        "TRIAGE_AGENT_PROVIDER",
+        "TRIAGE_AGENT_MODEL",
+        "TRIAGE_AGENT_PROFILE",
+        "TRIAGE_AGENT_TIMEOUT_SECONDS",
+        "IMPLEMENTATION_AGENT_PROVIDER",
+        "IMPLEMENTATION_AGENT_MODEL",
+        "IMPLEMENTATION_AGENT_PROFILE",
+        "IMPLEMENTATION_AGENT_TIMEOUT_SECONDS",
+        "PR_FEEDBACK_AGENT_PROVIDER",
+        "PR_FEEDBACK_AGENT_MODEL",
+        "PR_FEEDBACK_AGENT_PROFILE",
+        "PR_FEEDBACK_AGENT_TIMEOUT_SECONDS",
+        "TRACKER_FEEDBACK_AGENT_PROVIDER",
+        "TRACKER_FEEDBACK_AGENT_MODEL",
+        "TRACKER_FEEDBACK_AGENT_PROFILE",
+        "TRACKER_FEEDBACK_AGENT_TIMEOUT_SECONDS",
         "LOCAL_AGENT_PROVIDER",
         "LOCAL_AGENT_MODEL",
         "LOCAL_AGENT_NAME",
@@ -101,6 +125,22 @@ def test_get_settings_uses_defaults(monkeypatch) -> None:
     assert settings.cli_agent_api_key_env_var == "OPENAI_API_KEY"
     assert settings.cli_agent_base_url_env_var == "OPENAI_BASE_URL"
     assert settings.cli_agent_preview_chars == 1000
+    assert settings.triage_agent_provider_hint is None
+    assert settings.triage_agent_model_hint is None
+    assert settings.triage_agent_profile is None
+    assert settings.triage_agent_timeout_seconds is None
+    assert settings.implementation_agent_provider_hint is None
+    assert settings.implementation_agent_model_hint is None
+    assert settings.implementation_agent_profile is None
+    assert settings.implementation_agent_timeout_seconds is None
+    assert settings.pr_feedback_agent_provider_hint is None
+    assert settings.pr_feedback_agent_model_hint is None
+    assert settings.pr_feedback_agent_profile is None
+    assert settings.pr_feedback_agent_timeout_seconds is None
+    assert settings.tracker_feedback_agent_provider_hint is None
+    assert settings.tracker_feedback_agent_model_hint is None
+    assert settings.tracker_feedback_agent_profile is None
+    assert settings.tracker_feedback_agent_timeout_seconds is None
     assert settings.local_agent_provider == "openai"
     assert settings.local_agent_model == "gpt-5.4"
     assert settings.local_agent_name == "local-placeholder-runner"
@@ -165,6 +205,22 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("CLI_AGENT_API_KEY_ENV_VAR", "CUSTOM_API_KEY")
     monkeypatch.setenv("CLI_AGENT_BASE_URL_ENV_VAR", "CUSTOM_BASE_URL")
     monkeypatch.setenv("CLI_AGENT_PREVIEW_CHARS", "500")
+    monkeypatch.setenv("TRIAGE_AGENT_PROVIDER", "openai")
+    monkeypatch.setenv("TRIAGE_AGENT_MODEL", "gpt-5.3")
+    monkeypatch.setenv("TRIAGE_AGENT_PROFILE", "triage")
+    monkeypatch.setenv("TRIAGE_AGENT_TIMEOUT_SECONDS", "321")
+    monkeypatch.setenv("IMPLEMENTATION_AGENT_PROVIDER", "openai")
+    monkeypatch.setenv("IMPLEMENTATION_AGENT_MODEL", "gpt-5.4")
+    monkeypatch.setenv("IMPLEMENTATION_AGENT_PROFILE", "implementation")
+    monkeypatch.setenv("IMPLEMENTATION_AGENT_TIMEOUT_SECONDS", "654")
+    monkeypatch.setenv("PR_FEEDBACK_AGENT_PROVIDER", "openai")
+    monkeypatch.setenv("PR_FEEDBACK_AGENT_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("PR_FEEDBACK_AGENT_PROFILE", "pr-feedback")
+    monkeypatch.setenv("PR_FEEDBACK_AGENT_TIMEOUT_SECONDS", "777")
+    monkeypatch.setenv("TRACKER_FEEDBACK_AGENT_PROVIDER", "openai")
+    monkeypatch.setenv("TRACKER_FEEDBACK_AGENT_MODEL", "gpt-5.4")
+    monkeypatch.setenv("TRACKER_FEEDBACK_AGENT_PROFILE", "tracker-feedback")
+    monkeypatch.setenv("TRACKER_FEEDBACK_AGENT_TIMEOUT_SECONDS", "888")
     monkeypatch.setenv("LOCAL_AGENT_PROVIDER", "anthropic")
     monkeypatch.setenv("LOCAL_AGENT_MODEL", "claude-opus-4.6")
     monkeypatch.setenv("LOCAL_AGENT_NAME", "custom-local")
@@ -224,6 +280,22 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.cli_agent_api_key_env_var == "CUSTOM_API_KEY"
     assert settings.cli_agent_base_url_env_var == "CUSTOM_BASE_URL"
     assert settings.cli_agent_preview_chars == 500
+    assert settings.triage_agent_provider_hint == "openai"
+    assert settings.triage_agent_model_hint == "gpt-5.3"
+    assert settings.triage_agent_profile == "triage"
+    assert settings.triage_agent_timeout_seconds == 321
+    assert settings.implementation_agent_provider_hint == "openai"
+    assert settings.implementation_agent_model_hint == "gpt-5.4"
+    assert settings.implementation_agent_profile == "implementation"
+    assert settings.implementation_agent_timeout_seconds == 654
+    assert settings.pr_feedback_agent_provider_hint == "openai"
+    assert settings.pr_feedback_agent_model_hint == "gpt-5.4-mini"
+    assert settings.pr_feedback_agent_profile == "pr-feedback"
+    assert settings.pr_feedback_agent_timeout_seconds == 777
+    assert settings.tracker_feedback_agent_provider_hint == "openai"
+    assert settings.tracker_feedback_agent_model_hint == "gpt-5.4"
+    assert settings.tracker_feedback_agent_profile == "tracker-feedback"
+    assert settings.tracker_feedback_agent_timeout_seconds == 888
     assert settings.local_agent_provider == "anthropic"
     assert settings.local_agent_model == "claude-opus-4.6"
     assert settings.local_agent_name == "custom-local"
@@ -252,6 +324,25 @@ def test_get_settings_reads_env_overrides(monkeypatch) -> None:
     assert settings.github_default_repo_url == "https://github.com/acme/widgets"
     assert settings.scm_default_base_branch == "develop"
     assert settings.scm_branch_prefix == "hl/"
+
+
+@pytest.mark.parametrize("name", _PER_RUN_TIMEOUT_ENV_NAMES)
+@pytest.mark.parametrize("value", ["0", "-1", "abc"])
+def test_get_settings_rejects_invalid_per_run_timeouts(monkeypatch, name: str, value: str) -> None:
+    monkeypatch.setenv(name, value)
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError):
+        get_settings()
+
+
+@pytest.mark.parametrize("name", _PER_RUN_TIMEOUT_ENV_NAMES)
+def test_get_settings_accepts_positive_per_run_timeouts(monkeypatch, name: str) -> None:
+    monkeypatch.setenv(name, "42")
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert getattr(settings, name.lower()) == 42
 
 
 def test_get_settings_prefers_explicit_database_url(monkeypatch) -> None:

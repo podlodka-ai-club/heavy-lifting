@@ -16,7 +16,12 @@ from backend.db import get_session_factory, session_scope
 from backend.estimate_mode import is_explicit_estimate_only_context
 from backend.logging_setup import configure_logging, get_logger
 from backend.models import Task
-from backend.protocols.agent_runner import AgentRunnerProtocol, AgentRunRequest, AgentRunResult
+from backend.protocols.agent_runner import (
+    AgentRunConfig,
+    AgentRunnerProtocol,
+    AgentRunRequest,
+    AgentRunResult,
+)
 from backend.protocols.scm import ScmProtocol
 from backend.repositories.task_repository import (
     TaskCreateParams,
@@ -495,6 +500,10 @@ class ExecuteWorker:
                     task_context=prepared.task_context,
                     workspace_path=prepared.workspace_path,
                     runtime_metadata=prepared.runtime_metadata,
+                    run_config=self._resolve_run_config(
+                        flow_type=TaskType.EXECUTE,
+                        action="triage",
+                    ),
                 )
             except TriageStepError as exc:
                 self._handle_triage_step_error(task=task, exc=exc)
@@ -1071,11 +1080,18 @@ class ExecuteWorker:
             runner=self.agent_runner.__class__.__name__,
         )
         logger.info("agent_run_started")
+        run_config = self._resolve_run_config(
+            flow_type=prepared_execution.task_context.flow_type,
+            action=self._resolve_execute_action(task=task)
+            if prepared_execution.task_context.flow_type == TaskType.EXECUTE
+            else None,
+        )
         result = self.agent_runner.run(
             AgentRunRequest(
                 task_context=prepared_execution.task_context,
                 workspace_path=prepared_execution.workspace.local_path,
                 metadata=prepared_execution.runtime_metadata,
+                run_config=run_config,
             )
         )
         logger.info(
@@ -1085,6 +1101,59 @@ class ExecuteWorker:
             has_details=result.payload.details is not None,
         )
         return result
+
+    def _resolve_run_config(
+        self,
+        *,
+        flow_type: TaskType,
+        action: str | None = None,
+    ) -> AgentRunConfig | None:
+        if flow_type == TaskType.EXECUTE and action == "triage":
+            return self._build_agent_run_config(
+                provider_hint=self.settings.triage_agent_provider_hint,
+                model_hint=self.settings.triage_agent_model_hint,
+                profile=self.settings.triage_agent_profile,
+                timeout_seconds=self.settings.triage_agent_timeout_seconds,
+            )
+        if flow_type == TaskType.EXECUTE:
+            return self._build_agent_run_config(
+                provider_hint=self.settings.implementation_agent_provider_hint,
+                model_hint=self.settings.implementation_agent_model_hint,
+                profile=self.settings.implementation_agent_profile,
+                timeout_seconds=self.settings.implementation_agent_timeout_seconds,
+            )
+        if flow_type == TaskType.PR_FEEDBACK:
+            return self._build_agent_run_config(
+                provider_hint=self.settings.pr_feedback_agent_provider_hint,
+                model_hint=self.settings.pr_feedback_agent_model_hint,
+                profile=self.settings.pr_feedback_agent_profile,
+                timeout_seconds=self.settings.pr_feedback_agent_timeout_seconds,
+            )
+        if flow_type == TaskType.TRACKER_FEEDBACK:
+            return self._build_agent_run_config(
+                provider_hint=self.settings.tracker_feedback_agent_provider_hint,
+                model_hint=self.settings.tracker_feedback_agent_model_hint,
+                profile=self.settings.tracker_feedback_agent_profile,
+                timeout_seconds=self.settings.tracker_feedback_agent_timeout_seconds,
+            )
+        return None
+
+    def _build_agent_run_config(
+        self,
+        *,
+        provider_hint: str | None,
+        model_hint: str | None,
+        profile: str | None,
+        timeout_seconds: int | None,
+    ) -> AgentRunConfig | None:
+        if all(value is None for value in (provider_hint, model_hint, profile, timeout_seconds)):
+            return None
+        return AgentRunConfig(
+            provider_hint=provider_hint,
+            model_hint=model_hint,
+            profile=profile,
+            timeout_seconds=timeout_seconds,
+        )
 
     def _ensure_workspace(self, *, task_context: EffectiveTaskContext) -> ScmWorkspace:
         workspace_key = task_context.workspace_key

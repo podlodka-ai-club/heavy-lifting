@@ -9,7 +9,7 @@ from typing import Any
 
 from backend.estimate_mode import is_explicit_estimate_only_context
 from backend.logging_setup import get_logger
-from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
+from backend.protocols.agent_runner import AgentRunConfig, AgentRunRequest, AgentRunResult
 from backend.schemas import TaskContext, TaskResultPayload, TokenUsagePayload
 from backend.services.token_costs import TokenCostService
 from backend.task_constants import TaskType
@@ -82,6 +82,7 @@ class LocalAgentRunner:
             "flow_type": request.task_context.flow_type.value,
             "workspace_path": request.workspace_path,
             "estimated_cost_usd": str(total_cost),
+            "run_config": _run_config_metadata(request.run_config),
         }
         payload = TaskResultPayload(
             summary="Prepared local triage envelope.",
@@ -246,6 +247,7 @@ class LocalAgentRunner:
             "has_feedback": request.task_context.current_feedback is not None,
             "feedback_history_count": len(request.task_context.feedback_history),
             "estimated_cost_usd": str(total_cost),
+            "run_config": _run_config_metadata(request.run_config),
         }
 
 
@@ -265,12 +267,13 @@ class CliAgentRunner:
             prompt_length=len(prompt),
         )
         logger.info("agent_run_started")
+        effective_timeout = self._resolve_timeout_seconds(request.run_config)
         completed_process = subprocess.run(
             command,
             cwd=request.workspace_path,
             capture_output=True,
             text=True,
-            timeout=self.config.timeout_seconds,
+            timeout=effective_timeout,
         )
         stdout_parse = self._parse_stdout(completed_process.stdout)
         payload = self._build_payload(
@@ -306,19 +309,76 @@ class CliAgentRunner:
             "json",
         ]
 
-        model = self._resolve_model()
+        model = self._resolve_model(request.run_config)
         if model is not None:
             command.extend(["--model", model])
 
         command.append(prompt)
         return command
 
-    def _resolve_model(self) -> str | None:
-        if self.config.provider_hint and self.config.model_hint:
-            return f"{self.config.provider_hint}/{self.config.model_hint}"
-        if self.config.model_hint:
-            return self.config.model_hint
+    def _resolve_model(self, run_config: AgentRunConfig | None = None) -> str | None:
+        provider_hint = self._resolve_provider_hint(run_config)
+        model_hint = self._resolve_model_hint(run_config)
+        if provider_hint and model_hint:
+            return f"{provider_hint}/{model_hint}"
+        if model_hint:
+            return model_hint
         return None
+
+    def _resolve_timeout_seconds(self, run_config: AgentRunConfig | None = None) -> int:
+        if run_config is not None and run_config.timeout_seconds is not None:
+            timeout_seconds = run_config.timeout_seconds
+        else:
+            timeout_seconds = self.config.timeout_seconds
+        if timeout_seconds <= 0:
+            raise ValueError("Agent run timeout must be greater than 0 seconds")
+        return timeout_seconds
+
+    def _resolve_profile(self, run_config: AgentRunConfig | None = None) -> str | None:
+        if run_config is not None and run_config.profile:
+            return run_config.profile
+        return self.config.profile
+
+    def _resolve_provider_hint(self, run_config: AgentRunConfig | None = None) -> str | None:
+        if run_config is not None and run_config.provider_hint:
+            return run_config.provider_hint
+        return self.config.provider_hint
+
+    def _resolve_model_hint(self, run_config: AgentRunConfig | None = None) -> str | None:
+        if run_config is not None and run_config.model_hint:
+            return run_config.model_hint
+        return self.config.model_hint
+
+    def _effective_run_config(self, run_config: AgentRunConfig | None = None) -> AgentRunConfig:
+        return AgentRunConfig(
+            provider_hint=self._resolve_provider_hint(run_config),
+            model_hint=self._resolve_model_hint(run_config),
+            profile=self._resolve_profile(run_config),
+            timeout_seconds=self._resolve_timeout_seconds(run_config),
+        )
+
+    def _run_config_to_metadata(
+        self, run_config: AgentRunConfig | None = None
+    ) -> dict[str, object]:
+        effective = self._effective_run_config(run_config)
+        return {
+            "provider_hint": effective.provider_hint,
+            "model_hint": effective.model_hint,
+            "profile": effective.profile,
+            "timeout_seconds": effective.timeout_seconds,
+        }
+
+    def _requested_run_config_to_metadata(
+        self, run_config: AgentRunConfig | None = None
+    ) -> dict[str, object] | None:
+        if run_config is None:
+            return None
+        return {
+            "provider_hint": run_config.provider_hint,
+            "model_hint": run_config.model_hint,
+            "profile": run_config.profile,
+            "timeout_seconds": run_config.timeout_seconds,
+        }
 
     def _build_prompt(self, request: AgentRunRequest) -> str:
         context = request.task_context
@@ -460,12 +520,15 @@ class CliAgentRunner:
         )
         runner_metadata: dict[str, object] = {
             "subcommand": self.config.subcommand,
-            "profile": self.config.profile,
-            "provider_hint": self.config.provider_hint,
-            "model_hint": self.config.model_hint,
-            "model_argument": self._resolve_model(),
+            "profile": self._resolve_profile(request.run_config),
+            "provider_hint": self._resolve_provider_hint(request.run_config),
+            "model_hint": self._resolve_model_hint(request.run_config),
+            "model_argument": self._resolve_model(request.run_config),
+            "timeout_seconds": self._resolve_timeout_seconds(request.run_config),
             "api_key_env_var": self.config.api_key_env_var,
             "base_url_env_var": self.config.base_url_env_var,
+            "effective_run_config": self._run_config_to_metadata(request.run_config),
+            "requested_run_config": self._requested_run_config_to_metadata(request.run_config),
         }
         metadata: dict[str, object] = {
             "runner_adapter": "cli",
@@ -984,3 +1047,14 @@ def _runner_logger(request: AgentRunRequest, **fields: object):
         workspace_path=request.workspace_path,
         **fields,
     )
+
+
+def _run_config_metadata(run_config: AgentRunConfig | None) -> dict[str, object] | None:
+    if run_config is None:
+        return None
+    return {
+        "provider_hint": run_config.provider_hint,
+        "model_hint": run_config.model_hint,
+        "profile": run_config.profile,
+        "timeout_seconds": run_config.timeout_seconds,
+    }

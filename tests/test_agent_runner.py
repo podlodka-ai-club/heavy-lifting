@@ -3,9 +3,11 @@ from __future__ import annotations
 import subprocess
 from decimal import Decimal
 
+import pytest
+
 from backend.db import build_engine, build_session_factory, session_scope
 from backend.models import Base
-from backend.protocols.agent_runner import AgentRunRequest, AgentRunResult
+from backend.protocols.agent_runner import AgentRunConfig, AgentRunRequest, AgentRunResult
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
 from backend.schemas import TaskResultPayload
 from backend.services.agent_runner import CliAgentRunner, CliAgentRunnerConfig, LocalAgentRunner
@@ -70,6 +72,7 @@ def test_local_agent_runner_returns_normalized_execute_result(tmp_path) -> None:
         "has_feedback": False,
         "feedback_history_count": 0,
         "estimated_cost_usd": str(result.token_usage[0].cost_usd),
+        "run_config": None,
     }
 
 
@@ -255,6 +258,30 @@ def test_cli_agent_runner_builds_command_from_config() -> None:
         "openai/gpt-5.4",
         "prompt body",
     ]
+
+
+def test_cli_agent_runner_builds_command_with_request_run_config_override() -> None:
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(
+            command="opencode",
+            subcommand="run",
+            timeout_seconds=900,
+            provider_hint="openai",
+            model_hint="gpt-5.4",
+        )
+    )
+    task_context = _build_task_context_for_command()
+
+    command = runner._build_command(
+        request=AgentRunRequest(
+            task_context=task_context,
+            workspace_path="/workspace/task46",
+            run_config=AgentRunConfig(provider_hint="anthropic", model_hint="claude-sonnet-4.5"),
+        ),
+        prompt="prompt body",
+    )
+
+    assert command[6:8] == ["--model", "anthropic/claude-sonnet-4.5"]
 
 
 def test_cli_agent_runner_prompt_requires_concrete_edits_for_normal_execute(tmp_path) -> None:
@@ -578,10 +605,57 @@ def test_cli_agent_runner_normalizes_happy_path(monkeypatch, tmp_path) -> None:
             "provider_hint": "openai",
             "model_hint": "gpt-5.4",
             "model_argument": "openai/gpt-5.4",
+            "timeout_seconds": 900,
             "api_key_env_var": "OPENAI_API_KEY",
             "base_url_env_var": "OPENAI_BASE_URL",
+            "effective_run_config": {
+                "provider_hint": "openai",
+                "model_hint": "gpt-5.4",
+                "profile": "backend",
+                "timeout_seconds": 900,
+            },
+            "requested_run_config": None,
         },
     }
+
+
+def test_cli_agent_runner_applies_request_timeout_override(monkeypatch, tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=900)
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    runner.run(
+        AgentRunRequest(
+            task_context=task_context,
+            workspace_path=str(tmp_path / "workspace"),
+            run_config=AgentRunConfig(timeout_seconds=111),
+        )
+    )
+
+    assert captured["timeout"] == 111
+
+
+def test_cli_agent_runner_rejects_non_positive_request_timeout(tmp_path) -> None:
+    task_context = _build_task_context(tmp_path)
+    runner = CliAgentRunner(
+        config=CliAgentRunnerConfig(command="opencode", subcommand="run", timeout_seconds=900)
+    )
+
+    with pytest.raises(ValueError, match="timeout"):
+        runner.run(
+            AgentRunRequest(
+                task_context=task_context,
+                workspace_path=str(tmp_path / "workspace"),
+                run_config=AgentRunConfig(timeout_seconds=0),
+            )
+        )
 
 
 def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None:
@@ -637,8 +711,16 @@ def test_cli_agent_runner_normalizes_failure_path(monkeypatch, tmp_path) -> None
         "provider_hint": None,
         "model_hint": None,
         "model_argument": None,
+        "timeout_seconds": 120,
         "api_key_env_var": None,
         "base_url_env_var": None,
+        "effective_run_config": {
+            "provider_hint": None,
+            "model_hint": None,
+            "profile": None,
+            "timeout_seconds": 120,
+        },
+        "requested_run_config": None,
     }
 
 

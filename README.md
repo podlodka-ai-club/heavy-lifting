@@ -329,6 +329,11 @@ export OPENAI_API_KEY=replace-me
 
 ### Опциональные настройки runner-а
 
+Важно: prompt/runtime-contract и run-config теперь разделены.
+
+- Prompt/contract формируется по типу потока (`execute`, `pr_feedback`, `tracker_feedback`) и для triage берется из `prompts/agents/triage.md`.
+- Run-config (model/provider/profile/timeout) можно задавать отдельно для каждого типа запуска через env, без правок prompt-файлов.
+
 Настройки из `src/backend/settings.py` для `CliAgentRunner`:
 
 - `CLI_AGENT_COMMAND` — бинарь CLI, по умолчанию `opencode`;
@@ -341,6 +346,13 @@ export OPENAI_API_KEY=replace-me
 - `CLI_AGENT_BASE_URL_ENV_VAR` — имя env с base URL, по умолчанию `OPENAI_BASE_URL`.
 - `CLI_AGENT_PREVIEW_CHARS` — длина stdout/stderr preview в metadata, по умолчанию `1000`.
 
+Перезапись run-config по типу запуска (все переменные опциональны; пустые значения = fallback на глобальные `CLI_AGENT_*`). Для всех `*_AGENT_TIMEOUT_SECONDS` значение должно быть целым числом `> 0`; невалидные значения приводят к fail-fast при загрузке settings:
+
+- `TRIAGE_AGENT_PROVIDER`, `TRIAGE_AGENT_MODEL`, `TRIAGE_AGENT_PROFILE`, `TRIAGE_AGENT_TIMEOUT_SECONDS`;
+- `IMPLEMENTATION_AGENT_PROVIDER`, `IMPLEMENTATION_AGENT_MODEL`, `IMPLEMENTATION_AGENT_PROFILE`, `IMPLEMENTATION_AGENT_TIMEOUT_SECONDS`;
+- `PR_FEEDBACK_AGENT_PROVIDER`, `PR_FEEDBACK_AGENT_MODEL`, `PR_FEEDBACK_AGENT_PROFILE`, `PR_FEEDBACK_AGENT_TIMEOUT_SECONDS`;
+- `TRACKER_FEEDBACK_AGENT_PROVIDER`, `TRACKER_FEEDBACK_AGENT_MODEL`, `TRACKER_FEEDBACK_AGENT_PROFILE`, `TRACKER_FEEDBACK_AGENT_TIMEOUT_SECONDS`.
+
 Пример расширенной настройки:
 
 ```bash
@@ -350,6 +362,8 @@ export CLI_AGENT_SUBCOMMAND=run
 export CLI_AGENT_TIMEOUT_SECONDS=1800
 export CLI_AGENT_PROVIDER=openai
 export CLI_AGENT_MODEL=gpt-5.4
+export IMPLEMENTATION_AGENT_MODEL=gpt-5.4
+export TRACKER_FEEDBACK_AGENT_MODEL=gpt-5.4-mini
 export OPENAI_API_KEY=replace-me
 ```
 

@@ -153,6 +153,7 @@ def _create_fetch(repository: TaskRepository, *, with_repo: bool = True, suffix:
 def test_execute_worker_routes_triage_action_through_triage_step(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     settings = _build_settings(tmp_path)
+    settings = replace(settings, triage_agent_model_hint="gpt-5.3")
     fake = _FakeAgentRunner(
         canned_stdout=_envelope(
             story_points=2,
@@ -194,6 +195,8 @@ def test_execute_worker_routes_triage_action_through_triage_step(tmp_path) -> No
     request = fake.requests[0]
     assert request.workspace_path == "/tmp/mock-scm/repo-1"
     assert request.metadata["action"] == "triage"
+    assert request.run_config is not None
+    assert request.run_config.model_hint == "gpt-5.3"
 
     with session_scope(session_factory=session_factory) as session:
         triage_row = session.get(Task, triage_id)
