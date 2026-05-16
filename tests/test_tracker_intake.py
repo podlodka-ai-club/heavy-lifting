@@ -153,7 +153,7 @@ def test_tracker_intake_creates_fetch_and_execute_tasks(session_factory) -> None
             "commit_message_hint": None,
             "pr_feedback": None,
             "tracker_feedback": None,
-            "metadata": {"estimate_only": True},
+            "metadata": {},
         }
 
 
@@ -251,7 +251,7 @@ def test_tracker_intake_restores_missing_execute_child(session_factory) -> None:
             "commit_message_hint": None,
             "pr_feedback": None,
             "tracker_feedback": None,
-            "metadata": {"estimate_only": True},
+            "metadata": {},
         }
 
 
@@ -1112,7 +1112,9 @@ def test_tracker_intake_skips_non_estimate_only_execute_threads(session_factory)
     assert report.created_tracker_feedback_tasks == 0
 
 
-def test_tracker_intake_polls_done_triage_escalation_threads(session_factory) -> None:
+def test_tracker_intake_done_triage_confirmation_comment_creates_implementation_execute(
+    session_factory,
+) -> None:
     tracker = MockTracker()
     tracker_task = tracker.create_task(
         TrackerTaskCreatePayload(context=TaskContext(title="Needs clarification task"))
@@ -1120,7 +1122,7 @@ def test_tracker_intake_polls_done_triage_escalation_threads(session_factory) ->
     tracker.add_comment(
         TrackerCommentCreatePayload(
             external_task_id=tracker_task.external_id,
-            body="Here are the requested details.",
+            body="Ок, бери в работу",
             metadata={"source": "operator"},
         )
     )
@@ -1144,10 +1146,16 @@ def test_tracker_intake_polls_done_triage_escalation_threads(session_factory) ->
                 context={"title": "Needs clarification task"},
                 input_payload={"action": "triage"},
                 result_payload={
-                    "outcome": "needs_clarification",
+                    "outcome": "routed",
+                    "routing": {
+                        "next_task_type": "execute",
+                        "next_role": "implementation",
+                        "create_followup_task": True,
+                        "requires_human_approval": False,
+                    },
+                    "metadata": {"handover_brief": "## Agent Handover Brief\n\nDo the work."},
                     "delivery": {
-                        "escalation_kind": "rfi",
-                        "comment_body": "Need more details before implementation.",
+                        "comment_body": "Triage complete. Waiting for confirmation.",
                     },
                 },
             )
@@ -1163,7 +1171,7 @@ def test_tracker_intake_polls_done_triage_escalation_threads(session_factory) ->
     ).poll_tracker_feedback_once()
 
     assert report.fetched_feedback_items == 1
-    assert report.created_tracker_feedback_tasks == 1
+    assert report.created_tracker_feedback_tasks == 0
 
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)
@@ -1172,16 +1180,409 @@ def test_tracker_intake_polls_done_triage_escalation_threads(session_factory) ->
             task_type=TaskType.TRACKER_FEEDBACK,
             external_task_id="comment-1",
         )
-        assert feedback_task is not None
-        assert feedback_task.external_parent_id == tracker_task.external_id
-        assert feedback_task.input_payload["tracker_feedback"] == {
-            "external_task_id": tracker_task.external_id,
-            "comment_id": "comment-1",
-            "body": "Here are the requested details.",
-            "author": "heavy-lifting",
-            "url": f"mock://tracker/{tracker_task.external_id}/comments/comment-1",
-            "metadata": {"source": "operator"},
+        assert feedback_task is None
+
+        implementation_task = repository.find_implementation_execute_for_root(fetch_task.id)
+        assert implementation_task is not None
+        assert implementation_task.parent_id == fetch_task.id
+        assert implementation_task.status == TaskStatus.NEW
+        assert implementation_task.input_payload["action"] == "implementation"
+        assert implementation_task.input_payload["handoff"]["from_task_id"] == execute_task.id
+        assert implementation_task.input_payload["handoff"]["from_role"] == "triage"
+
+
+def test_tracker_intake_done_triage_non_confirmation_comment_creates_tracker_feedback(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="Discuss"))
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="Could you clarify estimate first?",
+            metadata={"source": "operator"},
+        )
+    )
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+            )
+        )
+        triage_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                input_payload={"action": "triage"},
+                result_payload={"delivery": {"comment_body": "Waiting for confirmation."}},
+                context={"title": "Discuss"},
+            )
+        )
+        triage_task.status = TaskStatus.DONE
+
+    report = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    ).poll_tracker_feedback_once()
+
+    assert report.created_tracker_feedback_tasks == 1
+
+
+def test_tracker_intake_rfi_confirmation_marker_does_not_start_implementation(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="RFI thread"))
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="Ок, приступай",
+            metadata={"source": "operator"},
+        )
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+            )
+        )
+        triage_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                input_payload={"action": "triage"},
+                result_payload={
+                    "outcome": "needs_clarification",
+                    "routing": {
+                        "next_task_type": None,
+                        "next_role": None,
+                        "create_followup_task": False,
+                        "requires_human_approval": False,
+                    },
+                    "delivery": {
+                        "escalation_kind": "rfi",
+                        "comment_body": "## RFI\n\nNeed details.",
+                    },
+                },
+                context={"title": "RFI thread"},
+            )
+        )
+        triage_task.status = TaskStatus.DONE
+
+    report = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    ).poll_tracker_feedback_once()
+
+    assert report.created_tracker_feedback_tasks == 1
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        assert repository.find_implementation_execute_for_root(fetch_task.id) is None
+
+
+def test_tracker_intake_done_triage_system_comment_skipped_without_children(
+    session_factory,
+) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="System msg"))
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="Automated reply",
+            metadata={"source": "heavy_lifting"},
+        )
+    )
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+            )
+        )
+        triage_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                input_payload={"action": "triage"},
+                result_payload={"delivery": {"comment_body": "Waiting for confirmation."}},
+            )
+        )
+        triage_task.status = TaskStatus.DONE
+
+    report = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    ).poll_tracker_feedback_once()
+
+    assert report.created_tracker_feedback_tasks == 0
+    assert report.skipped_feedback_items == 1
+
+
+def test_confirmation_uses_latest_ready_triage_handover(session_factory) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="Re-triage"))
+    )
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="go ahead",
+            metadata={"source": "operator"},
+        )
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+            )
+        )
+        triage_a = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                input_payload={"action": "triage"},
+                result_payload={
+                    "routing": {
+                        "next_task_type": "execute",
+                        "next_role": "implementation",
+                        "create_followup_task": True,
+                        "requires_human_approval": False,
+                    },
+                    "metadata": {"handover_brief": "brief-A"},
+                    "delivery": {"comment_body": "ready A"},
+                },
+            )
+        )
+        triage_a.status = TaskStatus.DONE
+        triage_b = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                input_payload={"action": "triage"},
+                result_payload={
+                    "routing": {
+                        "next_task_type": "execute",
+                        "next_role": "implementation",
+                        "create_followup_task": True,
+                        "requires_human_approval": False,
+                    },
+                    "metadata": {"handover_brief": "brief-B"},
+                    "delivery": {"comment_body": "ready B"},
+                },
+            )
+        )
+        triage_b.status = TaskStatus.DONE
+        triage_b_id = triage_b.id
+
+    report = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    ).poll_tracker_feedback_once()
+
+    assert report.created_tracker_feedback_tasks == 0
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        implementation_task = repository.find_implementation_execute_for_root(fetch_task.id)
+        assert implementation_task is not None
+        assert implementation_task.input_payload["handoff"]["from_task_id"] == triage_b_id
+        assert implementation_task.input_payload["handoff"]["brief_markdown"] == "brief-B"
+
+
+def test_confirmation_comment_advances_cursor_and_second_poll_is_noop(session_factory) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(TrackerTaskCreatePayload(context=TaskContext(title="Ready")))
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="approved",
+            metadata={"source": "operator"},
+        )
+    )
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.FETCH,
+                tracker_name="mock",
+                external_task_id=tracker_task.external_id,
+            )
+        )
+        triage = repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                parent_id=fetch_task.id,
+                tracker_name="mock",
+                external_parent_id=tracker_task.external_id,
+                context={"title": "Ready"},
+                input_payload={"action": "triage"},
+                result_payload={
+                    "routing": {
+                        "next_task_type": "execute",
+                        "next_role": "implementation",
+                        "create_followup_task": True,
+                        "requires_human_approval": False,
+                    },
+                    "metadata": {"handover_brief": "brief"},
+                    "delivery": {"comment_body": "ready"},
+                },
+            )
+        )
+        triage.status = TaskStatus.DONE
+        triage_id = triage.id
+
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    )
+
+    first = worker.poll_tracker_feedback_once()
+    second = worker.poll_tracker_feedback_once()
+    assert first.created_tracker_feedback_tasks == 0
+    assert second.created_tracker_feedback_tasks == 0
+    assert second.fetched_feedback_items == 0
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        triage_row = session.get(Task, triage_id)
+        assert triage_row is not None
+        assert triage_row.context["metadata"]["tracker_comment_cursor"] == "comment-1"
+        feedback_task = repository.find_child_task_by_external_id(
+            parent_id=triage_id,
+            task_type=TaskType.TRACKER_FEEDBACK,
+            external_task_id="comment-1",
+        )
+        assert feedback_task is None
+
+
+def test_new_triage_does_not_consume_historical_confirmation_comment(session_factory) -> None:
+    tracker = MockTracker()
+    tracker_task = tracker.create_task(
+        TrackerTaskCreatePayload(context=TaskContext(title="Historical"))
+    )
+    # Historical confirmation exists before the new triage execute is created.
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="approved",
+            metadata={"source": "operator"},
+        )
+    )
+
+    worker = TrackerIntakeWorker(
+        tracker=tracker,
+        scm=MockScm(),
+        tracker_name="mock",
+        session_factory=session_factory,
+    )
+
+    worker.poll_tracker_once()
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        triage_b = repository.find_child_task(parent_id=fetch_task.id, task_type=TaskType.EXECUTE)
+        assert triage_b is not None
+        triage_b.result_payload = {
+            "routing": {
+                "next_task_type": "execute",
+                "next_role": "implementation",
+                "create_followup_task": True,
+                "requires_human_approval": False,
+            },
+            "metadata": {"handover_brief": "brief-B"},
+            "delivery": {"comment_body": "ready B"},
         }
+        triage_b.status = TaskStatus.DONE
+        triage_b_id = triage_b.id
+
+    report = worker.poll_tracker_feedback_once()
+    assert report.created_tracker_feedback_tasks == 0
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        assert repository.find_implementation_execute_for_root(fetch_task.id) is None
+
+    # New confirmation after triage creation should start implementation.
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="go ahead",
+            metadata={"source": "operator"},
+        )
+    )
+    worker.poll_tracker_feedback_once()
+
+    with session_scope(session_factory=session_factory) as session:
+        repository = TaskRepository(session)
+        fetch_task = repository.find_fetch_task_by_tracker_task(
+            tracker_name="mock",
+            external_task_id=tracker_task.external_id,
+        )
+        assert fetch_task is not None
+        impl = repository.find_implementation_execute_for_root(fetch_task.id)
+        assert impl is not None
+        assert impl.input_payload["handoff"]["from_task_id"] == triage_b_id
 
 
 def test_build_tracker_intake_worker_uses_runtime_settings(session_factory) -> None:

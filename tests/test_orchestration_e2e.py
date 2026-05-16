@@ -231,8 +231,16 @@ def test_http_intake_flow_runs_workers_end_to_end(session_factory) -> None:
 
     intake_report = intake_worker.poll_once()
     triage_execute_report = execute_worker.poll_once()
-    impl_execute_report = execute_worker.poll_once()
     deliver_triage_report = deliver_worker.poll_once()
+    runtime.tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id="task-1",
+            body="go ahead",
+            metadata={"source": "operator"},
+        )
+    )
+    intake_worker.poll_tracker_feedback_once()
+    impl_execute_report = execute_worker.poll_once()
     deliver_impl_report = deliver_worker.poll_once()
 
     assert intake_report == intake_report.__class__(
@@ -320,9 +328,9 @@ def test_http_intake_flow_runs_workers_end_to_end(session_factory) -> None:
         assert all(entry.provider == "test" for entry in token_usage_entries)
 
     assert runtime.tracker._tasks["task-1"].status == TaskStatus.DONE
-    assert len(runtime.tracker._comments["task-1"]) == 2
+    assert len(runtime.tracker._comments["task-1"]) == 3
     triage_comment = runtime.tracker._comments["task-1"][0].body
-    impl_comment = runtime.tracker._comments["task-1"][1].body
+    impl_comment = runtime.tracker._comments["task-1"][2].body
     assert triage_comment == "Triage SP=2: Brief сохранён, передано в работу."
     assert impl_comment == "CLI runner delivered a deterministic happy-path result."
     assert [reference.url for reference in runtime.tracker._tasks["task-1"].context.references] == [
@@ -425,8 +433,16 @@ def test_http_intake_flow_persists_cli_token_usage_from_json_events(
 
     intake_worker.poll_once()
     triage_execute_report = execute_worker.poll_once()
-    impl_execute_report = execute_worker.poll_once()
     deliver_worker.poll_once()
+    runtime.tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id="task-1",
+            body="approved",
+            metadata={"source": "operator"},
+        )
+    )
+    intake_worker.poll_tracker_feedback_once()
+    impl_execute_report = execute_worker.poll_once()
     deliver_worker.poll_once()
 
     assert triage_execute_report.processed_execute_tasks == 1
@@ -754,8 +770,16 @@ def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
 
     intake_report = intake_worker.poll_once()
     triage_execute_report = execute_worker.poll_once()
-    impl_execute_report = execute_worker.poll_once()
     deliver_triage_report = deliver_worker.poll_once()
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="бери в работу",
+            metadata={"source": "operator"},
+        )
+    )
+    intake_worker.poll_tracker_feedback_once()
+    impl_execute_report = execute_worker.poll_once()
     deliver_impl_report = deliver_worker.poll_once()
 
     assert intake_report.fetched_count == 1
@@ -824,11 +848,11 @@ def test_orchestration_flow_fetch_execute_deliver(session_factory) -> None:
         }
 
     assert tracker._tasks[tracker_task.external_id].status == TaskStatus.DONE
-    assert len(tracker._comments[tracker_task.external_id]) == 2
+    assert len(tracker._comments[tracker_task.external_id]) == 3
     assert tracker._comments[tracker_task.external_id][0].body == (
         "Triage SP=2: Brief сохранён, передано в работу."
     )
-    assert tracker._comments[tracker_task.external_id][1].body == (
+    assert tracker._comments[tracker_task.external_id][2].body == (
         "Prepared local agent execution for Implement orchestration e2e"
         ".\n\nWorkspace: /tmp/mock-scm/repo-33\n"
         "Flow: execute\n"
@@ -1108,8 +1132,16 @@ def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session
 
     intake_report = intake_worker.poll_once()
     triage_execute_report = execute_worker.poll_once()
-    impl_execute_report = execute_worker.poll_once()
     deliver_triage_report = deliver_worker.poll_once()
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=selected.created_task.external_id,
+            body="go ahead",
+            metadata={"source": "operator"},
+        )
+    )
+    intake_worker.poll_tracker_feedback_once()
+    impl_execute_report = execute_worker.poll_once()
     deliver_impl_report = deliver_worker.poll_once()
 
     assert intake_report.created_fetch_tasks == 1
@@ -1150,8 +1182,8 @@ def test_selected_estimated_tracker_task_flows_through_existing_pipeline(session
     assert (
         tracker._tasks[estimated_parent.external_id].metadata["selection"]["taken_in_work"] is True
     )
-    # Two comments now: triage SP=2 brief comment + impl summary.
-    assert len(tracker._comments[selected.created_task.external_id]) == 2
+    # Three comments now: triage SP=2 + confirmation + impl summary.
+    assert len(tracker._comments[selected.created_task.external_id]) == 3
     assert tracker._comments.get(estimated_parent.external_id, []) == []
 
 
@@ -1200,10 +1232,18 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
 
     intake_report = intake_worker.poll_tracker_once()
     triage_execute_report = execute_worker.poll_once()
-    impl_execute_report = execute_worker.poll_once()
-    # Deliver only the triage now; defer impl deliver until after PR feedback
-    # so the impl deliver captures the post-feedback commit_sha.
     deliver_triage_report = deliver_worker.poll_once()
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task_external_id,
+            body="approved",
+            metadata={"source": "operator"},
+        )
+    )
+    intake_worker.poll_tracker_feedback_once()
+    impl_execute_report = execute_worker.poll_once()
+    # Defer impl deliver until after PR feedback so the final deliver captures
+    # the post-feedback commit_sha.
 
     assert intake_report.created_execute_tasks == 1
     assert triage_execute_report.processed_execute_tasks == 1
@@ -1285,19 +1325,17 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
         assert deliver_task.result_payload["commit_sha"] == "mock-commit-0002"
 
         task_types = [task.task_type for task in session.query(Task).order_by(Task.id.asc()).all()]
-        # Cluster after triage→impl two-step + PR feedback. Insertion order is
-        # determined by the worker pipeline:
+        # Cluster after triage + explicit confirmation + impl + PR feedback:
         #   1. tracker_intake creates fetch + triage(execute)
-        #   2. triage processing creates the impl(execute) sibling first, then
-        #      its own deliver(triage) child — so the impl row is inserted
-        #      BEFORE the triage deliver.
-        #   3. impl processing creates deliver(impl).
-        #   4. tracker_intake.poll_pr_feedback creates pr_feedback.
+        #   2. triage processing creates deliver(triage)
+        #   3. confirmation comment creates impl(execute)
+        #   4. impl processing creates deliver(impl)
+        #   5. tracker_intake.poll_pr_feedback creates pr_feedback
         assert task_types == [
             TaskType.FETCH,
             TaskType.EXECUTE,  # triage
-            TaskType.EXECUTE,  # impl (sibling created during triage processing)
             TaskType.DELIVER,  # deliver(triage)
+            TaskType.EXECUTE,  # impl (created from confirmation comment)
             TaskType.DELIVER,  # deliver(impl)
             TaskType.PR_FEEDBACK,
         ]
@@ -1312,14 +1350,15 @@ def test_orchestration_flow_updates_execute_result_after_pr_feedback(session_fac
         }
 
     assert tracker._tasks[tracker_task_external_id].status == TaskStatus.DONE
-    # Two comments now: triage SP=2 brief + impl summary. PR feedback does
-    # not produce a new tracker comment (deliver was for the impl path; PR
-    # feedback updates the impl row in place).
-    assert len(tracker._comments[tracker_task_external_id]) == 2
+    # Three comments now: triage SP=2 brief + confirmation + impl summary.
+    # PR feedback does not produce a new tracker comment (deliver was for the
+    # impl path; PR feedback updates the impl row in place).
+    assert len(tracker._comments[tracker_task_external_id]) == 3
     assert tracker._comments[tracker_task_external_id][0].body == (
         "Triage SP=2: Brief сохранён, передано в работу."
     )
-    assert tracker._comments[tracker_task_external_id][1].body == (
+    assert tracker._comments[tracker_task_external_id][1].body == "approved"
+    assert tracker._comments[tracker_task_external_id][2].body == (
         "Prepared local agent execution for Handle PR feedback e2e"
         ".\n\nWorkspace: /tmp/mock-scm/repo-33-feedback\n"
         "Flow: execute\n"

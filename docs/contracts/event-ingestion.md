@@ -74,11 +74,12 @@ Normalization removes source-specific naming differences before deduplication an
 
 - A new tracker task remains `new_task_intake`, not `tracker_comment`.
 - A tracker comment on an existing task becomes `tracker_comment`.
-- For the current MVP slice, `worker1` polls tracker comments only for estimate-only `execute` threads that already resolved without SCM artifacts.
+- For the current MVP slice, `worker1` polls tracker comments for estimate-only `execute` threads and for done triage threads that already published a tracker-facing triage comment.
 - Estimate-only delivery persists structured estimate metadata back to the tracker (`metadata.estimate`) so later selection can rely on real tracker state, not only local DB task payloads.
 - The tracker read contract is `TrackerReadCommentsQuery(external_task_id, since_cursor, page_cursor, limit) -> TrackerReadCommentsResult(items, next_page_cursor, latest_cursor)`.
 - `latest_cursor` is persisted on the owning execute task as `context.metadata.tracker_comment_cursor` so repeated polls stay idempotent.
 - System-authored tracker comments created by the orchestrator carry `metadata.source = heavy_lifting` and must be ignored during polling.
+- For done triage tracker threads, `worker1` applies a deterministic confirmation rule: explicit markers like `бери в работу`, `приступай`, `go ahead`, `approved` create a sibling `execute(action=implementation)` under the same fetch parent (idempotent by root). Non-confirmation comments stay in the normal `tracker_feedback` path.
 - A tracker status update becomes `tracker_status_change` only if the change matters to orchestration decisions.
 - Tracker attachments or formatting-only edits may be stored as metadata and ignored for routing in the MVP.
 

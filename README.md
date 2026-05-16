@@ -13,7 +13,7 @@
 
 ### Роли воркеров
 
-- `worker1` забирает задачи из tracker intake, создает `fetch` и дочерние `execute`, а также подхватывает PR feedback;
+- `worker1` забирает задачи из tracker intake, создает `fetch` и дочерние `execute`, подхватывает PR/tracker feedback и может стартовать `implementation` из подтверждающего комментария после triage;
 - `worker2` обрабатывает `execute` и `pr_feedback`, готовит workspace, запускает `CliAgentRunner` или локальный runner, считает токены и работает с SCM;
 - `worker3` обрабатывает `deliver` и отправляет результат обратно в трекер.
 
@@ -231,6 +231,71 @@ export POSTGRES_PASSWORD=heavy_lifting
 ```
 
 ## Env для runtime и CliAgentRunner
+
+### Быстрая карта сценариев внешних источников
+
+Ниже — короткий операторский путеводитель. Детальные параметры и ограничения смотрите в интеграционных документах, ссылки даны в каждом сценарии.
+
+#### 1) Полностью локальный mock (без внешних сервисов)
+
+- Когда использовать: локальная отладка pipeline end-to-end без Linear/GitHub и без реальных model calls.
+- Ключевые env:
+  - `TRACKER_ADAPTER=mock`
+  - `SCM_ADAPTER=mock`
+  - `AGENT_RUNNER_ADAPTER=local`
+- Что должно прийти из tracker issue: для mock-сценария критичных внешних полей нет; достаточно обычного task payload для локальной проверки.
+- Подробности: этот README (разделы «Быстрый старт локально» и «Env для runtime и CliAgentRunner»).
+
+#### 2) Linear как tracker, без реального GitHub publishing
+
+- Когда использовать: нужно забирать и обновлять задачи в Linear, но PR-публикация в реальный GitHub пока не нужна.
+- Ключевые env:
+  - `TRACKER_ADAPTER=linear`
+  - `SCM_ADAPTER=mock`
+  - плюс обязательные переменные Linear (токен, team/state и т.д.)
+- Что должно прийти из tracker issue: service block Linear должен содержать как минимум рабочий `input` (инструкции); `repo_url` в этом режиме может не использоваться для реального publish.
+- Подробности: `docs/integrations/linear.md`.
+
+#### 3) Linear + GitHub single-repo
+
+- Когда использовать: одна команда Linear работает в одном основном репозитории GitHub.
+- Ключевые env:
+  - `TRACKER_ADAPTER=linear`
+  - `SCM_ADAPTER=github`
+  - `GITHUB_DEFAULT_REPO_URL=<repo-url>`
+- Что должно прийти из tracker issue: достаточно `input.instructions`; `repo_url` можно не передавать в каждом issue (возьмется из `GITHUB_DEFAULT_REPO_URL`).
+- Подробности: `docs/integrations/linear.md`, `docs/integrations/github.md` (раздел Single-repo vs Multi-repo Deployment).
+
+#### 4) Linear + GitHub multi-repo
+
+- Когда использовать: один Linear intake обслуживает несколько репозиториев.
+- Ключевые env:
+  - `TRACKER_ADAPTER=linear`
+  - `SCM_ADAPTER=github`
+  - `GITHUB_DEFAULT_REPO_URL` **не задан**
+- Что должно прийти из tracker issue: `repo_url` обязателен в service block issue (иначе выполнение упадет с ошибкой `repo_url required`).
+- Подробности: `docs/integrations/linear.md` (формат service block), `docs/integrations/github.md` (multi-repo поведение).
+
+#### 5) Реальный CLI runner и model calls
+
+- Когда использовать: нужно, чтобы `worker2` вызывал внешний CLI-агент и реальную модель.
+- Ключевые env:
+  - `AGENT_RUNNER_ADAPTER=cli`
+  - API key: `OPENAI_API_KEY` **или** переменная, имя которой задано в `CLI_AGENT_API_KEY_ENV_VAR`
+- Что должно прийти из tracker issue: корректный `input` с инструкциями для выполнения; дополнительные поля зависят от SCM/tracker сценария выше.
+- Подробности: этот README (ниже, раздел про обязательные переменные runner-а).
+
+#### 6) Комментарий в tracker: intent -> next scenario
+
+- Когда использовать: пользователь отвечает в Linear/tracker thread, и нужно понять намерение комментария, передать его агенту на проработку и выбрать следующий шаг pipeline.
+- Ключевые env:
+  - `TRACKER_ADAPTER=linear` для реального tracker (`mock` для локального сценария)
+  - `AGENT_RUNNER_ADAPTER=local|cli`
+  - `SCM_ADAPTER=mock|github` (зависит от того, какой следующий сценарий выбран после классификации intent)
+- Что должно прийти из tracker comment: стабильный `comment_id`, `author`, `body`, ссылка на родительскую tracker task/thread, опционально `url` и дополнительная metadata.
+- Как работает маршрутизация: `worker1` нормализует комментарий и делает dedup. Дальше поддержаны безопасные ветки: (1) clarification/re-triage, (2) estimate-only -> `tracker_feedback`, (3) confirmation-after-ready-triage -> запуск sibling `execute(action=implementation)`.
+- Текущий лимит MVP: для активных implementation/research thread произвольные комментарии не должны автоматически запускать код, если нет явного правила; неподтверждающие комментарии остаются в `tracker_feedback` или `metadata_only` по контракту.
+- Подробности: `docs/contracts/event-ingestion.md`, `docs/contracts/task-handoff.md`.
 
 ### Обязательные переменные
 

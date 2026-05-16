@@ -20,6 +20,7 @@ from backend.schemas import (
     ScmPullRequestFeedback,
     ScmPullRequestMetadata,
     ScmReadPrFeedbackQuery,
+    TaskHandoffPayload,
     TaskInputPayload,
     TrackerCommentPayload,
     TrackerFetchTasksQuery,
@@ -84,6 +85,18 @@ class TrackerIntakeWorker:
     _PR_FEEDBACK_UNRESOLVED_KEY = "_hl_unresolved"
     _SYSTEM_COMMENT_SOURCE_KEY = "source"
     _SYSTEM_COMMENT_SOURCE_VALUE = "heavy_lifting"
+    _IMPLEMENTATION_CONFIRMATION_MARKERS = (
+        "бери в работу",
+        "берем в работу",
+        "приступай",
+        "делай",
+        "запускай",
+        "start implementation",
+        "proceed",
+        "go ahead",
+        "take it",
+        "approved",
+    )
 
     def poll_once(self) -> TrackerIntakeReport:
         logger = _worker_logger(tracker_name=self.tracker_name)
@@ -559,6 +572,12 @@ class TrackerIntakeWorker:
         execute_input_payload = existing_payload.model_dump(mode="python")
         if execute_input_payload.get("action") is None:
             execute_input_payload["action"] = "triage"
+        execute_context = tracker_task.context.model_dump(mode="python")
+        cursor = self._get_latest_tracker_comment_cursor(tracker_task.external_id)
+        if cursor is not None:
+            metadata = dict(execute_context.get("metadata") or {})
+            metadata[self._TRACKER_FEEDBACK_CURSOR_METADATA_KEY] = cursor
+            execute_context["metadata"] = metadata
         execute_task = repository.create_task(
             TaskCreateParams(
                 task_type=TaskType.EXECUTE,
@@ -569,7 +588,7 @@ class TrackerIntakeWorker:
                 repo_url=tracker_task.repo_url,
                 repo_ref=tracker_task.repo_ref,
                 workspace_key=tracker_task.workspace_key,
-                context=tracker_task.context.model_dump(mode="python"),
+                context=execute_context,
                 input_payload=execute_input_payload,
             )
         )
@@ -583,6 +602,15 @@ class TrackerIntakeWorker:
             workspace_key=execute_task.workspace_key,
         )
         return execute_task
+
+    def _get_latest_tracker_comment_cursor(self, external_task_id: str) -> str | None:
+        try:
+            page = self.tracker.read_comments(
+                TrackerReadCommentsQuery(external_task_id=external_task_id, limit=1)
+            )
+        except Exception:
+            return None
+        return page.latest_cursor
 
     def _ingest_pr_feedback(
         self,
@@ -678,6 +706,19 @@ class TrackerIntakeWorker:
             logger.info("tracker_feedback_skipped_system_comment")
             return TrackerFeedbackIntakeOutcome(skipped_feedback_item=True)
 
+        if _is_ready_triage_for_implementation_start(
+            execute_task
+        ) and self._is_implementation_start_comment(feedback_item):
+            created = self._create_implementation_execute_from_triage_comment(
+                repository=repository,
+                triage_task=execute_task,
+            )
+            if created:
+                logger.info("implementation_execute_created_from_tracker_comment")
+            else:
+                logger.info("implementation_execute_from_comment_skipped_idempotent")
+            return TrackerFeedbackIntakeOutcome(skipped_feedback_item=not created)
+
         existing_feedback_task = repository.find_child_task_by_external_id(
             parent_id=execute_task.id,
             task_type=TaskType.TRACKER_FEEDBACK,
@@ -717,6 +758,51 @@ class TrackerIntakeWorker:
             workspace_key=feedback_task.workspace_key,
         )
         return TrackerFeedbackIntakeOutcome(created_tracker_feedback_task=True)
+
+    def _is_implementation_start_comment(self, feedback_item: TrackerCommentPayload) -> bool:
+        body = feedback_item.body.strip().lower()
+        if not body:
+            return False
+        return any(marker in body for marker in self._IMPLEMENTATION_CONFIRMATION_MARKERS)
+
+    def _create_implementation_execute_from_triage_comment(
+        self,
+        *,
+        repository: TaskRepository,
+        triage_task: Task,
+    ) -> bool:
+        root_id = triage_task.root_id or triage_task.id
+        existing = repository.find_implementation_execute_for_root(root_id)
+        if existing is not None:
+            return False
+
+        if triage_task.parent_id is None:
+            raise RuntimeError("done triage execute-task must have a fetch parent")
+
+        handover_brief = _extract_handover_brief_from_triage_result(triage_task)
+        payload = TaskInputPayload(
+            action="implementation",
+            handoff=TaskHandoffPayload(
+                from_task_id=triage_task.id,
+                from_role="triage",
+                brief_markdown=handover_brief,
+            ),
+        )
+        repository.create_task(
+            TaskCreateParams(
+                task_type=TaskType.EXECUTE,
+                status=TaskStatus.NEW,
+                parent_id=triage_task.parent_id,
+                tracker_name=triage_task.tracker_name,
+                external_parent_id=triage_task.external_parent_id,
+                repo_url=triage_task.repo_url,
+                repo_ref=triage_task.repo_ref,
+                workspace_key=triage_task.workspace_key,
+                context=triage_task.context,
+                input_payload=payload.model_dump(mode="python"),
+            )
+        )
+        return True
 
     def _poll_execute_pr_feedback(
         self,
@@ -788,6 +874,14 @@ class TrackerIntakeWorker:
         execute_task,
         report: TrackerIntakeReport,
     ) -> TrackerIntakeReport:
+        if _is_done_triage_tracker_thread_task(execute_task):
+            parent_id = execute_task.parent_id
+            if parent_id is None:
+                return report
+            latest_done_triage = repository.find_last_completed_triage_execute(parent_id=parent_id)
+            if latest_done_triage is None or latest_done_triage.id != execute_task.id:
+                return report
+
         task_context = self._build_task_context(repository=repository, task=execute_task)
         if not self._should_poll_tracker_feedback(execute_task, task_context):
             return report
@@ -979,6 +1073,44 @@ def _is_done_triage_tracker_thread_task(task: Task) -> bool:
     has_tracker_comment = isinstance(tracker_comment, str) and bool(tracker_comment.strip())
 
     return has_escalation_kind or has_comment_body or has_tracker_comment
+
+
+def _extract_handover_brief_from_triage_result(task: Task) -> str | None:
+    result_payload = task.result_payload
+    if not isinstance(result_payload, dict):
+        return None
+    metadata = result_payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    handover_brief = metadata.get("handover_brief")
+    if isinstance(handover_brief, str) and handover_brief.strip():
+        return handover_brief
+    return None
+
+
+def _is_ready_triage_for_implementation_start(task: Task) -> bool:
+    if not _is_done_triage_tracker_thread_task(task):
+        return False
+
+    if _extract_handover_brief_from_triage_result(task) is None:
+        return False
+
+    result_payload = task.result_payload
+    if not isinstance(result_payload, dict):
+        return False
+
+    routing = result_payload.get("routing")
+    if not isinstance(routing, dict):
+        return False
+
+    create_followup = routing.get("create_followup_task")
+    next_task_type = routing.get("next_task_type")
+    next_role = routing.get("next_role")
+    return (
+        create_followup is True
+        and next_task_type == "execute"
+        and next_role == "implementation"
+    )
 
 
 def _worker_logger(**fields: object):

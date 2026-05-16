@@ -3,14 +3,13 @@
 Covers the four scenarios described in
 ``temp/plans/triage-story-point-agent.md`` §8.2:
 
-* Scenario A — SP=2 happy path: triage → DONE, sibling impl-execute created,
+* Scenario A — SP=2 happy path: triage → DONE, no auto-created impl sibling,
   deliver under triage with SP=2 estimate and ``triage:ready`` label.
 * Scenario B — SP=5 RFI: triage → DONE, no sibling impl-execute, deliver under
   triage with RFI escalation, no ``update_status`` (tracker_status is None).
 * Scenario C — SP=13 system_design: same shape as B with ``triage:block`` and
   ``escalation_kind="system_design"``.
-* Scenario D — Idempotency: a second triage in the same cluster MUST NOT
-  duplicate the existing sibling impl-execute and logs the idempotent skip.
+* Scenario D — repeated triage still does not auto-create impl siblings.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ from test_execute_worker_triage_dispatch import (
 # ---------------------------------------------------------------------------
 
 
-def test_scenario_a_sp2_creates_sibling_impl_and_deliver_triage(tmp_path) -> None:
+def test_scenario_a_sp2_creates_deliver_without_auto_impl_sibling(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     settings = _build_settings(tmp_path)
     fake = _FakeAgentRunner(
@@ -87,27 +86,8 @@ def test_scenario_a_sp2_creates_sibling_impl_and_deliver_triage(tmp_path) -> Non
             .order_by(Task.id.asc())
             .all()
         )
-        # fetch + triage + sibling impl + deliver(triage) = 4 tasks
-        assert len(cluster) == 4
-
-        sibling = (
-            session.query(Task)
-            .filter(
-                Task.parent_id == fetch_id,
-                Task.task_type == TaskType.EXECUTE,
-                Task.id != triage_id,
-            )
-            .one()
-        )
-        assert sibling.status == TaskStatus.NEW
-        sibling_payload = sibling.input_payload
-        assert isinstance(sibling_payload, dict)
-        assert sibling_payload["action"] == "implementation"
-        handoff = sibling_payload["handoff"]
-        assert handoff["from_task_id"] == triage_id
-        assert handoff["from_role"] == "triage"
-        assert isinstance(handoff["brief_markdown"], str)
-        assert handoff["brief_markdown"].startswith("## Agent Handover Brief")
+        # fetch + triage + deliver(triage) = 3 tasks
+        assert len(cluster) == 3
 
         deliver = (
             session.query(Task)
@@ -273,10 +253,7 @@ def test_scenario_c_sp13_system_design(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scenario_d_idempotency_does_not_duplicate_sibling_impl(tmp_path, caplog) -> None:
-    """Second triage processed under the same cluster — sibling impl-execute
-    must remain unique (one per ``root_id``).
-    """
+def test_scenario_d_retriage_does_not_auto_create_impl_sibling(tmp_path) -> None:
 
     session_factory = _build_session_factory(tmp_path)
     settings = _build_settings(tmp_path)
@@ -356,8 +333,7 @@ def test_scenario_d_idempotency_does_not_duplicate_sibling_impl(tmp_path, caplog
         assert impl is not None
         impl.status = TaskStatus.PROCESSING
 
-    with caplog.at_level("INFO"):
-        worker.poll_once()
+    worker.poll_once()
 
     with session_scope(session_factory=session_factory) as session:
         repository = TaskRepository(session)
@@ -378,9 +354,4 @@ def test_scenario_d_idempotency_does_not_duplicate_sibling_impl(tmp_path, caplog
         # 2 triage + 1 impl = 3 EXECUTE rows; no fourth.
         assert impl_count == 3
 
-    skip_messages = [
-        record
-        for record in caplog.records
-        if "sibling_implementation_execute_skipped_idempotent" in record.getMessage()
-    ]
-    assert skip_messages, "expected idempotent skip log event"
+    # Existing implementation task remains untouched; no extra sibling is created.

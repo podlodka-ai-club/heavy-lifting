@@ -13,7 +13,7 @@ from backend.adapters.mock_scm import MockScm
 from backend.db import session_scope
 from backend.models import Task
 from backend.repositories.task_repository import TaskCreateParams, TaskRepository
-from backend.schemas import TaskInputPayload, TaskResultPayload, TaskRoutingPayload
+from backend.schemas import TaskResultPayload, TaskRoutingPayload
 from backend.task_constants import TaskStatus, TaskType
 from backend.workers.execute_worker import ExecuteWorker
 from test_execute_worker_triage_dispatch import (
@@ -30,7 +30,7 @@ from test_execute_worker_triage_dispatch import (
 # ---------------------------------------------------------------------------
 
 
-def test_triage_creates_sibling_implementation_execute_for_sp_2(tmp_path) -> None:
+def test_triage_sp_2_does_not_create_sibling_implementation_execute_automatically(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     settings = _build_settings(tmp_path)
     fake = _FakeAgentRunner(
@@ -83,31 +83,7 @@ def test_triage_creates_sibling_implementation_execute_for_sp_2(tmp_path) -> Non
             )
             .all()
         )
-        assert len(siblings) == 1
-        sibling = siblings[0]
-
-        assert sibling.parent_id == fetch_id
-        assert sibling.task_type == TaskType.EXECUTE
-        assert sibling.status == TaskStatus.NEW
-        assert sibling.tracker_name == "mock"
-        assert sibling.external_parent_id == "TASK-sp2"
-        assert sibling.repo_url == "https://example.test/repo.git"
-        assert sibling.repo_ref == "main"
-        assert sibling.workspace_key == "repo-sp2"
-        assert sibling.context == {"title": "Triage execute"}
-        assert sibling.branch_name is None
-        assert sibling.pr_external_id is None
-        assert sibling.pr_url is None
-
-        payload = sibling.input_payload
-        assert isinstance(payload, dict)
-        assert payload["schema_version"] == 1
-        assert payload["action"] == "implementation"
-        handoff = payload["handoff"]
-        assert handoff["from_task_id"] == triage_id
-        assert handoff["from_role"] == "triage"
-        assert isinstance(handoff["brief_markdown"], str)
-        assert handoff["brief_markdown"].startswith("## Agent Handover Brief")
+        assert siblings == []
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +92,9 @@ def test_triage_creates_sibling_implementation_execute_for_sp_2(tmp_path) -> Non
 
 
 @pytest.mark.parametrize("story_points", [1, 3])
-def test_triage_creates_sibling_for_sp_1_and_sp_3(tmp_path, story_points: int) -> None:
+def test_triage_sp_1_and_sp_3_do_not_create_sibling_automatically(
+    tmp_path, story_points: int
+) -> None:
     session_factory = _build_session_factory(tmp_path)
     settings = _build_settings(tmp_path)
     fake = _FakeAgentRunner(
@@ -165,15 +143,7 @@ def test_triage_creates_sibling_for_sp_1_and_sp_3(tmp_path, story_points: int) -
             )
             .all()
         )
-        assert len(siblings) == 1
-        sibling = siblings[0]
-        payload = sibling.input_payload
-        assert isinstance(payload, dict)
-        assert payload["action"] == "implementation"
-        assert payload["handoff"]["from_task_id"] == triage_id
-        assert payload["handoff"]["from_role"] == "triage"
-        assert isinstance(payload["handoff"]["brief_markdown"], str)
-        assert payload["handoff"]["brief_markdown"].startswith("## Agent Handover Brief")
+        assert siblings == []
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +374,7 @@ def test_triage_does_not_create_sibling_for_sp_13_system_design(tmp_path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_triage_idempotent_when_sibling_already_exists(tmp_path, caplog) -> None:
+def test_triage_idempotent_when_sibling_already_exists(tmp_path) -> None:
     """Second triage in the same cluster must not duplicate the sibling.
 
     Setup: fetch + DONE triage + existing NEW impl-execute (from a prior
@@ -497,8 +467,7 @@ def test_triage_idempotent_when_sibling_already_exists(tmp_path, caplog) -> None
         assert impl is not None
         impl.status = TaskStatus.PROCESSING
 
-    with caplog.at_level("INFO"):
-        worker.poll_once()
+    worker.poll_once()
 
     with session_scope(session_factory=session_factory) as session:
         new_triage_row = session.get(Task, new_triage_id)
@@ -531,21 +500,13 @@ def test_triage_idempotent_when_sibling_already_exists(tmp_path, caplog) -> None
         # Two triages + one prior impl-execute = 3 total, no fourth.
         assert sibling_count == 3
 
-    skip_messages = [
-        record
-        for record in caplog.records
-        if "sibling_implementation_execute_skipped_idempotent" in record.getMessage()
-    ]
-    assert skip_messages, "expected idempotent skip log event"
-
-
 # ---------------------------------------------------------------------------
 # Test 7 — handover_brief inline propagation (already covered by Test 1
 # extras, but explicit here for clarity).
 # ---------------------------------------------------------------------------
 
 
-def test_triage_followup_passes_brief_to_handover_payload(tmp_path) -> None:
+def test_triage_followup_keeps_brief_in_triage_result_metadata(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     settings = _build_settings(tmp_path)
     brief_body = "## Agent Handover Brief\n\nA single-line stub for the resolver.\n"
@@ -581,29 +542,17 @@ def test_triage_followup_passes_brief_to_handover_payload(tmp_path) -> None:
             )
         )
         triage_id = triage_task.id
-        fetch_id = fetch.id
 
     worker.poll_once()
 
     with session_scope(session_factory=session_factory) as session:
-        sibling = (
-            session.query(Task)
-            .filter(
-                Task.parent_id == fetch_id,
-                Task.task_type == TaskType.EXECUTE,
-                Task.id != triage_id,
-            )
-            .first()
-        )
-        assert sibling is not None
-        payload = sibling.input_payload
-        assert isinstance(payload, dict)
-        # TaskInputPayload validates the schema.
-        validated = TaskInputPayload.model_validate(payload)
-        assert validated.action == "implementation"
-        assert validated.handoff is not None
-        assert validated.handoff.brief_markdown is not None
-        assert validated.handoff.brief_markdown.startswith("## Agent Handover Brief")
+        triage_row = session.get(Task, triage_id)
+        assert triage_row is not None
+        assert isinstance(triage_row.result_payload, dict)
+        metadata = triage_row.result_payload.get("metadata")
+        assert isinstance(metadata, dict)
+        assert isinstance(metadata.get("handover_brief"), str)
+        assert metadata["handover_brief"].startswith("## Agent Handover Brief")
 
 
 # ---------------------------------------------------------------------------
@@ -880,7 +829,7 @@ def test_triage_followup_raises_on_orphan_even_when_existing_impl_present(
 # ---------------------------------------------------------------------------
 
 
-def test_triage_followup_compatible_with_handover_brief_resolver(tmp_path) -> None:
+def test_triage_followup_no_auto_sibling_for_handover_resolver_path(tmp_path) -> None:
     session_factory = _build_session_factory(tmp_path)
     settings = _build_settings(tmp_path)
     brief_body = "## Agent Handover Brief\n\nReusable brief body.\n"
@@ -918,35 +867,17 @@ def test_triage_followup_compatible_with_handover_brief_resolver(tmp_path) -> No
         triage_id = triage_task.id
         fetch_id = fetch.id
 
-    # Run the triage poll: triage completes DONE + sibling impl-execute created.
+    # Run triage poll: no auto-created implementation sibling.
     worker.poll_once()
 
     with session_scope(session_factory=session_factory) as session:
-        sibling = (
+        siblings = (
             session.query(Task)
             .filter(
                 Task.parent_id == fetch_id,
                 Task.task_type == TaskType.EXECUTE,
                 Task.id != triage_id,
             )
-            .first()
+            .all()
         )
-        assert sibling is not None
-        sibling_id = sibling.id
-
-    # Now invoke _prepare_execution directly on the sibling to verify
-    # ContextBuilder picks up the inline handover_brief from input_payload.
-    with session_scope(session_factory=session_factory) as session:
-        repository = TaskRepository(session)
-        sibling_row = session.get(Task, sibling_id)
-        assert sibling_row is not None
-        chain = repository.load_task_chain(sibling_row.root_id or sibling_row.id)
-        sibling_in_chain = next(t for t in chain if t.id == sibling_id)
-        prepared = worker._prepare_execution(
-            repository=repository,
-            task=sibling_in_chain,
-            task_chain=chain,
-        )
-
-    assert prepared.task_context.handover_brief is not None
-    assert prepared.task_context.handover_brief.startswith("## Agent Handover Brief")
+        assert siblings == []

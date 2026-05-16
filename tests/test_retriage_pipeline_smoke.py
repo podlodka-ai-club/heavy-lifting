@@ -6,8 +6,8 @@ The scenario walks one tracker task through a complete re-triage cycle:
    side-effects. Tracker receives the RFI comment and the SP=5 estimate.
 2. User edits the description on the tracker side.
 3. Next intake → re-triage execute created with the fresh context.
-4. Triage SP=2 → sibling impl execute + handover brief → impl runs to DONE
-   with branch + PR; both deliver tasks complete.
+4. Triage SP=2 → confirmation comment → sibling impl execute + handover
+   brief → impl runs to DONE with branch + PR; both deliver tasks complete.
 
 The test deliberately runs against the in-memory MockTracker / MockScm stack
 so it covers the orchestrator wiring without external dependencies.
@@ -27,6 +27,7 @@ from backend.schemas import (
     TaskContext,
     TaskInputPayload,
     TaskResultPayload,
+    TrackerCommentCreatePayload,
     TrackerTaskCreatePayload,
 )
 from backend.task_constants import TaskStatus, TaskType
@@ -185,13 +186,23 @@ def test_retriage_cycle_smoke(session_factory) -> None:
         "Add detailed logging hook to the API layer."
     )
 
-    # ---------- Cycle 2: re-triage SP=2 → sibling impl + impl run ----------
+    # ---------- Cycle 2: re-triage SP=2 → confirmation → impl run ----------
     intake_worker.poll_once()
-    # Two execute polls: re-triage, then sibling impl.
+    # First execute poll: re-triage.
     execute_worker.poll_once()
-    execute_worker.poll_once()
-    # Two deliver polls: deliver_triage (fresh) + deliver_impl.
+    # First deliver poll: post triage SP=2 comment.
     deliver_worker.poll_once()
+    tracker.add_comment(
+        TrackerCommentCreatePayload(
+            external_task_id=tracker_task.external_id,
+            body="approved, go ahead",
+            metadata={"source": "operator"},
+        )
+    )
+    intake_worker.poll_tracker_feedback_once()
+    # Second execute poll: sibling impl created from confirmation comment.
+    execute_worker.poll_once()
+    # Second deliver poll: implementation delivery.
     deliver_worker.poll_once()
 
     with session_scope(session_factory=session_factory) as session:
@@ -236,11 +247,11 @@ def test_retriage_cycle_smoke(session_factory) -> None:
 
     # Final tracker state: pipeline complete via deliver_impl.
     assert tracker._tasks[tracker_task.external_id].status == TaskStatus.DONE
-    # Comments accumulated: RFI + SP=2 triage line + impl summary = 3.
-    assert len(tracker._comments[tracker_task.external_id]) == 3
+    # Comments accumulated: RFI + SP=2 triage + user confirmation + impl summary.
+    assert len(tracker._comments[tracker_task.external_id]) == 4
     assert tracker._comments[tracker_task.external_id][0].body.startswith("## RFI")
     assert "Brief сохранён" in tracker._comments[tracker_task.external_id][1].body
     assert (
-        tracker._comments[tracker_task.external_id][2].body
+        tracker._comments[tracker_task.external_id][3].body
         == "Implementation merged."
     )

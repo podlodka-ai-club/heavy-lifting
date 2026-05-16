@@ -544,11 +544,6 @@ class ExecuteWorker:
             task=task,
             result_payload=result_payload,
         )
-        self._ensure_followup_implementation_execute(
-            repository=repository,
-            triage_task=task,
-            result_payload=result_payload,
-        )
         self._ensure_deliver_task(
             repository=repository,
             execute_task=task,

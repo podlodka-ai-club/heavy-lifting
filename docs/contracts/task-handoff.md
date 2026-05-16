@@ -179,9 +179,9 @@ The contract is materialised in `backend.schemas.TaskResultPayload`. Existing to
 Triage is the first execute step for a new tracker intake. Its `result_payload` shape is fixed by `docs/contracts/triage-routing.md`:
 
 - `outcome` is `routed` for SP `1/2/3`, `needs_clarification` for SP `5`, and `blocked` for SP `8/13`.
-- `routing.create_followup_task` is `true` only for SP `1/2/3`; the followup is a sibling implementation execute under the same `fetch` parent.
+- `routing.create_followup_task` is `true` only for SP `1/2/3`; this marks the triage outcome as ready-for-implementation, but the sibling implementation execute is created only after an explicit tracker confirmation comment.
 - `delivery.tracker_status` is always `null`. The triage `deliver` task only writes labels and a comment; closing the tracker issue is the responsibility of a later step.
-- `metadata.handover_brief` carries the full Handover Brief markdown for SP `1/2/3`. The same text is also copied inline into `input_payload.handoff.brief_markdown` of the new sibling implementation execute, so the implementation worker can read it through `EffectiveTaskContext.handover_brief` without a separate repository lookup.
+- `metadata.handover_brief` carries the full Handover Brief markdown for SP `1/2/3`. After explicit confirmation, `worker1` creates the sibling implementation execute and copies this text into `input_payload.handoff.brief_markdown`, so the implementation worker can read it through `EffectiveTaskContext.handover_brief` without a separate repository lookup.
 
 Example for a SP=2 triage outcome (abbreviated):
 
@@ -237,7 +237,7 @@ That rule applies to:
 
 - A new tracker task enters the system with `input_payload.action = triage`. `worker1` (`tracker_intake`) sets this default on the first execute task it creates.
 - Triage classifies the business task, estimates Story Points (one of `1/2/3/5/8/13`), and decides the next executable path.
-- Triage runs as an `execute` task. For SP `1/2/3` it creates a sibling implementation execute under the same `fetch` parent with `input_payload.action = "implementation"` and `input_payload.handoff.brief_markdown` populated with the Handover Brief. For SP `5/8/13` it stops at the triage `deliver` task and waits for a tracker user edit to start a new triage cycle.
+- Triage runs as an `execute` task. For SP `1/2/3` it stores the Handover Brief in `result_payload.metadata.handover_brief`, creates triage `deliver`, and waits for explicit tracker confirmation before starting implementation. After confirmation, `worker1` creates a sibling implementation execute under the same `fetch` parent with `input_payload.action = "implementation"` and `input_payload.handoff.brief_markdown` copied from triage result metadata. For SP `5/8/13` it stops at the triage `deliver` task and waits for a tracker user edit to start a new triage cycle.
 - Triage never sets `delivery.tracker_status`; the tracker issue keeps its incoming status until a later step explicitly closes it.
 
 For the backlog-selection branch, the system may first choose one already estimated parent task and create a tracker subtask that carries the original context, repository coordinates, executable `input_payload`, and selection metadata. That subtask then enters the same `fetch -> execute -> deliver` pipeline as any other tracker intake.
